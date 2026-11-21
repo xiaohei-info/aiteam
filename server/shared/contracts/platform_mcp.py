@@ -15,6 +15,8 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from shared.capability_namespace import PLATFORM_NAMESPACE
+
 MCP_REF_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 MCP_TOOL_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 MCP_HEADER_RE = re.compile(r"^[A-Za-z0-9-]{1,64}$")
@@ -150,6 +152,7 @@ class PlatformMcpServer(_PlatformMcpServerBase):
     revision: int = Field(ge=1, description="修订号：每次修改加 1，企业端据此判断是否有更新。")
     status: str = Field(description="draft / published / unpublished。")
     oauth_client_secret_set: bool = Field(default=False, description="是否已设置应用密钥（密钥本身不返回）。")
+    namespace: str = Field(default=PLATFORM_NAMESPACE, description="展示前缀：平台 MCP 一律为 taiyim（设计「技能MCP命名空间出处与更新提示」§4.1）。")
 
 
 class PlatformMcpServerPull(PlatformMcpServer):

@@ -45,8 +45,9 @@ export interface CapabilityApi {
 
 /** 上传来源与在线编辑用 multipart，其余用 JSON；企业端附带新建条目的可见范围与停用。 */
 function importBody(input: SkillImportInput): FormData | Record<string, unknown> {
-  const { visibility, binding_policy, ...rest } = input;
+  const { visibility, binding_policy, fork_of, ...rest } = input;
   const extra: Record<string, string> = {};
+  if (fork_of) extra.fork_of = fork_of;
   if (visibility) extra.visibility = visibility;
   if (binding_policy) extra.binding_policy = binding_policy;
   return skillImportBody(rest, extra);

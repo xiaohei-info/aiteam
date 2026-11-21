@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { BadgeCheck, LoaderCircle, Search } from 'lucide-react'
 import { agentApi, AgentApiError } from '../../api/agent'
 import type { CatalogMcp, McpLogin } from '../../api/agent/types'
+import { capabilityTitle } from './capabilityLabels'
 import './McpAuth.css'
 
 const AUTH_LABEL = { none: '无需登录', oauth: '需要登录', bearer: '需要令牌' } as const
@@ -66,7 +67,7 @@ export function CatalogMcpPanel({ onInstalled, onLogin, onClose }: {
       setToken('')
       setOpen(null)
       if (result.login) { onLogin(result.login, name); return }
-      setNotice(`已安装「${name}」，下一轮对话起可用。`)
+      setNotice(`已安装「${name}」，下一条消息起可用。`)
       // 行立即显示「已安装」，目录在后台刷新（企业目录可能较慢，不让整张表一直锁着）。
       setRows((current) => current?.map((row) => row.server_id === item.server_id ? { ...row, state: 'installed' } : row) ?? current)
       onInstalled()
@@ -109,7 +110,7 @@ export function CatalogMcpPanel({ onInstalled, onLogin, onClose }: {
                   <div className="catalog-mcp-row">
                     <span className="skill-list-copy">
                       <strong>{item.display_name || item.ref}</strong>
-                      <span>{item.origin === 'platform' ? '平台' : '企业自建'} · {AUTH_LABEL[item.auth]} · {toolsText(item)} · 标识 {item.ref}</span>
+                      <span>{item.origin === 'platform' ? '平台' : '企业自建'} · {AUTH_LABEL[item.auth]} · {toolsText(item)} · 标识 {capabilityTitle(item.namespace, item.ref)}</span>
                       {item.summary && <span>{item.summary}</span>}
                       {item.state === 'update' && <span>企业已更新这个 MCP，点「更新」换成最新配置。</span>}
                       {rowError?.id === item.server_id && <span role="alert" className="mcp-error">{rowError.text}</span>}

@@ -46,8 +46,9 @@ export function useSkillMarketApi() {
         return client.post<SkillImportResponse>(`${BASE}/custom/preview`, { body: skillImportBody(input) });
       },
       /** 自建技能：保存为平台技能（同名内容不同成为新版本）。 */
-      saveCustom(input: SkillImportInput) {
-        return client.post<SkillImportResponse>(`${BASE}/custom`, { body: skillImportBody(input) });
+      /** forkOf：编辑 ClawHub 技能另存为平台副本时，原技能的 skill_id。 */
+      saveCustom(input: SkillImportInput, forkOf?: string) {
+        return client.post<SkillImportResponse>(`${BASE}/custom`, { body: skillImportBody(input, forkOf ? { fork_of: forkOf } : {}) });
       },
       files(skillId: string) {
         return client.get<PlatformSkillFiles>(`${BASE}/internal/${encodeURIComponent(skillId)}/files`);

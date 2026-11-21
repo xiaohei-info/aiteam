@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import { test } from "node:test";
 import { appLogger } from "./observability.js";
-import { HINDSIGHT_CLIENT_PROTOCOL, HttpManagerClient, ManagerTimeoutError, ManagerUnavailableError, ManagerValidationError, MemoryRetainUnverifiedError, normalizeAuthorizedConfig, normalizeHindsightRuntimeConfig, normalizeRuntimeProviderConfig } from "./manager-client.js";
+import { AgentUpgradeRequiredError, HINDSIGHT_CLIENT_PROTOCOL, HttpManagerClient, SKILL_PACKAGE_FORMAT_HEADER, ManagerTimeoutError, ManagerUnavailableError, ManagerValidationError, MemoryRetainUnverifiedError, normalizeAuthorizedConfig, normalizeHindsightRuntimeConfig, normalizeRuntimeProviderConfig } from "./manager-client.js";
 
 const caller = { callerId: "member-1", userId: "member-1", tenantId: "tenant-1", accessToken: "jwt" };
 const EMPTY_PROFILE = {
@@ -535,4 +535,14 @@ test("Hindsight negotiation is constant on rotation and is never retried as an o
     await assert.rejects(() => client.pullHindsightRuntimeConfig(caller, "employee-1", true));
     assert.deepEqual(sent, [{ employee_id: "employee-1", client_protocol: HINDSIGHT_CLIENT_PROTOCOL, rotate: true }]);
   }
+});
+
+test("HttpManagerClient declares the skill package format and surfaces Manager's upgrade prompt", async () => {
+  const seen: Headers[] = [];
+  const client = new HttpManagerClient("https://manager.test", async (_url, init) => {
+    seen.push(new Headers(init?.headers));
+    return Response.json({ type: "about:blank", title: "Client upgrade required", status: 426, code: "agent_upgrade_required", detail: "请升级桌面客户端" }, { status: 426 });
+  });
+  await assert.rejects(() => client.pullAuthorizedConfig(caller, {}), (error: unknown) => error instanceof AgentUpgradeRequiredError && error.message === "请升级桌面客户端");
+  assert.equal(seen[0]?.get(SKILL_PACKAGE_FORMAT_HEADER), "2");
 });

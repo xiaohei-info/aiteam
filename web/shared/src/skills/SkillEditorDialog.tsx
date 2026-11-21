@@ -46,6 +46,8 @@ export interface SkillEditorDialogProps {
   isNameLocked?: boolean;
   /** 只能查看（例如企业端从平台技能市场装的技能）；给出原因。 */
   readOnlyReason?: string;
+  /** 可编辑时顶部的说明（例如「保存后生成副本，原件保留」）。 */
+  note?: string;
   /** 正文与文件下面的设置区。 */
   settings?: ReactNode;
   /** 端上额外的名称规则（如企业端 platform- 开头留给平台）。 */
@@ -107,7 +109,7 @@ function readText(file: File): Promise<string | null> {
 }
 
 export function SkillEditorDialog({
-  title, files, isNameLocked = false, readOnlyReason, settings, extraNameProblem, onSave, onClose,
+  title, files, isNameLocked = false, readOnlyReason, note, settings, extraNameProblem, onSave, onClose,
 }: SkillEditorDialogProps): ReactNode {
   const original = useMemo(() => {
     const skillMd = files?.find((file) => file.path === "SKILL.md")?.content;
@@ -179,7 +181,7 @@ export function SkillEditorDialog({
         content={
           <LayoutContent>
             <VStack gap={4}>
-              {readOnlyReason && <Banner status="info" title={readOnlyReason} />}
+              {(readOnlyReason || note) && <Banner status="info" title={readOnlyReason || note} />}
               {error && <Banner status="error" title={error} />}
               <TextInput
                 label="名称"

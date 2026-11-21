@@ -84,4 +84,7 @@ export interface McpMarket {
   servers: McpMarketServer[];
   /** 企业自建 MCP；旧版企业端不返回。 */
   enterprise?: EnterpriseMcpServer[];
+  /** 展示前缀（设计「技能MCP命名空间出处与更新提示」§4.1）：平台为 taiyim，企业为企业名称（未设置时企业代码）。 */
+  platform_namespace?: string;
+  enterprise_namespace?: string;
 }

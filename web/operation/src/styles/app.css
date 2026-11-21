@@ -18,3 +18,12 @@ body,
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
     "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
 }
+
+/*
+ * 下拉菜单打开时组件库把焦点放到第一项，并对 :focus 加底色——用鼠标打开时第一项像被选中。
+ * 只在键盘焦点（:focus-visible）时保留底色；鼠标悬停底色不变（与企业端 web/manager/src/styles/app.css 一致）。
+ * 组件库规则带 3 个 :not(#\#) 提权，这里用 4 个覆盖。
+ */
+[role="menuitem"]:focus:not(:focus-visible):not(:hover):not(#\#):not(#\#):not(#\#):not(#\#) {
+  background-color: transparent;
+}

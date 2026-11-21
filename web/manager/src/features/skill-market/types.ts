@@ -1,3 +1,5 @@
+import type { CapabilityProvenance } from "@aiteam/shared";
+
 export interface PlatformSkillMarketItem {
   skill_id: string;
   owner: string;
@@ -12,5 +14,8 @@ export interface PlatformSkillMarketItem {
   installed: boolean;
   installed_version?: string | null;
   installed_content_hash?: string | null;
+  installed_versions?: string[];
   update_available: boolean;
+  namespace?: string;
+  provenance?: CapabilityProvenance | null;
 }

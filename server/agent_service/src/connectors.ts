@@ -1,3 +1,4 @@
+import type { CapabilityProvenance } from "./manager-client.js";
 import { readFileSync, statSync } from "node:fs";
 import { CustomSkillStore, CustomSkillError, CustomSkillPreview, CustomSkillPackage, clawHubCandidates, clawHubParts, clawHubSecurity, fetchClawHubSkill, fetchSkillFromUrl, normalizeSkillAtRoot, normalizeSkillPackage, readSkillFile, readSkillFolder, scanSkillRoots, searchClawHubSkills, searchGithubSkills, skillContentHash, toLocalPath, unzipEntries } from "./custom-skills.js";
 import type { ClawHubCandidate, ClawHubSecurity } from "./custom-skills.js";
@@ -204,12 +205,31 @@ export interface InstallableSkillInfo {
   skill_id: string; display_name: string; version: string; content_hash: string; source_skill_id: string;
   /** platform: installed into the enterprise catalog from our platform skill market; enterprise: built by the enterprise. Older Managers omit it. */
   origin?: "platform" | "enterprise";
+  /** SKILL.md name; one machine holds one skill per name (design「技能MCP命名空间出处与更新提示」§4.4). Older Managers omit it. */
+  name?: string;
+  /** Display prefix (taiyim / enterprise name); "" for content taken unchanged from another platform. */
+  namespace?: string;
+  provenance?: CapabilityProvenance | null;
+}
+/** How an enterprise skill relates to what this machine has (desktop «有更新» / «替换安装»). */
+export type InstallableSkillState = "install" | "installed" | "update" | "conflict";
+export interface InstallableSkillListing extends InstallableSkillInfo {
+  state: InstallableSkillState;
+  /** installed / update: the local record it is (or replaces); conflict: the other local skill with the same SKILL.md name. */
+  local_ref?: string;
+  local_display_name?: string;
+  local_version?: string;
 }
 /** Manager-backed skill installation; absent when Manager or the personal skill cache is unavailable. */
 export interface SkillInstaller {
   list(signal?: AbortSignal): Promise<InstallableSkillInfo[]>;
   /** Fetches the package signed for this member, verifies it and stores it in the personal skill cache. */
   install(skillId: string, signal?: AbortSignal): Promise<void>;
+  /**
+   * Removes a replaced skill's files, like revoking it. `imported`: only the self-imported copy (the new catalog
+   * install has the same ref and its signed files must stay).
+   */
+  remove?(ref: string, only?: "imported"): void;
 }
 /** An MCP the enterprise enabled from the platform catalog or built itself (Manager `GET /grants/mcp-servers`, design §11.3 / MCP鉴权 §3.8 / 2026-11-20 §4.4). */
 export interface InstallableMcpInfo {
@@ -223,6 +243,8 @@ export interface InstallableMcpInfo {
   oauth_client?: "preregistered" | "dynamic";
   /** platform: enabled from our platform catalog; enterprise: built by the enterprise (never auto-installable). Older Managers omit it. */
   origin?: "platform" | "enterprise";
+  /** Display prefix: taiyim (platform) / enterprise name. Older Managers omit it. */
+  namespace?: string;
 }
 
 /** An MCP installed from the enterprise's catalog (platform-enabled or enterprise-built); its address and tools come from there. */
@@ -376,12 +398,43 @@ async function planExternalSkill(store: AgentSqliteStore, owner: TaskOwner, inpu
   };
 }
 
-async function findSkill(skills: SkillInstaller | undefined, ref: string, signal?: AbortSignal): Promise<InstallableSkillInfo | string> {
+async function findSkill(skills: SkillInstaller | undefined, ref: string, signal?: AbortSignal): Promise<{ item: InstallableSkillInfo; list: InstallableSkillInfo[] } | string> {
   if (!skills) return "安装未完成：本机暂时无法从企业取技能（未连接企业服务）。";
   let items: InstallableSkillInfo[];
   try { items = await skills.list(signal); } catch { return "安装未完成：暂时无法读取企业技能目录，请稍后再试。"; }
-  return items.find(item => item.skill_id === ref) ?? items.find(item => item.source_skill_id === ref)
-    ?? `安装未完成：企业技能目录里没有可自行安装的技能「${ref}」。请告诉用户联系企业管理员把它安装到企业技能目录，并把可见范围设为全员。`;
+  const item = items.find(entry => entry.skill_id === ref) ?? items.find(entry => entry.source_skill_id === ref);
+  return item ? { item, list: items }
+    : `安装未完成：企业技能目录里没有可自行安装的技能「${ref}」。请告诉用户联系企业管理员把它安装到企业技能目录，并把可见范围设为全员。`;
+}
+
+/** The SKILL.md name of an installed skill: self-imported ones are keyed by it; catalog ones by their catalog entry. */
+function localSkillName(local: LocalCapability, catalog: readonly InstallableSkillInfo[]): string {
+  if (local.source === "user_import") return local.ref;
+  return catalog.find(entry => entry.skill_id === local.ref)?.name || local.ref;
+}
+
+/**
+ * One rule for the desktop list and for installing (design「技能MCP命名空间出处与更新提示」§4.4):
+ * the same entry (same id, or same platform skill) installed → installed / update by version;
+ * otherwise another local skill with the same SKILL.md name → conflict (installing needs «替换»).
+ */
+export function skillListing(installed: readonly LocalCapability[], catalog: readonly InstallableSkillInfo[], item: InstallableSkillInfo): InstallableSkillListing {
+  const skills = installed.filter(local => local.kind === "skill");
+  // Only an install from the catalog is "this entry": a self-imported skill may use the same ref and is a different skill.
+  const fromCatalog = skills.filter(local => isCatalogMcpSource(local.source));
+  const mine = fromCatalog.find(local => local.ref === item.skill_id)
+    ?? (item.source_skill_id ? fromCatalog.find(local => local.source_ref === item.source_skill_id) : undefined);
+  const name = item.name || item.skill_id;
+  const other = mine ? undefined : skills.find(local => localSkillName(local, catalog) === name);
+  const local = mine ?? other;
+  const state: InstallableSkillState = mine ? (mine.version === item.version && mine.ref === item.skill_id ? "installed" : "update") : other ? "conflict" : "install";
+  return { ...item, state, ...(local ? { local_ref: local.ref, local_display_name: local.display_name, local_version: local.version ?? "" } : {}) };
+}
+
+/** Desktop «能力» page: every enterprise skill the member may install, with its state on this machine. */
+export function listInstallableSkillStates(store: AgentSqliteStore, owner: TaskOwner, catalog: readonly InstallableSkillInfo[]): InstallableSkillListing[] {
+  const installed = store.listLocalCapabilities(owner.tenantId, owner.memberId);
+  return catalog.map(item => skillListing(installed, catalog, item));
 }
 
 /** What one `capability_install` request resolves to; computed the same way before the approval prompt and at execution. */
@@ -426,11 +479,14 @@ async function planInstall(store: AgentSqliteStore, owner: TaskOwner, input: Cap
   if (input.kind === "skill") {
     const found = await findSkill(skills, String(input.ref ?? ""), signal);
     if (typeof found === "string") return found;
-    const existing = installed.find(item => item.kind === "skill" && item.ref === found.skill_id);
-    if (existing?.version === found.version) return `技能「${found.display_name || found.skill_id}」${found.version} 已安装，下一轮对话起可用，无需再装。`;
+    const { item: skill, list } = found;
+    const listing = skillListing(installed, list, skill);
+    // The record this install replaces: an older install of the same entry, or another skill with the same SKILL.md name.
+    const existing = listing.local_ref ? installed.find(item => item.kind === "skill" && item.ref === listing.local_ref) : undefined;
+    if (listing.state === "installed") return `技能「${skill.display_name || skill.skill_id}」${skill.version} 已安装，下一条消息起可用，无需再装。`;
     return {
-      kind: "skill", ref: found.skill_id, display_name: found.display_name.slice(0, 120), url: "", declaredTools: [],
-      source: found.origin === "platform" ? "platform_catalog" : "enterprise_catalog", sourceRef: found.source_skill_id, skill: found, existing, reason,
+      kind: "skill", ref: skill.skill_id, display_name: skill.display_name.slice(0, 120), url: "", declaredTools: [],
+      source: skill.origin === "platform" ? "platform_catalog" : "enterprise_catalog", sourceRef: skill.source_skill_id, skill, existing, reason,
       auth: "none", authHeader: "", scope: "", timeoutMs: DEFAULT_MCP_TIMEOUT_MS, preregistered: false,
     };
   }
@@ -713,6 +769,8 @@ async function installPlannedMcp(store: AgentSqliteStore, owner: TaskOwner, auth
 export interface CatalogMcpListing {
   server_id: string; ref: string; display_name: string; summary: string; url: string; tools: string[];
   auth: LocalCapabilityAuth; origin: "platform" | "enterprise"; revision: number;
+  /** Display prefix: taiyim (platform) / enterprise name; "" from older Managers. */
+  namespace: string;
   /**
    * install: not on this machine; installed: installed from this entry (at its revision, or one this Agent did not
    * record); update: installed from an older revision; conflict: this machine has another MCP with the same ref.
@@ -736,7 +794,7 @@ export async function listCatalogMcps(store: AgentSqliteStore, owner: TaskOwner,
       : installed.some(item => item.ref === entry.ref) ? "conflict" : "install";
     return {
       server_id: entry.server_id, ref: mine?.ref ?? entry.ref, display_name: entry.display_name, summary: entry.summary, url: entry.url,
-      tools: entry.tools, auth: entry.auth ?? "none", origin: entry.origin ?? "platform", revision: entry.revision, state,
+      tools: entry.tools, auth: entry.auth ?? "none", origin: entry.origin ?? "platform", revision: entry.revision, namespace: entry.namespace ?? "", state,
     };
   });
 }
@@ -827,7 +885,7 @@ export function capabilityInstallTool(store: AgentSqliteStore, owner: TaskOwner,
           }
           try {
             const capability = installOneCustomSkill(store, custom, owner, plan.external.pkg, resolution?.action === "replace");
-            return { content: [{ type: "text" as const, text: `已安装技能「${capability.display_name}」${capability.version}，下一轮对话起可用。` }], details: undefined };
+            return { content: [{ type: "text" as const, text: `已安装技能「${capability.display_name}」${capability.version}，下一条消息起可用。` }], details: undefined };
           } catch (error) {
             return fail(error instanceof Error && error.message ? error.message : "安装未完成：技能包装不进本机目录。");
           }
@@ -837,7 +895,7 @@ export function capabilityInstallTool(store: AgentSqliteStore, owner: TaskOwner,
         if (plan.existing && resolution?.action !== "replace") return fail("已装有该技能的其他版本，用户没有选择覆盖，未安装。");
         const outcome = await installPlannedSkill(store, owner, plan, skills!, approvedBy, signal);
         if ("error" in outcome) return fail(outcome.text);
-        return { content: [{ type: "text" as const, text: `已安装技能「${found.display_name || found.skill_id}」${found.version}，下一轮对话起可用。` }], details: undefined };
+        return { content: [{ type: "text" as const, text: `已安装技能「${found.display_name || found.skill_id}」${found.version}，下一条消息起可用。` }], details: undefined };
       }
       const ref = resolution?.action === "rename" ? resolution.ref : plan.ref;
       if (!REF_RE.test(ref)) return fail("安装未完成：新标识无效。");
@@ -858,7 +916,7 @@ export function capabilityInstallTool(store: AgentSqliteStore, owner: TaskOwner,
       }
       const saved = storeMcp(store, owner, auth, plan, ref, connected, approvedBy);
       const signedIn = plan.auth === "oauth" ? "（已登录服务方账号）" : plan.auth === "bearer" ? "（已保存访问令牌）" : "";
-      return { content: [{ type: "text" as const, text: `已安装 ${saved.display_name}（标识 ${ref}）${signedIn}，可用工具：${connected.tools.join(", ")}。下一轮对话起可调用。` }], details: undefined };
+      return { content: [{ type: "text" as const, text: `已安装 ${saved.display_name}（标识 ${ref}）${signedIn}，可用工具：${connected.tools.join(", ")}。下一条消息起可调用。` }], details: undefined };
     },
   } as ToolDefinition;
 }
@@ -922,6 +980,13 @@ async function installPlannedSkill(store: AgentSqliteStore, owner: TaskOwner, pl
         ? `不可以安装：「${found.display_name || found.skill_id}」${found.version} 的技能包签名校验未通过（企业可能更换了签名密钥）。本机已装的 ${kept.version ?? ""} 版不受影响，仍可继续使用。`
         : `不可以安装：「${found.display_name || found.skill_id}」的技能包签名校验未通过（企业可能更换了签名密钥）。请告诉用户联系企业管理员。`,
     };
+  }
+  // Replacing another record (an older entry of the same skill, or a same-name skill): it goes, files and all.
+  if (plan.existing && plan.existing.ref !== found.skill_id) {
+    store.deleteLocalCapability(owner.tenantId, owner.memberId, "skill", plan.existing.ref);
+    skills.remove?.(plan.existing.ref);
+  } else if (plan.existing && !isCatalogMcpSource(plan.existing.source)) {
+    skills.remove?.(plan.existing.ref, "imported");
   }
   store.putLocalCapability(owner.tenantId, owner.memberId, {
     kind: "skill", ref: found.skill_id, display_name: found.display_name || found.skill_id, url: "", tools: [], version: found.version, source_ref: plan.sourceRef,
@@ -1112,7 +1177,11 @@ export async function installSkillDirectly(store: AgentSqliteStore, owner: TaskO
     if (plan.includes("暂时无法") || plan.includes("未连接")) throw new SkillInstallError("manager_unavailable", plan.replace("安装未完成：", ""));
     throw new SkillInstallError("skill_not_installable", "企业技能目录里没有这个可自行安装的技能，请联系企业管理员。");
   }
-  if (plan.existing && !request.replace) throw new SkillInstallError("skill_exists", `「${plan.existing.display_name}」已经装好了（${plan.existing.version ?? ""} 版）；需要换成目录里的 ${plan.skill!.version} 版才点替换安装。`);
+  if (plan.existing && !request.replace) {
+    throw new SkillInstallError("skill_exists", plan.existing.ref === plan.ref && isCatalogMcpSource(plan.existing.source)
+      ? `「${plan.existing.display_name}」已经装好了（${plan.existing.version ?? ""} 版）；需要换成目录里的 ${plan.skill!.version} 版才点替换安装。`
+      : `本机已有同名技能「${plan.existing.display_name}」，同一个名字只能装一个；替换安装会换成企业目录里的这个。`);
+  }
   const outcome = await installPlannedSkill(store, owner, plan, skills, owner.memberId, signal);
   if ("error" in outcome) throw new SkillInstallError(outcome.error === "signature" ? "skill_signature_invalid" : "skill_install_failed", outcome.text);
   return outcome.capability;

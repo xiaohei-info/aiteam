@@ -149,12 +149,37 @@ export interface ManagerKnowledgeSpace {
   deployment_kind: "managed" | "nas";
 }
 
-export interface InstallableSkill { skill_id: string; display_name: string; version: string; content_hash: string; source_skill_id: string; origin: "platform" | "enterprise" }
+/** Where a skill came from when it is not our own content (design「技能MCP命名空间出处与更新提示」§4.1); display only. */
+export interface CapabilityProvenance { kind: "clawhub" | "url" | "platform"; label: string; url: string; version: string; edited: boolean }
+export interface InstallableSkill {
+  skill_id: string; display_name: string; version: string; content_hash: string; source_skill_id: string; origin: "platform" | "enterprise";
+  /** SKILL.md name: one machine holds one skill per name. Older Managers omit it (""). */
+  name: string;
+  /** Display prefix: taiyim (platform) / enterprise name; "" for content taken unchanged from another platform. */
+  namespace: string;
+  provenance: CapabilityProvenance | null;
+}
+
+const PROVENANCE_KINDS = new Set(["clawhub", "url", "platform"]);
+/** Display-only: anything malformed is dropped rather than failing the whole list. */
+export function normalizeProvenance(raw: unknown): CapabilityProvenance | null {
+  if (!raw || typeof raw !== "object") return null;
+  const item = raw as Record<string, unknown>;
+  if (typeof item.kind !== "string" || !PROVENANCE_KINDS.has(item.kind) || typeof item.label !== "string" || !item.label) return null;
+  const url = typeof item.url === "string" && /^https:\/\//.test(item.url) ? item.url : "";
+  return { kind: item.kind as CapabilityProvenance["kind"], label: item.label, url, version: typeof item.version === "string" ? item.version : "", edited: item.edited === true };
+}
+
+function text(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
 /** An MCP the enterprise enabled from the platform catalog or built itself (design §11.3, 2026-11-20 §4.4; auth fields: MCP鉴权与配置导入 §3.8). Never carries a secret. */
 export interface InstallableMcpServer {
   server_id: string; ref: string; display_name: string; summary: string; url: string; tools: string[]; revision: number;
   auth: "none" | "oauth" | "bearer"; auth_header: string; oauth_scopes: string; timeout_ms?: number; oauth_client: "preregistered" | "dynamic";
   origin: "platform" | "enterprise";
+  /** Display prefix: taiyim (platform) / enterprise name. Older Managers omit it (""). */
+  namespace: string;
 }
 
 export interface ManagerClient {
@@ -331,6 +356,7 @@ export class HttpManagerClient implements ManagerClient {
         source_skill_id: typeof item.source_skill_id === "string" ? item.source_skill_id : "",
         // Older Managers omit origin: treat as enterprise, so nothing becomes auto-installable by accident.
         origin: item.origin === "platform" ? "platform" : "enterprise",
+        name: text(item.name), namespace: text(item.namespace), provenance: normalizeProvenance(item.provenance),
       };
     });
   }
@@ -355,6 +381,7 @@ export class HttpManagerClient implements ManagerClient {
         oauth_client: item.oauth_client === "preregistered" ? "preregistered" : "dynamic",
         // Older Managers list only entries enabled from the platform catalog.
         origin: item.origin === "enterprise" ? "enterprise" : "platform",
+        namespace: text(item.namespace),
       };
     });
   }
@@ -535,6 +562,8 @@ export class HttpManagerClient implements ManagerClient {
           ...(body === undefined ? {} : { "Content-Type": "application/json" }),
           ...(caller.accessToken ? { Authorization: `Bearer ${caller.accessToken}` } : {}),
           ...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}),
+          // 声明本 Agent 能装的技能包格式（2 = 带脚本 / 资料）；企业端据此对老版本提示升级。
+          [SKILL_PACKAGE_FORMAT_HEADER]: String(SKILL_PACKAGE_FORMAT),
         },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
@@ -548,6 +577,7 @@ export class HttpManagerClient implements ManagerClient {
       const message = `Manager returned HTTP ${response.status} for ${path}${detail ? `: ${detail}` : ""}`;
       if (response.status === 404 || response.status === 409) throw new ManagerPolicyDeniedError(response.status, message, problemCode);
       if (response.status === 422) throw new ManagerValidationError(message, problemCode);
+      if (response.status === 426) throw new AgentUpgradeRequiredError(detail.replace(/^agent_upgrade_required:\s*/u, "") || "请升级桌面客户端到最新版");
       throw new ManagerUnavailableError(message, { status: response.status, problemCode });
     }
     return response;
@@ -559,6 +589,10 @@ export class HttpManagerClient implements ManagerClient {
     return body.data ?? value;
   }
 }
+
+/** 技能包格式（对应 Manager shared/contracts/skill.py SKILL_PACKAGE_FORMAT）。 */
+export const SKILL_PACKAGE_FORMAT_HEADER = "X-AITeam-Skill-Package-Format";
+export const SKILL_PACKAGE_FORMAT = 2;
 
 export class ManagerUnavailableError extends Error {
   /** Upstream HTTP status when Manager answered with an unclassified error (for example 413 or 5xx). */
@@ -1086,3 +1120,11 @@ function stringValue(value: unknown, name: string): string {
 }
 function stringArray(value: unknown): string[] { return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []; }
 function objectValue(value: unknown): Record<string, unknown> | undefined { return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined; }
+
+/** 企业端要下发的内容本 Agent 版本处理不了：带着企业端的中文说明让成员升级客户端。 */
+export class AgentUpgradeRequiredError extends ManagerUnavailableError {
+  constructor(message: string) {
+    super(message, { status: 426, problemCode: "agent_upgrade_required" });
+    this.name = "AgentUpgradeRequiredError";
+  }
+}

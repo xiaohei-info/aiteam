@@ -24,6 +24,7 @@ from shared.db import PgTenantRouter
 from shared.errors import AppError, ValidationProblem
 from shared.skill_import import MAX_ARCHIVE_ENTRIES
 
+from .capability_origin import app_enterprise_namespace, skill_origin
 from .capability_catalog_repository import CapabilityCatalogRepository
 from .capability_catalog_service import (
     CapabilityCatalogService,
@@ -96,12 +97,14 @@ async def _read_import(request: Request) -> tuple[ImportRequest, SkillImportJson
             roots = [str(item) for item in form.getlist("roots")]
             options = SkillImportJsonIn.model_validate({
                 "source": form.get("source"), "roots": roots or None,
-                **{key: form[key] for key in ("visibility", "binding_policy", "install_policy") if form.get(key)},
+                **{key: form[key] for key in ("visibility", "binding_policy", "install_policy", "fork_of") if form.get(key)},
             })
             if options.source not in _UPLOAD_SOURCES:
                 raise ValidationProblem("multipart 只用于 folder / zip / file / editor 来源")
+            if options.fork_of and options.source != "editor":
+                raise ValidationProblem("fork_of 只用于在线编辑")
             entries = [(paths[i] if paths else (upload.filename or ""), await upload.read()) for i, upload in enumerate(uploads)]
-            return ImportRequest(source=options.source, entries=entries, roots=options.roots), options
+            return ImportRequest(source=options.source, entries=entries, roots=options.roots, fork_of=options.fork_of or ""), options
         options = SkillImportJsonIn.model_validate(await request.json())
     except ValidationError as exc:
         raise ValidationProblem("导入请求格式不对：" + "; ".join(err["msg"] for err in exc.errors()[:3])) from exc
@@ -109,12 +112,24 @@ async def _read_import(request: Request) -> tuple[ImportRequest, SkillImportJson
         raise ValidationProblem("导入请求体无法解析") from exc
     if options.source in _UPLOAD_SOURCES:
         raise ValidationProblem("文件夹、压缩包和 .md 文件请用 multipart/form-data 上传")
+    if options.fork_of:
+        raise ValidationProblem("fork_of 只用于在线编辑")
     return ImportRequest(source=options.source, text=options.text, url=options.url, roots=options.roots,
                          expected_hashes=options.expected_hashes), options
 
 
 class _ManagerNotConfigured(AppError):
     status, code, title = 503, "manager_db_unconfigured", "Manager DB Unconfigured"
+
+
+def _with_origin(request: Request, ctx, rows: list[SkillCatalogOut]) -> list[SkillCatalogOut]:
+    """Adds the display namespace / provenance (design「技能MCP命名空间出处与更新提示」§4.1)."""
+    enterprise = app_enterprise_namespace(request.app)(ctx) if rows else ""
+    out = []
+    for row in rows:
+        origin = skill_origin(row.config, skill_id=row.skill_id, enterprise=enterprise)
+        out.append(row.model_copy(update={"namespace": origin["namespace"], "provenance": origin["provenance"]}))
+    return out
 
 
 def _service(request: Request) -> CapabilityCatalogService:
@@ -174,16 +189,16 @@ def build_capability_router(verifier) -> APIRouter:
         request: Request, claims: TokenClaims = Depends(require),
     ) -> ListEnvelope[SkillCatalogOut]:
         svc = _service(request)
-        return ListEnvelope[SkillCatalogOut](data=svc.list_skills(tenant_context_from(claims)))
+        ctx = tenant_context_from(claims)
+        return ListEnvelope[SkillCatalogOut](data=_with_origin(request, ctx, svc.list_skills(ctx)))
 
     @router.get("/skills/{catalog_id}", description="取单个技能目录条目。成功响应遵循统一 envelope，失败返回 problem+json。", summary="取单个技能目录条目", operation_id="manager_skill_catalog_get")
     async def get_skill(
         catalog_id: str, request: Request, claims: TokenClaims = Depends(require),
     ) -> Envelope[SkillCatalogOut]:
         svc = _service(request)
-        return Envelope[SkillCatalogOut](
-            data=svc.get_skill(tenant_context_from(claims), catalog_id=catalog_id)
-        )
+        ctx = tenant_context_from(claims)
+        return Envelope[SkillCatalogOut](data=_with_origin(request, ctx, [svc.get_skill(ctx, catalog_id=catalog_id)])[0])
 
     @router.put(
         "/skills/{catalog_id}", description="改写技能目录条目（catalog_version 自增）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="改写技能目录条目（catalog_version 自增）",

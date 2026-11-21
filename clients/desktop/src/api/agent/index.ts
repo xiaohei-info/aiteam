@@ -197,6 +197,9 @@ export const agentApi = {
 
   // -------- 员工/专家 --------
   listExperts: () => listExperts(getClient()),
+  // 定时同步专家配置（能力更新检查顺带做，管理员更新的专家技能随之下发）；登录时的同步走 auth.ts。
+  syncGrants: (identity: { tenant_id: string; member_id: string }) =>
+    getClient().request<{ ok: boolean }>({ method: 'POST', path: '/api/agent/grants/sync', body: identity }),
   listSolutions: () => listSolutions(getClient()),
   listLocalCapabilities: () => listLocalCapabilities(getClient()),
   listInstallableSkills: () => listInstallableSkills(getClient()),

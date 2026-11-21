@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { ApiError } from "@aiteam/shared";
+import { ApiError, capabilityTitle } from "@aiteam/shared";
 import { AlertDialog } from "@astryxdesign/core/AlertDialog";
 import { Badge } from "@astryxdesign/core/Badge";
 import { Banner } from "@astryxdesign/core/Banner";
@@ -18,6 +18,7 @@ import { useCapabilityAssistApi } from "../capability-assist/useCapabilityAssist
 import { EnterpriseMcpDialog } from "./EnterpriseMcpDialog";
 import { useMcpMarketApi } from "./useMcpMarketApi";
 import type { EnterpriseMcpServer, EnterpriseMcpServerInput, McpMarket, McpMarketServer } from "./types";
+import { countMcpUpdates, reportCapabilityUpdates } from "../capability-updates";
 
 function statusBadge(item: McpMarketServer): { label: string; variant: "success" | "warning" | "neutral" } | null {
   if (!item.enabled) return null;
@@ -70,7 +71,11 @@ export function McpMarketPage(): ReactNode {
 
   const load = useCallback(async () => {
     setError(null);
-    try { setMarket(await api.list()); }
+    try {
+      const next = await api.list();
+      setMarket(next);
+      reportCapabilityUpdates({ mcps: countMcpUpdates(next) });
+    }
     catch (err) { setError(err instanceof ApiError ? err.message : "MCP 市场加载失败"); }
   }, [api]);
   useEffect(() => { void load(); }, [load]);
@@ -117,6 +122,8 @@ export function McpMarketPage(): ReactNode {
 
   const servers = market?.servers ?? [];
   const enterprise = market?.enterprise ?? [];
+  const platformNs = market?.platform_namespace ?? "taiyim";
+  const enterpriseNs = market?.enterprise_namespace ?? "";
   return (
     <VStack as="section" gap={5}>
       <VStack gap={1}>
@@ -148,7 +155,7 @@ export function McpMarketPage(): ReactNode {
                       </HStack>
                       <Text color="secondary">{item.summary || "暂无用途说明"}</Text>
                       <Text color="secondary" style={{ wordBreak: "break-all" }}>{item.url}</Text>
-                      <Text color="secondary">标识 {item.ref} · 修订 {item.revision} · 工具：{item.tools.length ? item.tools.join("、") : "以成员登录后实际工具为准"}</Text>
+                      <Text color="secondary">标识 {capabilityTitle(enterpriseNs, item.ref)} · 修订 {item.revision} · 工具：{item.tools.length ? item.tools.join("、") : "以成员登录后实际工具为准"}</Text>
                     </VStack>
                     <HStack gap={2}>
                       <Button label="编辑" size="sm" isDisabled={busy !== null} onClick={() => { setSaveError(null); setEditing(item); }} />
@@ -179,7 +186,7 @@ export function McpMarketPage(): ReactNode {
                       </HStack>
                       <Text color="secondary">{item.summary || "暂无用途说明"}</Text>
                       <Text color="secondary" style={{ wordBreak: "break-all" }}>{item.url}</Text>
-                      <Text color="secondary">标识 {item.ref} · 工具：{item.tools.length ? item.tools.join("、") : "以成员登录后实际工具为准"}</Text>
+                      <Text color="secondary">标识 {capabilityTitle(platformNs, item.ref)} · 工具：{item.tools.length ? item.tools.join("、") : "以成员登录后实际工具为准"}</Text>
                     </VStack>
                     <HStack gap={2}>
                       {item.enabled && (

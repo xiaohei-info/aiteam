@@ -1,27 +1,17 @@
 /**
- * 「技能管理」（侧栏 /skill-market）：企业技能 + 平台技能市场两个标签。
- * 企业技能是本企业的技能目录（导入技能、让模型帮我找、手动编辑都在「新增技能」里）；
- * 平台技能市场是运营端开放的技能，安装后进入企业技能。
+ * 「技能管理」（侧栏 /skill-market）：企业的技能只有一个列表，「来源」列标明平台市场 / 自定义 / 网址 / ClawHub。
+ * 平台技能经「新增技能 → 添加平台技能」加入列表，不再单独展示「平台技能市场」（2026-11-21 用户要求：列表数据与交互预期一致）。
  */
-import { useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { Heading } from "@astryxdesign/core/Heading";
-import { Tab, TabList } from "@astryxdesign/core/TabList";
 import { VStack } from "@astryxdesign/core/VStack";
 import { CapabilityPage } from "../capability";
-import { SkillMarketPage } from "./SkillMarketPage";
-
-type SkillTab = "enterprise" | "platform";
 
 export function SkillManagementPage(): ReactNode {
-  const [tab, setTab] = useState<SkillTab>("enterprise");
   return (
     <VStack as="section" gap={5}>
       <Heading level={1}>技能管理</Heading>
-      <TabList aria-label="技能来源" value={tab} onChange={(value) => setTab(value as SkillTab)} hasDivider>
-        <Tab value="enterprise" label="企业技能" />
-        <Tab value="platform" label="平台技能市场" />
-      </TabList>
-      {tab === "enterprise" ? <CapabilityPage skillsOnly /> : <SkillMarketPage embedded />}
+      <CapabilityPage skillsOnly />
     </VStack>
   );
 }

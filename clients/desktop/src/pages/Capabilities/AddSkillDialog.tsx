@@ -7,7 +7,7 @@ import { BookOpen, LoaderCircle, Search } from 'lucide-react'
 import { ChatDialog } from '../../components/Chat/ChatDialog'
 import { agentApi, AgentApiError } from '../../api/agent'
 import type { InstallableSkill, LocalCapability } from '../../api/agent/types'
-import { installableSkillState } from './capabilityLabels'
+import { capabilityTitle, installableSkillState, provenanceText, replaceConfirmText } from './capabilityLabels'
 import { CustomSkillImport } from './CustomSkillImport'
 import './McpAuth.css'
 
@@ -25,6 +25,8 @@ export function AddSkillDialog({ installed, onInstalled, onClose }: { installed:
   const [query, setQuery] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
   const [rowError, setRowError] = useState<{ id: string; text: string } | null>(null)
+  // 「替换安装」会删掉本机同名的那个（可能是自己导入、改过的）：先在行内确认。
+  const [confirming, setConfirming] = useState<string | null>(null)
 
   useEffect(() => {
     let alive = true
@@ -34,15 +36,18 @@ export function AddSkillDialog({ installed, onInstalled, onClose }: { installed:
 
   const shown = useMemo(() => {
     const keyword = query.trim().toLowerCase()
-    return (skills ?? []).filter((skill) => !keyword || `${skill.display_name} ${skill.skill_id}`.toLowerCase().includes(keyword))
+    return (skills ?? []).filter((skill) => !keyword || `${capabilityTitle(skill.namespace, skill.display_name)} ${skill.skill_id}`.toLowerCase().includes(keyword))
   }, [skills, query])
 
   const install = async (skill: InstallableSkill, replace: boolean) => {
     setBusy(skill.skill_id)
     setRowError(null)
+    setConfirming(null)
     try {
       await agentApi.installSkill(skill.skill_id, replace)
       await onInstalled()
+      // 状态（已装 / 有更新 / 同名冲突）由 Agent 按本机现状算，装完重读一次。
+      setSkills(await agentApi.listInstallableSkills().catch(() => skills))
     } catch (err) {
       setRowError({ id: skill.skill_id, text: err instanceof Error && err.message ? err.message : '安装失败，请重试' })
     } finally { setBusy(null) }
@@ -71,22 +76,31 @@ export function AddSkillDialog({ installed, onInstalled, onClose }: { installed:
                   const working = busy === skill.skill_id
                   return <li key={skill.skill_id}>
                     <span className="skill-list-copy">
-                      <strong>{skill.display_name || skill.skill_id}</strong>
-                      <span>{skill.origin === 'platform' ? '平台技能市场' : '企业自建'} · 版本 {skill.version} · 标识 {skill.skill_id}</span>
+                      <strong>{capabilityTitle(skill.namespace, skill.display_name || skill.skill_id)}</strong>
+                      <span>{skill.origin === 'platform' ? '平台技能市场' : '企业自建'} · 版本 {skill.version}{provenanceText(skill.provenance) ? ` · ${provenanceText(skill.provenance)}` : ''}</span>
                       {state.action === 'upgrade' && <span>本机已装 {state.from || '其他'} 版，安装后换成 {skill.version} 版。</span>}
+                      {state.action === 'conflict' && <span>本机已有同名技能「{state.name}」，同一个名字只能装一个；替换后改用这个，原来那个会被移除。</span>}
+                      {confirming === skill.skill_id && <span className="skill-replace-confirm" role="alertdialog" aria-label={`确认替换 ${skill.display_name || skill.skill_id}`}>
+                        <span>{replaceConfirmText(skill, installed)}</span>
+                        <span className="skill-replace-actions">
+                          <button type="button" className="danger" disabled={busy !== null} onClick={() => void install(skill, true)}>确认替换</button>
+                          <button type="button" disabled={busy !== null} onClick={() => setConfirming(null)}>取消</button>
+                        </span>
+                      </span>}
                       {rowError?.id === skill.skill_id && <span role="alert" className="mcp-error">{rowError.text}</span>}
                     </span>
                     {state.action === 'installed'
                       ? <span className="mcp-auth-badge">已安装</span>
-                      : <button type="button" disabled={busy !== null} onClick={() => void install(skill, state.action === 'upgrade')}>
-                        {working ? '正在安装…' : state.action === 'upgrade' ? `换成 ${skill.version} 版` : '安装'}
-                      </button>}
+                      : confirming === skill.skill_id ? null
+                        : <button type="button" disabled={busy !== null} onClick={() => state.action === 'conflict' ? setConfirming(skill.skill_id) : void install(skill, state.action === 'upgrade')}>
+                          {working ? '正在安装…' : state.action === 'upgrade' ? `换成 ${skill.version} 版` : state.action === 'conflict' ? '替换安装' : '安装'}
+                        </button>}
                   </li>
                 })}
                 {shown.length === 0 && <li><span className="mcp-note">没有匹配的技能。</span></li>}
               </ul>
             </>}
-      <p className="mcp-note">技能可能附带脚本和资料，不会自动执行；员工运行命令仍按审批策略。安装后下一轮对话起可用。</p>
+      <p className="mcp-note">技能可能附带脚本和资料，不会自动执行；员工运行命令仍按审批策略。安装后下一条消息起可用。</p>
       <footer><button type="button" onClick={onClose}>关闭</button></footer>
         </>}
     </div>
