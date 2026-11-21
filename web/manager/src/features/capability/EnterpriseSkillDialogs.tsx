@@ -20,7 +20,7 @@ import {
 import { CheckboxInput } from "@astryxdesign/core/CheckboxInput";
 import { VStack } from "@astryxdesign/core/VStack";
 import type { CapabilityApi } from "./useCapabilityApi";
-import type { SkillCatalog } from "./types";
+import type { CatalogVisibility, SkillBindingPolicy, SkillCatalog } from "./types";
 
 const MEMBER_INSTALL_HINT = "不勾选时成员看不到它，只能由管理员配给专家。";
 
@@ -63,8 +63,9 @@ export function EnterpriseSkillEditor({ api, row, existingIds, onSaved, onClose 
   const [memberInstall, setMemberInstall] = useState(row ? row.visibility !== "private" : true);
   const [disabled, setDisabled] = useState(row?.binding_policy === "disabled");
   const platform = row ? isPlatformSkill(row) : false;
-  const visibility = memberInstall ? "tenant" : "private";
-  const bindingPolicy = disabled ? "disabled" : "opt_in";
+  // 只改界面上的两个开关；旧表单留下的 public / auto_bind 等值在没动对应开关时原样保留，不被悄悄改掉。
+  const visibility: CatalogVisibility = memberInstall ? (row && row.visibility !== "private" ? row.visibility as CatalogVisibility : "tenant") : "private";
+  const bindingPolicy: SkillBindingPolicy = disabled ? "disabled" : (row && row.binding_policy !== "disabled" ? row.binding_policy as SkillBindingPolicy : "opt_in");
 
   async function save({ files, contentChanged }: SkillEditorSaveInput): Promise<string | null> {
     try {
