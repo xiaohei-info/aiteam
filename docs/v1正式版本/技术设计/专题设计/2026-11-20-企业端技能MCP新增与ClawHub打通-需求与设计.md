@@ -267,7 +267,7 @@ POST /api/manager/capability-assist
 | `propose(candidates)` | 结束循环，结构化输出 |
 
 - 边界：最多 6 轮、12 次工具调用、总时限 90 s、单次模型输出 ≤ 4k tokens；超限返回已有结果并注明「未完成」。
-- 系统提示词：只找能力、只返回候选、不得编造链接（候选链接必须来自工具结果，服务端校验：候选 URL 不在本次工具结果里的丢弃）。
+- 系统提示词：只找能力、只返回候选、不得编造链接。服务端校验（#220 复核后收紧）：**可信链接**只有管理员给的链接、管理员贴的配置里的地址、搜索工具结构化返回的条目地址（GitHub 仓库下的子路径、ClawHub 同名候选也算）；工具结果正文（技能说明、仓库描述、模型调用 `parse_mcp_config` 的回显）里出现的链接不算。候选 URL 不可信的丢弃；`inspect_link` 也只能核实可信链接，Manager 不会按模型给的任意地址出网。
 - 不落库：需求原文、模型输出、工具结果都不写库、不进日志（日志只记 request_id、轮数、token 数、耗时）。
 - 用量：每次调用写一条 `usage_rollup`：`summary_id = "manager-assist-<uuid>"`、`member_id = 企业 owner`、`employee_id = NULL`、`run_count = 1`、tokens、按冻结的平台价格算 `cost_total`（价格未知 → `pricing_status = unknown`、`cost_total = NULL`）；经 `upsert_usage_with_delivery` 同事务投递 Operator。另写企业审计 `capability_assist.invoked`（actor = 发起管理员、model、token 数）。
 - 前端：MCP 市场页与技能目录区都有「让模型帮我找」入口 → 对话框（需求必填、链接 / JSON 可选、模型选择）→ 候选列表（来源、理由、安全）→ 点「用这个」打开 §4.3 导入对话框（预填 ClawHub / 网址）或 §4.4 MCP 对话框（预填配置），走正常检查 → 安装。
@@ -356,7 +356,7 @@ POST /api/manager/capability-assist
 | 旧 Agent 不认识 MCP 的 `origin`（P3） | 会把企业自建 MCP 当平台条目、有自动安装资格；严格按发布顺序先发 Agent |
 | Manager 外呼 SSRF | 共用 `shared/net_guard`（拒私网 / 回环 / 链路本地 / 元数据地址，钉 IP，不跨主机重定向） |
 | ClawHub / GitHub 限速 | 运营端 10 分钟缓存（已有）+ 前端防抖；企业端帮装受 GitHub 匿名 10 次/分钟限制，失败时候选里注明 |
-| 模型编造链接 | 服务端只保留出现在本次工具结果里的 URL |
+| 模型编造链接 / 提示注入引导出网 | 候选与 `inspect_link` 只认可信链接（管理员给的、配置里的、搜索条目地址）；正文与 `parse_mcp_config` 回显里的链接不算 |
 | 帮装费用不可见 | 用量计入 owner、企业用量页可见（新来源标「管理工具」，已实现见 §4.5b） |
 | 帮装 anthropic 协议路径（P4） | 按成员 Agent 的拼法请求 `base/v1/messages`，未对真实 Relay 验证；上线前用真实 anthropic 协议模型冒烟一次 |
 | 大包撑爆请求 | Manager 导入 `BodyLimit` 12 MiB；Operation zip 上限 10 MiB |
