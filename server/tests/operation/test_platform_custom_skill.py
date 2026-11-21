@@ -240,3 +240,46 @@ def test_route_passes_fork_of_only_for_the_editor(client):
     assert client.store.skills["weather"]["provenance"]["edited"] is True
     response = client.post("/api/operation/skill-market/custom", headers=_auth(), files=files, data={"source": "folder", "paths": ["SKILL.md"], "fork_of": "hub-1"})
     assert response.status_code == 422
+
+
+def test_routes_refuse_oversized_bodies_before_reading_them(client):
+    import operation_service.app as operation_app
+    from operation_service.routes_skill_market import CUSTOM_SKILL_MAX_BODY_BYTES
+
+    assert any(limit.path_prefix == "/api/operation/skill-market/custom" and limit.max_bytes == CUSTOM_SKILL_MAX_BODY_BYTES
+               for limit in _body_limits(operation_app.app))
+    big = b"x" * (CUSTOM_SKILL_MAX_BODY_BYTES + 1)
+    for path in ("/api/operation/skill-market/custom", "/api/operation/skill-market/custom/preview"):
+        response = client.post(path, headers=_auth(), files=[("files", ("SKILL.md", big))], data={"source": "file"})
+        assert response.status_code == 413, (path, response.status_code)
+    assert client.store.skills == {}
+
+
+def _body_limits(app):
+    from shared.body_limit import BodySizeLimitMiddleware
+
+    for middleware in app.user_middleware:
+        if middleware.cls is BodySizeLimitMiddleware:
+            return middleware.kwargs["limits"]
+    return ()
+
+
+def test_save_refuses_content_that_changed_after_the_check():
+    from shared.skill_import import ContentChanged
+
+    store = _Store()
+    svc = CustomSkillService(store)
+    preview = svc.preview(CustomSkillRequest(source="text", text=_skill()))["preview"]
+    assert preview["content_hash"]
+    with pytest.raises(ContentChanged):
+        svc.save(CustomSkillRequest(source="text", text=_skill(body="# 改过\n"), expected_hashes={"": preview["content_hash"]}))
+    assert store.skills == {}
+    saved = svc.save(CustomSkillRequest(source="text", text=_skill(), expected_hashes={"": preview["content_hash"]}))
+    assert saved["results"][0]["status"] == "installed"
+
+
+def test_route_passes_expected_hashes_and_answers_409(client):
+    response = client.post("/api/operation/skill-market/custom", headers=_auth(),
+                           json={"source": "text", "text": _skill(), "expected_hashes": {"": "0" * 64}})
+    assert response.status_code == 409 and response.json()["code"] == "content_changed"
+    assert client.store.skills == {}

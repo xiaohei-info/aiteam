@@ -18,7 +18,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
 import time
 import uuid
 from collections.abc import Callable
@@ -60,15 +59,14 @@ _SEARCH_LIMIT = 8
 _FETCH_LIMIT = 1024 * 1024
 _ADMIN_ROLES = {"owner", "enterprise_admin"}
 _PROTOCOLS = {"openai-completions", "openai-responses", "anthropic-messages"}
-_URL_RE = re.compile(r"https?://[^\s\"'<>)\]]+")
 
 SYSTEM_PROMPT = """你是企业 AI 员工平台的「能力查找助手」。管理员会描述想给员工增加的能力，你只负责找候选：
 - 技能（skill）：一组说明文档与资料，来自 ClawHub 或 GitHub。
 - MCP：远程工具服务（只支持 streamable HTTP 的 https 地址）。
 规则：
-1. 只用工具查找与核实；不要凭记忆给出链接。候选里的 url 必须原样来自工具结果或管理员给的链接，否则会被丢弃。
-2. 搜索到的条目最好用 inspect_link 核实一次（技能看是否能导入、安全扫描结果；MCP 看鉴权方式与工具）。
-3. 管理员贴的 MCP 配置已在服务端解析好；你在别处找到的配置可用 parse_mcp_config 解析。令牌会被丢弃，不要索要或复述令牌。
+1. 只用工具查找与核实；不要凭记忆给出链接。候选里的 url 必须原样来自搜索结果或管理员给的链接（GitHub 仓库下的子路径也可以），否则会被丢弃。
+2. 搜索到的条目最好用 inspect_link 核实一次（技能看是否能导入、安全扫描结果；MCP 看鉴权方式与工具）。inspect_link 只能核实上面这些链接。
+3. 管理员贴的 MCP 配置已在服务端解析好；parse_mcp_config 只帮你看懂配置格式，它返回的地址不能当作候选。令牌会被丢弃，不要索要或复述令牌。
 4. 找到 1–5 个合适的候选后调用 propose 结束；确实找不到时也调用 propose，candidates 留空并在 notes 说明原因。
 5. 你不能安装任何东西，管理员会在界面上逐个检查后自己安装。回答用简体中文。"""
 
@@ -297,12 +295,18 @@ def _normalize_url(value: str) -> str:
     return parts._replace(scheme=parts.scheme.lower(), netloc=parts.netloc.lower(), fragment="").geturl().rstrip("/")
 
 
-def _urls_in(value: Any) -> set[str]:
-    return {_normalize_url(match) for match in _URL_RE.findall(json.dumps(value, ensure_ascii=False))}
+def _is_github_repo(url: str) -> bool:
+    parts = urlsplit(url)
+    return parts.netloc.lower() == "github.com" and len([p for p in parts.path.split("/") if p]) == 2
 
 
 class AssistTools:
-    """模型可调的只读工具。记录本次工具结果里出现过的链接（候选只能用这些）和技能安全扫描结果。"""
+    """模型可调的只读工具。记录可信链接（候选与 inspect_link 只能用这些）和技能安全扫描结果。
+
+    可信链接只有三种：管理员给的链接、管理员贴的配置里的地址、搜索工具结构化返回的条目地址（及 ClawHub
+    同名候选）。工具结果正文（技能说明、仓库描述、模型调用 parse_mcp_config 的回显）里出现的链接都不算——
+    那些文字可能来自第三方或模型自己，算进去就等于允许模型编造地址、或让 Manager 去请求任意地址。
+    """
 
     def __init__(self, ctx: TenantContext, *, import_service: SkillImportService,
                  probe: Callable[[McpProbeRequest], McpProbeResult], fetch: net_guard.Fetch,
@@ -315,6 +319,7 @@ class AssistTools:
         self._github = github_base.rstrip("/")
         self._deadline = deadline
         self.seen_urls: set[str] = set()
+        self._trusted_repos: set[str] = set()  # github.com 仓库地址：其下子路径也可信
         self.security: dict[str, dict[str, Any]] = {}
         self.inspected: dict[str, str] = {}
 
@@ -331,9 +336,26 @@ class AssistTools:
         except Exception:
             logger.exception("capability_assist.tool_failed", extra={"tool": name})
             result = {"error": "工具执行失败"}
-        self.seen_urls |= _urls_in(result)
         text = json.dumps(result, ensure_ascii=False)
         return text if len(text) <= MAX_RESULT_CHARS else text[:MAX_RESULT_CHARS] + "…（已截断）"
+
+    def trust(self, url: str, *, repo: bool = False) -> None:
+        key = _normalize_url(url)
+        self.seen_urls.add(key)
+        if repo:
+            self._trusted_repos.add(key)
+
+    def is_trusted(self, url: str) -> bool:
+        key = _normalize_url(url)
+        return key in self.seen_urls or any(key.startswith(repo + "/") and ".." not in key[len(repo):]
+                                            for repo in self._trusted_repos)
+
+    def parse_admin_config(self, config: str) -> str:
+        """管理员贴的配置：服务端解析，地址记为可信；只有不含令牌的结果交给模型。"""
+        result = self._parse_config({"config": config})
+        for server in result.get("servers") or []:
+            self.trust(server["url"])
+        return json.dumps(result, ensure_ascii=False)
 
     def _remaining(self) -> float:
         return max(min(self._deadline - time.monotonic(), 15.0), 1.0)
@@ -367,6 +389,8 @@ class AssistTools:
             hits.append({"name": slug, "owner": owner, "summary": str(item.get("description") or "")[:300],
                          "downloads": item.get("downloads") if isinstance(item.get("downloads"), int) else None,
                          "url": f"{self._clawhub}/{owner}/skills/{slug}"})
+        for hit in hits:
+            self.trust(hit["url"])
         return {"results": hits}
 
     def _search_github(self, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -381,12 +405,16 @@ class AssistTools:
             hits.append({"name": full_name, "summary": str(item.get("description") or "")[:300],
                          "stars": item.get("stargazers_count") if isinstance(item.get("stargazers_count"), int) else None,
                          "url": f"https://github.com/{full_name}"})
+        for hit in hits:
+            self.trust(hit["url"], repo=True)
         return {"results": hits}
 
     def _inspect_link(self, arguments: dict[str, Any]) -> dict[str, Any]:
         url = str(arguments.get("url") or "").strip()
         if not url.startswith("https://"):
             raise ValidationProblem("只能核实 https 链接")
+        if not self.is_trusted(url):
+            raise ValidationProblem("只能核实搜索结果或管理员给的链接")
         clawhub = clawhub_url_parts(url, base_url=self._clawhub) is not None
         try:
             preview = self._import.preview(self._ctx, ImportRequest(source="clawhub" if clawhub else "url", url=url))
@@ -404,6 +432,9 @@ class AssistTools:
     def _skill_summary(self, url: str, preview: dict[str, Any]) -> dict[str, Any]:
         clawhub = preview.get("clawhub") or {}
         if clawhub.get("candidates"):
+            for candidate in clawhub["candidates"]:
+                if clawhub_url_parts(str(candidate.get("url") or ""), base_url=self._clawhub) is not None:
+                    self.trust(candidate["url"])
             return {"kind": "skill", "needs_owner": True, "candidates": clawhub["candidates"]}
         security = clawhub.get("security")
         if isinstance(security, dict):
@@ -476,9 +507,9 @@ class CapabilityAssistService:
                             fetch=self._fetch or net_guard.pinned_fetch(max_bytes=_FETCH_LIMIT),
                             clawhub_base=self._clawhub, github_base=self._github, deadline=deadline)
         if link:
-            tools.seen_urls.add(_normalize_url(link))
+            tools.trust(link, repo=_is_github_repo(link))
         # The admin's config is parsed here; only the token-free result reaches the model.
-        config = tools.run("parse_mcp_config", {"config": request.config_json}) if request.config_json.strip() else ""
+        config = tools.parse_admin_config(request.config_json) if request.config_json.strip() else ""
         run = _Run()
         try:
             self._loop(relay, tools, run, self._user_message(requirement, link, config), deadline)
@@ -554,7 +585,7 @@ class CapabilityAssistService:
             url = str(item.get("url") or "").strip()
             key = _normalize_url(url)
             if (kind not in {"skill", "mcp"} or source not in {"clawhub", "github", "url", "config"}
-                    or not url.startswith("https://") or key not in tools.seen_urls or key in seen):
+                    or not url.startswith("https://") or not tools.is_trusted(url) or key in seen):
                 dropped += 1
                 continue
             seen.add(key)

@@ -114,7 +114,8 @@ async def _read_import(request: Request) -> tuple[ImportRequest, SkillImportJson
         raise ValidationProblem("文件夹、压缩包和 .md 文件请用 multipart/form-data 上传")
     if options.fork_of:
         raise ValidationProblem("fork_of 只用于在线编辑")
-    return ImportRequest(source=options.source, text=options.text, url=options.url, roots=options.roots), options
+    return ImportRequest(source=options.source, text=options.text, url=options.url, roots=options.roots,
+                         expected_hashes=options.expected_hashes), options
 
 
 class _ManagerNotConfigured(AppError):

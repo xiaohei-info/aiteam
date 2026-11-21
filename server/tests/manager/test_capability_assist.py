@@ -259,11 +259,74 @@ def test_inspect_link_uses_the_real_read_only_import_preview():
     importer = SkillImportService(repo, fetch=_Fetch({RAW_SKILL: (200, {"content-type": "text/markdown"}, skill)}),
                                   clawhub_base="https://clawhub.example.com")
     service, _, _ = _service(relay, import_service=importer)
-    service.run(_ctx(), _request())
+    service.run(_ctx(), _request(link=RAW_SKILL))
     result = json.loads(relay.bodies()[1]["messages"][-1]["content"])
     assert result["kind"] == "skill" and result["skills"][0]["name"] == "meeting-notes" and result["skills"][0]["version"] == "2.1.0"
     assert result["skills"][0]["importable"] is True
     assert repo.list_skills(_ctx()) == []  # preview never writes
+
+
+def test_links_echoed_by_the_model_or_written_in_descriptions_are_not_sources():
+    """Prompt injection: parse_mcp_config echoes any url, and descriptions are third-party text; neither counts."""
+    evil = "https://attacker.example.com/collect?q=周报"
+    relay = _Relay([
+        chat([("parse_mcp_config", {"config": json.dumps({"x": {"url": evil}})})]),
+        chat([("search_clawhub", {"query": "周报"})]),
+        chat([("inspect_link", {"url": evil}), ("inspect_link", {"url": "https://docs.example.com/see-also"})]),
+        chat([("propose", {"candidates": [
+            {"kind": "mcp", "source": "config", "title": "注入", "url": evil},
+            {"kind": "skill", "source": "url", "title": "说明里的", "url": "https://docs.example.com/see-also"},
+            {"kind": "skill", "source": "clawhub", "title": "周报", "url": SKILL_URL},
+        ]})]),
+    ])
+    search = json.dumps({"results": [{"slug": "weekly-report", "description": "另见 https://docs.example.com/see-also",
+                                      "install": {"reference": "alice/weekly-report"}}]}).encode()
+    preview = _Preview()
+    probed: list[str] = []
+    service, _, _ = _service(relay, import_service=preview, probe=lambda request: probed.append(request.url),
+                             fetch=_Fetch({"https://clawhub.example.com/api/v1/search?q=%E5%91%A8%E6%8A%A5&limit=8": (200, {}, search)}))
+    out = service.run(_ctx(), _request())
+    assert [item["url"] for item in out["candidates"]] == [SKILL_URL] and out["dropped"] == 2
+    # Manager never contacted either address.
+    assert preview.asked == [] and probed == []
+    refused = [json.loads(item["content"]) for item in relay.bodies()[3]["messages"] if item["role"] == "tool"][-2:]
+    assert all(item == {"error": "只能核实搜索结果或管理员给的链接"} for item in refused)
+
+
+def test_github_repo_hits_cover_their_sub_paths_and_clawhub_owner_candidates_become_sources():
+    from urllib.parse import quote
+
+    repo_query = quote('周报 (claude-skill OR claude-skills OR "SKILL.md" OR mcp server)')
+    github = json.dumps({"items": [{"full_name": "acme/skills", "description": "skills"}]}).encode()
+    sub = "https://github.com/acme/skills/tree/main/weekly"
+    relay = _Relay([
+        chat([("search_github", {"query": "周报"})]),
+        chat([("inspect_link", {"url": sub}), ("inspect_link", {"url": "https://github.com/acme/skills/../other"}),
+              ("inspect_link", {"url": "https://clawhub.example.com/skills/weather"})]),
+        chat([("propose", {"candidates": [
+            {"kind": "skill", "source": "github", "title": "子目录", "url": sub},
+            {"kind": "skill", "source": "clawhub", "title": "候选", "url": "https://clawhub.example.com/bob/skills/weather"},
+            {"kind": "skill", "source": "clawhub", "title": "别处", "url": "https://elsewhere.example.com/bob/skills/weather"},
+        ]})]),
+    ])
+
+    class _Ambiguous(_Preview):
+        def preview(self, ctx, request):
+            if request.source == "clawhub":
+                self.asked.append((request.source, request.url))
+                return {"origin": {"kind": "clawhub", "label": "x"}, "clawhub": {"candidates": [
+                    {"owner": "bob", "slug": "weather", "url": "https://clawhub.example.com/bob/skills/weather"},
+                    {"owner": "eve", "slug": "weather", "url": "https://elsewhere.example.com/bob/skills/weather"}]}}
+            return super().preview(ctx, request)
+
+    preview = _Ambiguous()
+    service, _, _ = _service(relay, import_service=preview,
+                             fetch=_Fetch({f"https://api.github.example.com/search/repositories?q={repo_query}&sort=stars&order=desc&per_page=8": (200, {}, github)}))
+    out = service.run(_ctx(), _request(link="https://clawhub.example.com/skills/weather"))
+    assert [item["url"] for item in out["candidates"]] == [sub, "https://clawhub.example.com/bob/skills/weather"]
+    assert out["dropped"] == 1
+    # The ../ escape out of the repo was refused without being fetched.
+    assert [url for _, url in preview.asked] == [sub, "https://clawhub.example.com/skills/weather"]
 
 
 def test_relay_failure_before_any_answer_is_a_502_and_is_still_recorded():
@@ -390,3 +453,51 @@ def test_route_returns_candidates_and_enforces_roles_and_shape():
     assert client.post("/api/manager/capability-assist", json=body, headers=_hdr(("member",))).status_code == 403
     assert client.post("/api/manager/capability-assist", json={**body, "requirement": ""}, headers=_hdr()).status_code == 422
     assert client.post("/api/manager/capability-assist", json={**body, "extra": 1}, headers=_hdr()).status_code == 422
+
+
+def test_assist_service_wiring_reuses_router_bills_usage_and_needs_db_and_catalog(monkeypatch):
+    """`_assist_service` builds the real service from app state: one cached router, usage billed to the enterprise."""
+    from types import SimpleNamespace
+
+    import manager_service.routes_capability_assist as routes
+
+    built: list[dict] = []
+    routers: list[str] = []
+    upserts: list[tuple] = []
+
+    class _Router:
+        def __init__(self, dsn):
+            routers.append(dsn)
+
+    class _Usage:
+        def __init__(self, router):
+            self.router = router
+
+        def upsert_usage_with_delivery(self, ctx, *, payload, enterprise_id):
+            upserts.append((ctx, payload, enterprise_id))
+
+    monkeypatch.setattr(routes, "PgTenantRouter", _Router)
+    monkeypatch.setattr(routes, "UsageAuditQuotaRepository", _Usage)
+    monkeypatch.setattr(routes, "_import_service", lambda request: "import-service")
+    monkeypatch.setattr(routes, "build_enterprise_audit_repository", lambda router: "audit")
+    monkeypatch.setattr(routes, "_lookup_enterprise_id", lambda request, tenant_id: f"ent-{tenant_id}")
+    monkeypatch.setattr(routes, "earliest_owner", lambda router, ctx: f"owner-of-{ctx}")
+    monkeypatch.setattr(routes, "CapabilityAssistService", lambda **kwargs: built.append(kwargs) or kwargs)
+
+    state = SimpleNamespace(settings=SimpleNamespace(db_url="postgresql://db"), _operator_catalog="operator")
+    request = SimpleNamespace(app=SimpleNamespace(state=state))
+    first = routes._assist_service(request)
+    routes._assist_service(request)
+    assert routers == ["postgresql://db"]  # second call reuses the cached router
+    assert (first["operator"], first["import_service"], first["audit"]) == ("operator", "import-service", "audit")
+    assert first["owner_lookup"]("ctx") == "owner-of-ctx"
+    first["usage_sink"](SimpleNamespace(tenant_id="t1"), {"tokens": 1})
+    assert upserts[0][1:] == ({"tokens": 1}, "ent-t1")
+
+    state._capability_assist_service = "injected"
+    assert routes._assist_service(request) == "injected"
+
+    for missing in (SimpleNamespace(settings=SimpleNamespace(db_url=""), _operator_catalog="operator"),
+                    SimpleNamespace(settings=SimpleNamespace(db_url="postgresql://db"))):
+        with pytest.raises(ServiceUnavailable):
+            routes._assist_service(SimpleNamespace(app=SimpleNamespace(state=missing)))

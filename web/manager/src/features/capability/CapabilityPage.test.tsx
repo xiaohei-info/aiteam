@@ -168,6 +168,24 @@ describe("CapabilityPage", () => {
     expect(await screen.findByText("已更新 技能 A 的设置")).toBeInTheDocument();
   });
 
+  it("改一个开关不动另一项：旧数据的 auto_bind / public 原样保留", async () => {
+    const api = mockApi({ listSkills: vi.fn().mockResolvedValue([{ ...skill, visibility: "public", binding_policy: "auto_bind" }]) });
+    renderPage();
+    await screen.findByText("技能 A");
+    fireEvent.click(screen.getAllByRole("button", { name: "编辑" })[0]!);
+    let dialog = within(await screen.findByRole("dialog", { name: "编辑技能 技能 A" }));
+    fireEvent.click(dialog.getByRole("checkbox", { name: /成员可以自己安装/ }));
+    fireEvent.click(dialog.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(api.updateSkillSettings).toHaveBeenCalledWith("skill-c1", { skill_id: "skill-a", visibility: "private", binding_policy: "auto_bind" }));
+
+    vi.mocked(api.updateSkillSettings).mockClear();
+    fireEvent.click(screen.getAllByRole("button", { name: "编辑" })[0]!);
+    dialog = within(await screen.findByRole("dialog", { name: "编辑技能 技能 A" }));
+    fireEvent.click(dialog.getByRole("checkbox", { name: /停用/ }));
+    fireEvent.click(dialog.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(api.updateSkillSettings).toHaveBeenCalledWith("skill-c1", { skill_id: "skill-a", visibility: "public", binding_policy: "disabled" }));
+  });
+
   it("编辑技能内容：附带文件照带，存为新版本", async () => {
     const api = mockApi();
     renderPage();

@@ -17,6 +17,7 @@ from manager_service.skill_import_service import (
 from shared.config import Settings
 from shared.contracts.tenancy import TenantContext
 from shared.errors import Forbidden, ValidationProblem
+from shared.skill_import import ContentChanged
 from tests.manager._auth_helper import make_inmem_verifier_and_signer, sign_inmem_token
 from tests.manager.test_capability_catalog import _FakeRepo
 
@@ -348,3 +349,28 @@ def test_routes_reject_wrong_transport_member_role_and_unauthenticated():
     files = [("files", ("SKILL.md", _skill().encode()))]
     assert client.post("/api/manager/skills/import", headers=_hdr(), files=files, data={"source": "folder", "paths": ["SKILL.md"], "fork_of": "x"}).status_code == 422
     assert client.post("/api/manager/skills/import", headers=_hdr(), json={"source": "text", "text": _skill(), "fork_of": "x"}).status_code == 422
+
+
+def test_install_refuses_content_that_changed_after_the_preview():
+    """GitHub / ClawHub / a web page can change between preview and import: import only what the admin saw."""
+    routes = {"https://example.com/s.md": (200, {}, _skill("drift", version="1.0.0").encode())}
+    repo = _FakeRepo()
+    client = _client(_svc(_Fetch(routes), repo=repo))
+    body = {"source": "url", "url": "https://example.com/s.md"}
+    preview = client.post("/api/manager/skills/import/preview", headers=_hdr(), json=body).json()["data"]["preview"]
+    assert preview["content_hash"]
+    expected = {preview["root"]: preview["content_hash"]}
+
+    routes["https://example.com/s.md"] = (200, {}, _skill("drift", version="1.0.0", body="# 偷偷改过\n").encode())
+    response = client.post("/api/manager/skills/import", headers=_hdr(), json={**body, "roots": [""], "expected_hashes": expected})
+    assert response.status_code == 409 and response.json()["code"] == "content_changed", response.text
+    assert repo.list_skills(TenantContext(tenant_id="t1", user_id="u", roles=["owner"])) == []
+
+    # Re-preview, then the fresh hash goes through; without expected_hashes the old behaviour is kept.
+    preview = client.post("/api/manager/skills/import/preview", headers=_hdr(), json=body).json()["data"]["preview"]
+    response = client.post("/api/manager/skills/import", headers=_hdr(),
+                           json={**body, "roots": [""], "expected_hashes": {"": preview["content_hash"]}})
+    assert response.status_code == 200 and response.json()["data"]["results"][0]["status"] == "installed"
+    # A root that was not in the preview at all counts as changed too.
+    with pytest.raises(ContentChanged):
+        _install(_svc(_Fetch(routes)), _ctx(), ImportRequest(source="url", url="https://example.com/s.md", expected_hashes={"other": "x"}))

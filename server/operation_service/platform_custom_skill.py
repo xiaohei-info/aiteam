@@ -22,7 +22,7 @@ from typing import Any, Protocol
 from shared.capability_namespace import as_edited, clawhub_provenance, url_provenance
 from shared.errors import ValidationProblem
 from shared.net_guard import Fetch
-from shared.skill_import import skill_roots
+from shared.skill_import import ensure_unchanged, skill_roots
 from shared.skill_sources import Gathered, SkillRead, SourceGatherer, read_skill
 
 from .platform_skill_market import CustomSkillState, plan_custom_version
@@ -44,6 +44,8 @@ class CustomSkillRequest:
     url: str = ""
     roots: list[str] | None = None
     fork_of: str = ""  # platform skill_id of the ClawHub skill being edited into our own copy
+    # root -> content_hash from the check the operator approved; saving refuses when the source changed since.
+    expected_hashes: dict[str, str] | None = None
 
 
 class CustomSkillService:
@@ -64,6 +66,7 @@ class CustomSkillService:
             reads = [read for read in reads if read.ok]
             if not reads:
                 raise ValidationProblem("这个来源里没有可导入的技能")
+        ensure_unchanged(request.expected_hashes, [(read.root, read.content_hash) for read in reads if read.ok])
         auto_publish = self._repo.get_setting()
         forked = self._fork_provenance(request.fork_of)
         results = []
@@ -124,6 +127,7 @@ class CustomSkillService:
         return {
             "root": read.root, "ok": read.ok, **({"reason": read.reason} if read.reason else {}),
             "name": read.name, "description": read.description, "version": version,
+            **({"content_hash": read.content_hash} if read.ok else {}),
             "file_count": len(sizes), "total_bytes": sum(item["size"] for item in sizes), "files": sizes,
             "skipped": [{"path": item.path, "reason": item.reason} for item in read.skipped],
             "existing": existing_state, **({"existing_version": existing_version} if existing_version else {}),

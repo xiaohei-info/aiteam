@@ -241,3 +241,60 @@ def test_route_errors_are_problem_errors_not_generic_503():
     request.app.state._clawhub_client = ClawHubClient(transport=httpx.MockTransport(broken))
     with pytest.raises(AppError, match="ClawHub"):
         skill_routes.preview_external("publisher", "demo", request, version=None, _claims=None)
+
+
+# ---- ClawHub owner candidates / scan fallback / download 404 (no network: MockTransport) ----
+
+def _clawhub(handler):
+    return ClawHubClient("https://clawhub.ai", transport=httpx.MockTransport(handler))
+
+
+def test_candidates_unique_ambiguous_and_errors():
+    unique = _clawhub(lambda request: httpx.Response(200, json={"owner": {"handle": "steipete"}}))
+    assert unique.candidates("weather") == [{"owner": "steipete", "slug": "weather", "url": "https://clawhub.ai/steipete/skills/weather"}]
+    assert _clawhub(lambda request: httpx.Response(200, json={"owner": None})).candidates("weather") == []
+
+    ambiguous = _clawhub(lambda request: httpx.Response(409, json={"code": "AMBIGUOUS_SKILL_SLUG", "matches": [
+        {"ownerHandle": "alice", "slug": "weather", "url": "https://clawhub.ai/alice/skills/weather"},
+        {"ownerHandle": "", "slug": "weather"},
+        {"ownerHandle": "bob"},
+    ]}))
+    assert ambiguous.candidates("weather") == [
+        {"owner": "alice", "slug": "weather", "url": "https://clawhub.ai/alice/skills/weather"},
+        {"owner": "bob", "slug": "weather", "url": ""},
+    ]
+
+    with pytest.raises(TooManyRequests):
+        _clawhub(lambda request: httpx.Response(429)).candidates("weather")
+    with pytest.raises(NotFound):
+        _clawhub(lambda request: httpx.Response(404)).candidates("weather")
+    with pytest.raises(httpx.HTTPStatusError):
+        _clawhub(lambda request: httpx.Response(500)).candidates("weather")
+
+
+def test_scan_is_best_effort():
+    def broken(request):
+        raise httpx.ConnectError("down", request=request)
+    assert _clawhub(broken).scan(owner="a", slug="b", version="1.0.0") is None
+    assert _clawhub(lambda request: httpx.Response(429)).scan(owner="a", slug="b", version="1.0.0") is None
+
+
+def test_download_missing_version_is_not_found():
+    with pytest.raises(NotFound, match="版本"):
+        _clawhub(lambda request: httpx.Response(404)).download(owner="a", slug="b", version="9.9.9")
+
+
+def test_custom_version_conflict_and_stored_security_shape():
+    from operation_service.platform_skill_market import (
+        CustomSkillState,
+        _stored_security,
+        plan_custom_version,
+    )
+    from shared.errors import Conflict
+
+    taken = CustomSkillState("s1", "1.0.0", "h-old", {"1.0.0": "h-old", "1.0.0-hnewhnew": "h-other"})
+    with pytest.raises(Conflict, match="版本号已被占用"):
+        plan_custom_version(taken, content_hash="hnewhnew-rest", declared="1.0.0")
+    assert _stored_security({"scanners": []}) == {"scanners": []}
+    assert _stored_security({"status": "clean"}) is None
+    assert _stored_security(None) is None
