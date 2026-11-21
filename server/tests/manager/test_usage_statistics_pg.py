@@ -158,3 +158,16 @@ def test_usage_statistics_delivery_and_rls_isolation(migrated_db, two_tenants, a
         assert connection.execute(
             "SELECT has_table_privilege('app_rw', 'usage_operator_delivery', 'DELETE')"
         ).fetchone()[0] is False
+
+
+def test_delivery_claim_due_claims_pending_receipts_on_real_postgres(migrated_db, two_tenants):
+    """claim_due 的 RETURNING 曾因 id 歧义在真 PG 上直接报错，用量摘要永远发不出去。"""
+    tenant_a, _ = two_tenants
+    ctx = TenantContext(tenant_id=tenant_a, user_id=str(uuid.uuid4()), roles=["owner"])
+    delivery = UsageOperatorDeliveryRepository(PgTenantRouter(migrated_db))
+    queued = delivery.enqueue(ctx, summary_payload=_payload("claim-me", tenant_id=tenant_a, member_id=None, employee_id=None),
+                              enterprise_id=str(uuid.uuid4()))
+    claimed = delivery.claim_due(ctx)
+    assert [row.delivery_id for row in claimed] == [queued.delivery_id]
+    assert claimed[0].status == "sending" and claimed[0].attempts == queued.attempts + 1 and claimed[0].claim_token
+    assert delivery.claim_due(ctx) == []
