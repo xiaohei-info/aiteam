@@ -190,12 +190,11 @@ describe("CapabilityPage", () => {
     files: [{ path: "SKILL.md", content: "---\nname: weather\ndescription: 查天气。出门前用。\n---\n# W\n" }],
   };
 
-  it("平台技能：显示 taiyim/ 前缀；只改设置作用于原件，没有删除", async () => {
+  it("平台技能：显示 taiyim/ 前缀；只改设置作用于原件", async () => {
     const api = mockApi({ listSkills: vi.fn().mockResolvedValue([platformSkill]) });
     renderPage();
     const table = await screen.findByRole("table", { name: "技能目录" });
     await within(table).findByText("taiyim/weather");
-    expect(within(table).queryByRole("button", { name: "删除" })).toBeNull();
     fireEvent.click(within(table).getByRole("button", { name: "编辑" }));
     const dialog = within(await screen.findByRole("dialog", { name: "编辑技能 taiyim/weather" }));
     expect(dialog.getByText(/「太一科技\/名称」这个副本，平台原件保留/)).toBeInTheDocument();
@@ -203,6 +202,18 @@ describe("CapabilityPage", () => {
     fireEvent.click(dialog.getByRole("button", { name: "保存" }));
     await waitFor(() => expect(api.updateSkillSettings).toHaveBeenCalledWith("skill-p1", { skill_id: "platform-p1", visibility: "private", binding_policy: "opt_in" }));
     expect(api.importSkills).not.toHaveBeenCalled();
+  });
+
+  it("平台技能也能删除：确认文案说明只是移出企业列表，可重新添加", async () => {
+    const api = mockApi({ listSkills: vi.fn().mockResolvedValue([platformSkill]) });
+    renderPage();
+    const table = await screen.findByRole("table", { name: "技能目录" });
+    await within(table).findByText("taiyim/weather");
+    fireEvent.click(within(table).getByRole("button", { name: "删除" }));
+    const dialog = await screen.findByRole("alertdialog", { name: /删除 taiyim\/weather/ });
+    expect(within(dialog).getByText(/平台上的原技能不受影响，可在「新增技能 → 添加平台技能」重新添加/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
+    await waitFor(() => expect(api.deleteSkill).toHaveBeenCalledWith("skill-p1"));
   });
 
   it("编辑平台技能的内容：另存为企业副本（fork_of），不动原件；与企业技能重名时拦下", async () => {

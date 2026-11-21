@@ -175,6 +175,9 @@ def test_platform_market_row_allows_only_the_enterprise_switches_in_sql(migrated
     with pytest.raises(Conflict, match="immutable"):
         service.update_skill(ctx, SkillCatalogIn(skill_id="platform-pg-switches", display_name="Renamed"), catalog_id=row.catalog_id)
     assert repo.get_skill(ctx, catalog_id=row.catalog_id).display_name == "Platform"
+    # The enterprise may remove it from its list (no SQL guard against DELETE); it can be added again later.
+    service.delete_skill(ctx, catalog_id=row.catalog_id)
+    assert repo.get_skill(ctx, catalog_id=row.catalog_id) is None
 
 
 def test_platform_package_moves_in_place_and_only_for_platform_rows(migrated_db, two_tenants):

@@ -244,8 +244,9 @@ def test_operator_managed_skill_ids_and_rows_are_immutable_via_generic_crud():
     # The enterprise's own switches stay editable: members may self-install / switched off.
     updated = svc.update_skill(ctx, SkillCatalogIn(skill_id="platform-real", visibility="private", binding_policy="disabled"), catalog_id=row.catalog_id)
     assert (updated.visibility, updated.binding_policy, updated.version, updated.display_name) == ("private", "disabled", "1.0.0", "Platform")
-    with pytest.raises(Conflict, match="immutable"):
-        svc.delete_skill(ctx, catalog_id=row.catalog_id)
+    # Removing it from the enterprise list is the enterprise's call too (it can be added again from the platform).
+    svc.delete_skill(ctx, catalog_id=row.catalog_id)
+    assert all(item.catalog_id != row.catalog_id for item in svc.list_skills(ctx))
 
 
 @pytest.mark.parametrize("config", [{"source": "operator"}, {"source_skill_id": "plat-x"}, {"source": "anything-else"}])

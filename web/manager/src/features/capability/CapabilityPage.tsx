@@ -46,6 +46,7 @@ import type {
 } from "./types";
 import { CATALOG_VISIBILITIES, CONNECTOR_GRANT_SCOPES } from "./types";
 import { countSkillUpdates, reportCapabilityUpdates } from "../capability-updates";
+import { PlatformSkillPickerDialog } from "../skill-market/PlatformSkillPickerDialog";
 
 type Kind = "skill" | "connector" | "memory";
 /** 通用表单只剩连接器与记忆策略；技能用技能编辑器。 */
@@ -81,6 +82,8 @@ interface PendingDelete {
   kind: Kind;
   catalogId: string;
   displayName: string;
+  /** 不填用通用文案。 */
+  description?: string;
 }
 
 type SkillRow = SkillCatalog & Record<string, unknown>;
@@ -173,6 +176,8 @@ export function CapabilityPage({ skillsOnly = false }: CapabilityPageProps = {})
   /** 导入对话框；从「让模型帮我找」来时带着预填的来源与地址。 */
   const [importing, setImporting] = useState<{ initial?: { source: "url" | "clawhub"; url: string } } | null>(null);
   const [assisting, setAssisting] = useState(false);
+  /** 「新增技能 → 添加平台技能」：企业端只有一个技能列表，平台技能从这里加进来。 */
+  const [pickingPlatform, setPickingPlatform] = useState(false);
   /** 技能编辑器：row 为空时是「从零写一个」。 */
   const [skillEditor, setSkillEditor] = useState<{ row?: SkillCatalog } | null>(null);
   const assistApi = useCapabilityAssistApi();
@@ -365,10 +370,10 @@ export function CapabilityPage({ skillsOnly = false }: CapabilityPageProps = {})
             );
           })()}
           <Button label={i18n.t("manager.capability.edit")} variant="ghost" size="sm" onClick={() => { setNotice(null); setSkillEditor({ row }); }} />
-          {!isPlatformSkill(row) && (
-            <Button label={i18n.t("manager.capability.delete")} variant="destructive" size="sm"
-              onClick={() => setPendingDelete({ kind: "skill", catalogId: row.catalog_id, displayName: row.display_name || "未命名技能" })} />
-          )}
+          {/* 每一行都可删除：平台技能删除只是移出企业列表，可在「新增技能 → 添加平台技能」重新添加。 */}
+          <Button label={i18n.t("manager.capability.delete")} variant="destructive" size="sm"
+            onClick={() => setPendingDelete({ kind: "skill", catalogId: row.catalog_id, displayName: skillTitle(row),
+              description: isPlatformSkill(row) ? "从企业技能中移除，已配给专家的随之失效；成员已装在自己电脑上的不受影响，但不再收到更新。平台上的原技能不受影响，可在「新增技能 → 添加平台技能」重新添加。" : undefined })} />
         </HStack>
       ),
     });
@@ -430,6 +435,7 @@ export function CapabilityPage({ skillsOnly = false }: CapabilityPageProps = {})
             title={i18n.t("manager.capability.skills_title", { count: skills.length })} addLabel={i18n.t("manager.capability.add_skill")} canWrite={canWrite} onAdd={() => setSkillEditor({})}
             addMenu={(
               <DropdownMenu button={{ label: i18n.t("manager.capability.add_skill"), size: "sm" }} menuWidth={200}>
+                <DropdownMenuItem label="添加平台技能" onClick={() => { setNotice(null); setPickingPlatform(true); }} />
                 <DropdownMenuItem label="导入技能" onClick={() => { setNotice(null); setImporting({}); }} />
                 <DropdownMenuItem label="让模型帮我找" onClick={() => { setNotice(null); setAssisting(true); }} />
                 <DropdownMenuItem label="从零写一个" onClick={() => { setNotice(null); setSkillEditor({}); }} />
@@ -447,6 +453,13 @@ export function CapabilityPage({ skillsOnly = false }: CapabilityPageProps = {})
           </CatalogSection>
           </>}
         </>
+      )}
+
+      {pickingPlatform && (
+        <PlatformSkillPickerDialog
+          onClose={() => setPickingPlatform(false)}
+          onChanged={(message) => { setNotice(message); void load(); }}
+        />
       )}
 
       {assisting && <CapabilityAssistDialog api={assistApi} onClose={() => setAssisting(false)} onUse={pickCandidate} />}
@@ -518,7 +531,7 @@ export function CapabilityPage({ skillsOnly = false }: CapabilityPageProps = {})
         <AlertDialog
           isOpen
           title={`删除 ${pendingDelete.displayName}？`}
-          description={i18n.t("manager.capability.delete_confirm")}
+          description={pendingDelete.description ?? i18n.t("manager.capability.delete_confirm")}
           cancelLabel={i18n.t("manager.capability.delete_cancel")}
           actionLabel={i18n.t("manager.capability.delete_confirm_ok")}
           isActionLoading={working}
