@@ -179,6 +179,7 @@ class CustomSkillJsonIn(BaseModel):
     text: str = Field(default="", max_length=1024 * 1024, description="source=text 时的 SKILL.md 内容。")
     url: str = Field(default="", max_length=2048, description="source=url 时的地址（仅 https）。")
     roots: list[str] | None = Field(default=None, max_length=MAX_ARCHIVE_ENTRIES, description="要保存的技能根目录（检查结果里的 root）；缺省保存全部可用技能。")
+    expected_hashes: dict[str, str] | None = Field(default=None, max_length=MAX_ARCHIVE_ENTRIES, description="检查返回的 root → content_hash；带上时来源内容与检查结果不一致即 409 content_changed，需重新检查。网址来源建议总是带上。")
 
 
 class CustomSkillOriginOut(BaseModel):
@@ -196,6 +197,7 @@ class CustomSkillItemOut(BaseModel):
     name: str = Field(description="SKILL.md 的 name。")
     description: str = Field(description="SKILL.md 的 description。")
     version: str = Field(description="将写入的版本：frontmatter version，否则内容哈希前 12 位。")
+    content_hash: str | None = Field(default=None, description="内容哈希；保存时放进 expected_hashes，确认保存的就是这次检查的内容。")
     file_count: int = Field(ge=0, description="将保存的文件数。")
     total_bytes: int = Field(ge=0, description="将保存的总字节数。")
     files: list[SkillFileSummaryOut] = Field(default_factory=list, description="将保存的文件。")
@@ -356,7 +358,8 @@ async def _read_custom(request: Request) -> CustomSkillRequest:
         raise ValidationProblem("请求格式不对：" + "; ".join(err["msg"] for err in exc.errors()[:3])) from exc
     except ValueError as exc:  # malformed JSON / multipart
         raise ValidationProblem("请求体无法解析") from exc
-    return CustomSkillRequest(source=body.source, text=body.text, url=body.url, roots=body.roots)
+    return CustomSkillRequest(source=body.source, text=body.text, url=body.url, roots=body.roots,
+                              expected_hashes=body.expected_hashes)
 
 
 def _upstream_error(exc: Exception, what: str) -> AppError:

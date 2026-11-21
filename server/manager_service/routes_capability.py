@@ -109,7 +109,8 @@ async def _read_import(request: Request) -> tuple[ImportRequest, SkillImportJson
         raise ValidationProblem("导入请求体无法解析") from exc
     if options.source in _UPLOAD_SOURCES:
         raise ValidationProblem("文件夹、压缩包和 .md 文件请用 multipart/form-data 上传")
-    return ImportRequest(source=options.source, text=options.text, url=options.url, roots=options.roots), options
+    return ImportRequest(source=options.source, text=options.text, url=options.url, roots=options.roots,
+                         expected_hashes=options.expected_hashes), options
 
 
 class _ManagerNotConfigured(AppError):

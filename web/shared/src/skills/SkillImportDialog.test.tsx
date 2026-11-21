@@ -167,6 +167,30 @@ describe("SkillImportDialog", () => {
   });
 });
 
+describe("SkillImportDialog 检查后内容变化", () => {
+  it("网址来源导入时带上检查到的内容哈希；服务端说变了就清掉结果，要求重新检查", async () => {
+    const changed = new ApiError("内容在检查之后有变化，请重新检查后再导入", 409, "content_changed");
+    const { api, view, onImported } = setup({ origin: ORIGIN, preview: item({ content_hash: "h1" }) }, changed, { sources: ["url"] });
+    fireEvent.change(view.getByRole("textbox", { name: "网址" }), { target: { value: "https://example.com/skill" } });
+    fireEvent.click(view.getByRole("button", { name: "检查" }));
+    fireEvent.click(await view.findByRole("button", { name: "导入" }));
+    await waitFor(() => expect(api.save).toHaveBeenCalledWith({ source: "url", url: "https://example.com/skill", roots: [""], expected_hashes: { "": "h1" } }));
+    expect(await view.findByText(/内容在检查之后有变化/)).toBeInTheDocument();
+    expect(view.getByRole("button", { name: "导入" })).toBeDisabled();
+    expect(view.queryByText("weekly-report · vabc123")).toBeNull();
+    expect(onImported).not.toHaveBeenCalled();
+  });
+
+  it("上传的文件就是本机这份，不带哈希", async () => {
+    const { api, view } = setup({ origin: ORIGIN, preview: item({ content_hash: "h1" }) }, { origin: ORIGIN, results: [] }, { sources: ["zip"] });
+    const zip = new File(["PK"], "skill.zip", { type: "application/zip" });
+    fireEvent.change(view.getByLabelText("技能压缩包", { selector: "input" }), { target: { files: [zip] } });
+    fireEvent.click(view.getByRole("button", { name: "检查" }));
+    fireEvent.click(await view.findByRole("button", { name: "导入" }));
+    await waitFor(() => expect(api.save).toHaveBeenCalledWith({ source: "zip", files: [{ file: zip, path: "skill.zip" }], roots: [""] }));
+  });
+});
+
 describe("scannerBadge", () => {
   it("已知扫描器与结论映射成中文；未知的原样显示", () => {
     expect(scannerBadge({ name: "llm", status: "malicious" })).toEqual({ label: "模型复核：判定恶意", variant: "error" });

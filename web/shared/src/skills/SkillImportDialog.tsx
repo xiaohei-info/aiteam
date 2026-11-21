@@ -64,6 +64,15 @@ function size(bytes: number): string {
 /** Astryx Text 的 color 没有错误色，直接用 Astryx 的 --color-error token。 */
 const DANGER = { color: "var(--color-error)" } as const;
 
+const UPLOADS = new Set(["folder", "zip", "file", "editor"]);
+
+/** 粘贴 / 网址 / ClawHub：导入时带上检查到的内容哈希，来源在检查后变了就拒绝（上传的文件就是本地这份，不用带）。 */
+function withExpectedHashes(input: SkillImportInput, chosen: SkillImportItem[]): SkillImportInput {
+  if (UPLOADS.has(input.source)) return input;
+  const expected = Object.fromEntries(chosen.filter((item) => item.content_hash).map((item) => [item.root, item.content_hash as string]));
+  return Object.keys(expected).length === chosen.length ? { ...input, expected_hashes: expected } : input;
+}
+
 function errorText(err: unknown, fallback: string): string {
   if (err instanceof ApiError && err.status === 413) return "技能太大，超过上限（最多 256 个文件、共 10 MiB）。";
   if (err instanceof ApiError && err.status === 502) return `${err.message || "下载失败"}。请检查网址或稍后再试。`;
@@ -160,11 +169,18 @@ export function SkillImportDialog({
     setBusy("import");
     setError(null);
     try {
-      const response = await api.save({ ...checked.input, roots: chosen.map((item) => item.root) });
+      const response = await api.save(withExpectedHashes({ ...checked.input, roots: chosen.map((item) => item.root) }, chosen));
       const done = response?.results ?? [];
       setResults(done);
       if (done.some((item) => item.status === "installed" || item.status === "updated")) onImported();
     } catch (err) {
+      if (err instanceof ApiError && err.code === "content_changed") {
+        // 看到的那份已经过期：清掉检查结果，必须重新检查才能导入。
+        setChecked(null);
+        setPicked([]);
+        setError("内容在检查之后有变化（例如仓库或 ClawHub 有了新版本），请重新检查后再导入。");
+        return;
+      }
       setError(errorText(err, "导入失败，请重试"));
     } finally {
       setBusy(null);

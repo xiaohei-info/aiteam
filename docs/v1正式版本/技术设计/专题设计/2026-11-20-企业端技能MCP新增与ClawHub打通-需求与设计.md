@@ -157,6 +157,7 @@ POST /api/manager/skills/import              安装（写 skill_catalog）
 ```
 
 - 请求：`multipart/form-data`（`source=folder|zip|file` + 文件，文件夹以浏览器 `webkitdirectory` 上传、每个文件带相对路径）或 JSON（`source=text|url|clawhub` + `text`/`url`）；安装时带 `roots[]`（多技能包勾选）、`visibility` / `binding_policy` / `install_policy`。
+- 预览每个技能返回 `content_hash`；粘贴 / 网址 / ClawHub 安装时带 `expected_hashes`（root → content_hash），服务端重新取到的内容与之不一致即 **409 `content_changed`**，对话框清掉检查结果要求重新检查（#220 复核：GitHub 分支、ClawHub 新版本、网页都可能在预览与安装之间变化，安全扫描也只对应预览那一份）。上传来源就是本机这份，不带。运营端自建技能（`/custom`、`/custom/preview`）同一规则。
 - 响应与桌面端 `importCustomSkill` 同形：`preview` | `scan[]` | `clawhub{candidates, security, skipped}` | `results[]`；另加 `existing`（目录里已有同名：`same`（内容相同，已安装）/ `update`（内容不同，将升新版本））。
 - `skill_id` = SKILL.md frontmatter `name`（规则同桌面 `custom-skills.ts:145-148`：小写字母数字连字符，≤64）；`version` = frontmatter `version`（合法段）否则 `hash[:12]`；同名已存在且内容不同 → 新版本（版本被占用则 `version-hash8`）。
 - `config.source` ∈ `custom | url | clawhub`，附 `origin{kind,label,url}`、`skipped`、`security`（ClawHub）。

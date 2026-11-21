@@ -21,6 +21,8 @@ export interface SkillImportItem {
   name: string;
   description: string;
   version: string;
+  /** 内容哈希；导入时放进 expected_hashes，确认导入的就是这次检查的内容。 */
+  content_hash?: string | null;
   file_count: number;
   total_bytes: number;
   files: { path: string; size: number }[];
@@ -80,6 +82,8 @@ export interface SkillImportInput {
   text?: string;
   url?: string;
   roots?: string[];
+  /** 检查结果的 root → content_hash；远程来源在检查后变了，服务端回 409 content_changed。 */
+  expected_hashes?: Record<string, string>;
 }
 
 /** 导入对话框需要的两个接口：检查（不写库）与保存。 */

@@ -28,6 +28,7 @@ from shared.skill_import import (
     CLAWHUB_REGISTRY_FILES,
     SkippedFile,
     clawhub_url_parts,
+    ensure_unchanged,
     normalize_security,
     skill_roots,
     unzip_entries,
@@ -54,6 +55,8 @@ class ImportRequest:
     text: str = ""
     url: str = ""
     roots: list[str] | None = None
+    # root -> content_hash from the preview the admin approved; install refuses when the source changed since.
+    expected_hashes: dict[str, str] | None = None
 
 
 @dataclass
@@ -75,6 +78,7 @@ class _Analysis:
         return {
             "root": self.root, "ok": self.ok, **({"reason": self.reason} if self.reason else {}),
             "name": self.name, "description": self.description, "version": self.version,
+            **({"content_hash": self.content_hash} if self.content_hash else {}),
             "file_count": len(sizes), "total_bytes": sum(item["size"] for item in sizes), "files": sizes,
             "skipped": [{"path": item.path, "reason": item.reason} for item in self.skipped],
             "existing": self.existing,
@@ -117,6 +121,7 @@ class SkillImportService:
             analyses = [item for item in analyses if item.ok]
             if not analyses:
                 raise ValidationProblem("这个来源里没有可导入的技能")
+        ensure_unchanged(request.expected_hashes, [(item.root, item.content_hash) for item in analyses if item.ok])
         results = []
         for item in analyses:
             results.append(self._install_one(ctx, item, gathered, visibility=visibility,

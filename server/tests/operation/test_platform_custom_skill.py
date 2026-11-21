@@ -203,3 +203,24 @@ def _body_limits(app):
         if middleware.cls is BodySizeLimitMiddleware:
             return middleware.kwargs["limits"]
     return ()
+
+
+def test_save_refuses_content_that_changed_after_the_check():
+    from shared.skill_import import ContentChanged
+
+    store = _Store()
+    svc = CustomSkillService(store)
+    preview = svc.preview(CustomSkillRequest(source="text", text=_skill()))["preview"]
+    assert preview["content_hash"]
+    with pytest.raises(ContentChanged):
+        svc.save(CustomSkillRequest(source="text", text=_skill(body="# 改过\n"), expected_hashes={"": preview["content_hash"]}))
+    assert store.skills == {}
+    saved = svc.save(CustomSkillRequest(source="text", text=_skill(), expected_hashes={"": preview["content_hash"]}))
+    assert saved["results"][0]["status"] == "installed"
+
+
+def test_route_passes_expected_hashes_and_answers_409(client):
+    response = client.post("/api/operation/skill-market/custom", headers=_auth(),
+                           json={"source": "text", "text": _skill(), "expected_hashes": {"": "0" * 64}})
+    assert response.status_code == 409 and response.json()["code"] == "content_changed"
+    assert client.store.skills == {}

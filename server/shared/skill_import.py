@@ -25,7 +25,7 @@ from .contracts.skill import (
     MAX_SKILL_TOTAL_BYTES,
     normalize_skill_file_path,
 )
-from .errors import ValidationProblem
+from .errors import Conflict, ValidationProblem
 
 # A downloaded archive may carry noise beyond the package itself (skipped entries, directories).
 MAX_ARCHIVE_BYTES = MAX_SKILL_TOTAL_BYTES
@@ -185,6 +185,24 @@ def normalize_security(raw: dict[str, Any] | None) -> dict[str, Any] | None:
             **({"issue_count": int(value["issueCount"])} if isinstance(value.get("issueCount"), int) else {}),
         })
     return {"status": str(security.get("status") or "unknown"), "has_warnings": bool(security.get("hasWarnings")), "scanners": scanners}
+
+
+class ContentChanged(Conflict):
+    """The source no longer has what the admin previewed (GitHub branch moved, new ClawHub version, edited page)."""
+
+    code = "content_changed"
+
+
+def ensure_unchanged(expected: dict[str, str] | None, current: list[tuple[str, str]]) -> None:
+    """Refuse to import when any chosen root's content differs from the preview the admin approved.
+
+    `expected` is root -> content_hash from the preview (None: caller did not ask for the check);
+    `current` is (root, content_hash) of every importable root about to be written.
+    """
+    if expected is None:
+        return
+    if any(expected.get(root) != content_hash for root, content_hash in current):
+        raise ContentChanged("内容在检查之后有变化，请重新检查后再导入")
 
 
 def clawhub_url_parts(value: str, *, base_url: str = "https://clawhub.ai") -> tuple[str | None, str] | None:
