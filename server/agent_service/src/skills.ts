@@ -102,6 +102,8 @@ export function canonicalSignedSkillPackageBytes(pkg: SkillPackage, tenantId: st
 }
 
 const KEYRING_FILE = ".aiteam-keyring.json";
+/** 最近一次成功的权威同步里企业下发了哪些技能：用来区分「企业已删除 / 停用」与「还没同步到 / 同步失败 / 缓存被清」。 */
+const DELIVERED_FILE = ".aiteam-delivered.json";
 /** Per-skill record of the keys and time a personal skill was verified at install (`<skill_id>.installed.json`). */
 const INSTALLED_SUFFIX = ".installed.json";
 const DEFAULT_OFFLINE_TTL_SECONDS = 24 * 60 * 60;
@@ -277,7 +279,7 @@ export class SkillCache {
     this.assertDirectory(this.root);
   }
 
-  reconcile(scope: SkillScope, packages: SignedSkillPackage[], allowedRefs: readonly string[], verification: SkillVerificationOptions, options: { authoritative?: boolean } = {}): void {
+  reconcile(scope: SkillScope, packages: SignedSkillPackage[], allowedRefs: readonly string[], verification: SkillVerificationOptions, options: { authoritative?: boolean; recordDelivered?: boolean } = {}): void {
     const resolved = this.verificationFor(scope, verification, true);
     const verified = packages.map((pkg) => verifySignedSkillPackage(pkg, { ...resolved, tenantId: scope.tenantId, memberId: scope.memberId }));
     const requestedVersions = new Map<string, Set<string>>();
@@ -310,6 +312,10 @@ export class SkillCache {
     // Persist a complete online key set only after every package has verified. The
     // cache is scoped to tenant/member and is the offline revalidation source.
     if (verification.publicKeys !== undefined) this.writeKeyring(scope, normalizeKeySet(verification.publicKeys), verificationNow(verification));
+    // 权威同步成功（包括运行中只加不清的那次）才记录企业这次下发的技能清单。
+    if (options.recordDelivered ?? options.authoritative !== false) {
+      this.writeDelivered(scope, verified.map((envelope) => envelope.package.skill_id), verificationNow(verification));
+    }
     // An explicit non-authoritative response may add verified packages but must not
     // revoke cache entries. A verified authoritative empty response does prune.
     if (options.authoritative === false) return;
@@ -325,7 +331,7 @@ export class SkillCache {
           if (version.isSymbolicLink()) throw new SkillVerificationError("symlink in skill cache");
           if (!version.isDirectory() || !keep.has(version.name)) rmSync(join(scopeRoot, entry.name, version.name), { recursive: true, force: true });
         }
-      } else if (entry.isFile() && entry.name !== KEYRING_FILE && entry.name.endsWith(".json")
+      } else if (entry.isFile() && entry.name !== KEYRING_FILE && entry.name !== DELIVERED_FILE && entry.name.endsWith(".json")
         && !allowed.has(entry.name.endsWith(INSTALLED_SUFFIX) ? entry.name.slice(0, -INSTALLED_SUFFIX.length) : entry.name.slice(0, -".json".length))) {
         rmSync(join(scopeRoot, entry.name), { force: true });
       }
@@ -426,7 +432,11 @@ export class SkillCache {
         const paths = this.pathsFor(scope, [ref], verification);
         if (!paths.length) {
           const root = join(this.scopeRoot(scope), skillId, ...(version ? [version] : []));
-          return { ref, status: "blocked", reason: existsSync(root) ? "skill_invalid_or_expired" : "skill_missing" };
+          if (existsSync(root)) return { ref, status: "blocked", reason: "skill_invalid_or_expired" };
+          // 只有最近一次权威同步成功、且企业没再下发这个技能，才算企业已删除 / 停用；
+          // 新机器、还没同步完、同步失败（离线 / 426 / 503）、缓存被误删都仍然拦下。
+          const delivered = this.readDelivered(scope);
+          return { ref, status: "blocked", reason: delivered && !delivered.has(skillId) ? "skill_removed" : "skill_missing" };
         }
         const loaded = loadSkillsFromDir({ dir: paths[0]!, source: "aiteam-manager" });
         if (loaded.skills.length !== 1) return { ref, status: "blocked", reason: "skill_invalid" };
@@ -574,6 +584,25 @@ export class SkillCache {
     return { tenant_id: scope.tenantId, member_id: scope.memberId, cached_at: raw.cached_at, keys: normalizeKeySet(raw.keys as unknown as SkillSigningKeyMetadata[]) };
   }
 
+  private writeDelivered(scope: SkillScope, skillIds: readonly string[], now: Date): void {
+    const path = join(this.scopeRoot(scope), DELIVERED_FILE);
+    this.assertNoSymlink(path);
+    const temp = `${path}.tmp-${process.pid}-${Date.now()}`;
+    writeFileSync(temp, JSON.stringify({ tenant_id: scope.tenantId, member_id: scope.memberId, synced_at: now.toISOString(), skill_ids: [...new Set(skillIds)].sort() }), { encoding: "utf8", mode: 0o600, flag: "wx" });
+    renameSync(temp, path);
+  }
+
+  private readDelivered(scope: SkillScope): Set<string> | undefined {
+    const path = join(this.scopeRoot(scope), DELIVERED_FILE);
+    if (!existsSync(path)) return undefined;
+    this.assertNoSymlink(path);
+    try {
+      const raw = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+      if (raw.tenant_id !== scope.tenantId || raw.member_id !== scope.memberId || !Array.isArray(raw.skill_ids)) return undefined;
+      return new Set(raw.skill_ids.filter((id): id is string => typeof id === "string"));
+    } catch { return undefined; }
+  }
+
   private writeKeyring(scope: SkillScope, keys: readonly SkillSigningKeyMetadata[], now: Date): void {
     const scopeRoot = this.scopeRoot(scope);
     this.assertNoSymlink(scopeRoot);
@@ -643,12 +672,12 @@ export function skillResourcePaths(cache: SkillCache, scope: SkillScope, refs: r
   const loadedPaths = new Set<string>();
   for (const ref of new Set(refs)) {
     const paths = cache.pathsFor(scope, [ref], verification);
-    if (paths.length === 0 && cache.readinessFor(scope, [ref], verification)[0]?.reason === "skill_missing") {
+    if (paths.length === 0 && cache.readinessFor(scope, [ref], verification)[0]?.reason === "skill_removed") {
       // 企业删除或停用了专家配的技能：缓存里已没有它，跳过这一个，专家照常可用（被篡改 / 过期的仍然拦下）。
       diagnostics.push({ type: "warning", message: `Skill ${ref} is no longer provided by the enterprise; skipped` });
       continue;
     }
-    if (paths.length !== 1) throw new SkillVerificationError("Required signed skill is invalid or expired; sync with Manager");
+    if (paths.length !== 1) throw new SkillVerificationError("Required signed skill is missing, invalid or expired; sync with Manager");
     const path = paths[0]!;
     const result = loadSkillsFromDir({ dir: path, source: "aiteam-manager" });
     if (result.skills.length !== 1) throw new SkillVerificationError("Required signed skill cannot be loaded by Pi; sync with Manager");

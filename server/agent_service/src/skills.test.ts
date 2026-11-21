@@ -432,7 +432,7 @@ test("skill verification fails closed for missing/mismatched key, scope and trav
   assert.throws(() => verifySignedSkillPackage(bad, { keyId: "skill-key-1", publicKey }), SkillVerificationError);
 });
 
-test("required skill readiness uses persisted signed cache, skips missing and blocks tampered or unparseable packages", async () => {
+test("required skill readiness blocks unsynced, missing, tampered or unparseable packages and skips only skills the enterprise stopped delivering", async () => {
   const key = generateKeyPairSync("ed25519");
   const scope = { tenantId: "tenant-a", memberId: "member-a" };
   const keys = [metadata(key, "skill-key-1")];
@@ -450,8 +450,8 @@ test("required skill readiness uses persisted signed cache, skips missing and bl
     return (await response.json() as any).data;
   };
   try {
-    // 缓存里没有（企业删除 / 停用了）：列出原因，但不让专家整个不可用。
-    assert.equal((await get()).available, true);
+    // 从没同步过（新机器 / 同步失败）：不能当成企业已删除，仍然拦下。
+    assert.equal((await get()).available, false);
     assert.equal((await get()).skills[0].reason, "skill_missing");
     cache.reconcile(scope, [signed(key)], ["review@1"], { publicKeys: keys });
     const ready = await get();
@@ -464,8 +464,19 @@ test("required skill readiness uses persisted signed cache, skips missing and bl
     assert.equal(new SkillCache(root).readinessFor(scope, ["review@1"])[0]?.status, "blocked");
     rmSync(join(root, scope.tenantId, scope.memberId, "review", "1"), { recursive: true });
     assert.equal(new SkillCache(root).readinessFor(scope, ["review@1"])[0]?.reason, "skill_missing");
-    // 缺失的技能运行时跳过，会话照常建出来。
-    assert.doesNotThrow(() => createControlledResourceLoader("system", cache, { caller: { callerId: scope.memberId, userId: scope.memberId, tenantId: scope.tenantId, roles: [] }, employeeId: "s05", snapshot: { employee_id: "s05", version: "1", snapshot_version: "s1", display_name: "Fixture", skill_refs: ["review@1"] } }));
+    // 上次权威同步还下发了它、但缓存被误删：仍然拦下，提示同步。
+    const load = () => createControlledResourceLoader("system", cache, { caller: { callerId: scope.memberId, userId: scope.memberId, tenantId: scope.tenantId, roles: [] }, employeeId: "s05", snapshot: { employee_id: "s05", version: "1", snapshot_version: "s1", display_name: "Fixture", skill_refs: ["review@1"] } });
+    assert.throws(load, /Required signed skill/);
+    assert.equal((await get()).available, false);
+    // 运行中的那次同步（只加不清）也记下清单：企业不再下发它 → 算已删除 / 停用。
+    cache.reconcile(scope, [], [], { publicKeys: keys }, { authoritative: false, recordDelivered: true });
+    assert.equal(new SkillCache(root).readinessFor(scope, ["review@1"])[0]?.reason, "skill_removed");
+    assert.equal((await get()).available, true);
+    assert.doesNotThrow(load);
+    // 不是权威同步（例如单个安装）不改清单。
+    cache.reconcile(scope, [signed(key)], ["review@1"], { publicKeys: keys }, { authoritative: false });
+    rmSync(join(root, scope.tenantId, scope.memberId, "review", "1"), { recursive: true });
+    assert.equal(new SkillCache(root).readinessFor(scope, ["review@1"])[0]?.reason, "skill_removed");
   } finally { await http.close(); await fixture.close(); rmSync(root, { recursive: true, force: true }); }
 });
 

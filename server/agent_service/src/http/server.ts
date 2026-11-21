@@ -2762,7 +2762,7 @@ export class AgentHttpServer {
         refs.push(...this.options.store.listSnapshots(caller.tenantId, memberId).filter((snapshot) => currentEmployeeIds.has(snapshot.employee_id)).flatMap((snapshot) => skillRefsForSnapshot(snapshot as { skill_refs?: unknown; skills?: unknown })));
         // 有会话正在运行时只加新版本、不清旧文件：正在用的技能目录不能被删掉；下次同步再清。
         const running = this.options.host.hasActiveRunsFor?.(caller.tenantId, memberId) ?? false;
-        this.options.skillCache.reconcile({ tenantId: caller.tenantId, memberId }, signedPackages, refs, verification, { authoritative: skillPackagesAuthoritative && !running });
+        this.options.skillCache.reconcile({ tenantId: caller.tenantId, memberId }, signedPackages, refs, verification, { authoritative: skillPackagesAuthoritative && !running, recordDelivered: skillPackagesAuthoritative });
       }
       this.writeJson(response, 200, { data: { ok: true, ...result, partial: skippedEmployeeIds.length > 0, skipped_employee_ids: skippedEmployeeIds } });
     } catch (error) {
@@ -2814,8 +2814,8 @@ export class AgentHttpServer {
           ? this.options.skillCache.readinessFor({ tenantId: caller.tenantId, memberId }, refs, verification)
           : refs.map((ref) => ({ ref, status: "blocked", reason: "skill_cache_unavailable" }));
     } catch { skills = malformedSnapshot ? [{ ref: "snapshot", status: "blocked", reason: "skill_snapshot_invalid" }] : refs.map((ref) => ({ ref, status: "blocked", reason: "skill_invalid_or_expired" })); }
-    // 企业已删除 / 停用的技能（缓存里没有）运行时会跳过，不让整个专家不可用。
-    const missing = skills.filter((skill) => skill.status !== "ready" && skill.reason !== "skill_missing");
+    // 最近一次权威同步确认企业已删除 / 停用的技能运行时会跳过，不让整个专家不可用；其余缺失仍然拦下。
+    const missing = skills.filter((skill) => skill.status !== "ready" && skill.reason !== "skill_removed");
     return { employee_id: expert.employee_id, display_name: expert.display_name, handle: expert.handle, available: !expert.availability_reason && runtime && provider === "ready" && lifecycle === "ready" && missing.length === 0, runtime: runtime ? "ready" : "blocked", provider, skills, capabilities: [], reasons: [ ...missing.map((skill) => `Required skill ${skill.ref}: ${skill.reason}`), ...(runtime ? [] : ["Pi runtime is not ready"]), ...(lifecycle === "ready" ? [] : ["Manager has not activated this expert"]), ...(expert.availability_reason ? [dependencyUnavailable ? "Employee model, provider or price is unavailable" : "Employee is unavailable"] : []), ...(provider === "ready" || dependencyUnavailable ? [] : ["Manager snapshot has no model provider"]) ] };
   }
 
