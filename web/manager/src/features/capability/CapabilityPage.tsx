@@ -231,21 +231,36 @@ export function CapabilityPage({ skillsOnly = false }: CapabilityPageProps = {})
     return item?.update_available && item.published_version && item.published_version !== row.version ? item : null;
   }, [market]);
 
-  const [updating, setUpdating] = useState<string | null>(null);
-  const updateSkill = useCallback(async (row: SkillCatalog, item: PlatformSkillMarketItem) => {
-    setUpdating(row.catalog_id);
+  /** 平台有新版本的行；更新入口在列表右上角「全部更新（N）」，行内只显示「平台有新版本」（操作列放不下第三个按钮）。 */
+  const pendingUpdates = useMemo(
+    () => skills.flatMap((row) => { const item = updateFor(row); return item ? [{ row, item }] : []; }),
+    [skills, updateFor],
+  );
+  const [updatingAll, setUpdatingAll] = useState(false);
+  const updateAll = useCallback(async () => {
+    setUpdatingAll(true);
     setActionError(null);
     setNotice(null);
+    let done = 0;
     try {
-      await marketApi.install(item);
-      setNotice(`已把 ${skillTitle(row)} 更新到 v${item.published_version}，成员桌面端同步后（10 分钟内，或切回窗口时）下一条消息起用新版本`);
-      await load();
+      for (const { row, item } of pendingUpdates) {
+        try {
+          await marketApi.install(item);
+        } catch (err) {
+          const reason = err instanceof ApiError || err instanceof Error ? err.message : "请重试";
+          throw new Error(`${done ? `已更新 ${done} 项；` : ""}${skillTitle(row)} 更新失败：${reason}`);
+        }
+        done += 1;
+      }
+      const what = done === 1 ? `${skillTitle(pendingUpdates[0]!.row)} 更新到 v${pendingUpdates[0]!.item.published_version}` : `${done} 个平台技能更新到新版本`;
+      setNotice(`已把 ${what}，成员桌面端同步后（10 分钟内，或切回窗口时）下一条消息起用新版本`);
     } catch (err) {
-      setActionError(err instanceof ApiError || err instanceof Error ? err.message : "更新失败，请重试");
+      setActionError(err instanceof Error ? err.message : "更新失败，请重试");
     } finally {
-      setUpdating(null);
+      setUpdatingAll(false);
+      await load();
     }
-  }, [marketApi, load]);
+  }, [pendingUpdates, marketApi, load]);
 
   const runWrite = useCallback(async (fn: () => Promise<unknown>, successKey: string): Promise<boolean> => {
     setWorking(true);
@@ -362,13 +377,6 @@ export function CapabilityPage({ skillsOnly = false }: CapabilityPageProps = {})
       key: "actions", header: i18n.t("manager.capability.actions"), width: pixel(150), align: "end",
       renderCell: (row) => (
         <HStack gap={1} justify="end">
-          {(() => {
-            const update = updateFor(row);
-            return update && (
-              <Button label="更新" variant="primary" size="sm" isLoading={updating === row.catalog_id} isDisabled={updating !== null}
-                onClick={() => void updateSkill(row, update)} />
-            );
-          })()}
           <Button label={i18n.t("manager.capability.edit")} variant="ghost" size="sm" onClick={() => { setNotice(null); setSkillEditor({ row }); }} />
           {/* 每一行都可删除：平台技能删除只是移出企业列表，可在「新增技能 → 添加平台技能」重新添加。 */}
           <Button label={i18n.t("manager.capability.delete")} variant="destructive" size="sm"
@@ -378,7 +386,7 @@ export function CapabilityPage({ skillsOnly = false }: CapabilityPageProps = {})
       ),
     });
     return columns;
-  }, [canWrite, i18n, updateFor, updateSkill, updating]);
+  }, [canWrite, i18n, updateFor]);
 
   const connectorColumns = useMemo<TableColumn<ConnectorRow>[]>(() => {
     const columns: TableColumn<ConnectorRow>[] = [
@@ -433,6 +441,9 @@ export function CapabilityPage({ skillsOnly = false }: CapabilityPageProps = {})
         <>
           <CatalogSection
             title={i18n.t("manager.capability.skills_title", { count: skills.length })} addLabel={i18n.t("manager.capability.add_skill")} canWrite={canWrite} onAdd={() => setSkillEditor({})}
+            extraActions={pendingUpdates.length > 0 && (
+              <Button label={`全部更新（${pendingUpdates.length}）`} variant="primary" size="sm" isLoading={updatingAll} onClick={() => void updateAll()} />
+            )}
             addMenu={(
               <DropdownMenu button={{ label: i18n.t("manager.capability.add_skill"), size: "sm" }} menuWidth={200}>
                 <DropdownMenuItem label="添加平台技能" onClick={() => { setNotice(null); setPickingPlatform(true); }} />
@@ -566,13 +577,15 @@ function skillSourceLabel(config: Record<string, unknown> | undefined): string {
   return "自定义";
 }
 
-function CatalogSection({ title, addLabel, canWrite, onAdd, addMenu, children }: {
+function CatalogSection({ title, addLabel, canWrite, onAdd, addMenu, extraActions, children }: {
   title: string;
   addLabel: string;
   canWrite: boolean;
   onAdd: () => void;
   /** 有多种添加方式时替换单个「添加」按钮。 */
   addMenu?: ReactNode;
+  /** 标题右侧、添加按钮左边的其他操作（如「全部更新」）。 */
+  extraActions?: ReactNode;
   children: ReactNode;
 }): ReactNode {
   return (
@@ -580,7 +593,12 @@ function CatalogSection({ title, addLabel, canWrite, onAdd, addMenu, children }:
       <VStack gap={4}>
         <HStack justify="between" align="center" wrap="wrap" gap={2}>
           <Heading level={2}>{title}</Heading>
-          {canWrite && (addMenu ?? <Button label={addLabel} size="sm" onClick={onAdd} />)}
+          {canWrite && (
+            <HStack gap={2} align="center">
+              {extraActions}
+              {addMenu ?? <Button label={addLabel} size="sm" onClick={onAdd} />}
+            </HStack>
+          )}
         </HStack>
         {children}
       </VStack>

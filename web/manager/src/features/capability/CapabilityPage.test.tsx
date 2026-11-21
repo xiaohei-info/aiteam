@@ -236,7 +236,7 @@ describe("CapabilityPage", () => {
     expect(await screen.findByText("已另存为企业技能 太一科技/weather，平台原件保留")).toBeInTheDocument();
   });
 
-  it("平台有新版本：版本列提示，点「更新」走市场安装", async () => {
+  it("平台有新版本：行内提示「平台有新版本」，更新入口在列表右上角「全部更新（N）」", async () => {
     const item = { skill_id: "p1", owner: "platform", slug: "weather", display_name: "weather", summary: "", status: "published",
       published_version: "2.0.0", content_hash: "h2", installed: true, update_available: true };
     marketApi.list.mockResolvedValueOnce([item]);
@@ -245,9 +245,26 @@ describe("CapabilityPage", () => {
     const table = await screen.findByRole("table", { name: "技能目录" });
     await within(table).findByText("平台有新版本");
     expect(within(table).getByText("v2.0.0")).toBeInTheDocument();
-    fireEvent.click(within(table).getByRole("button", { name: "更新" }));
+    expect(within(table).queryByRole("button", { name: "更新" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "全部更新（1）" }));
     await waitFor(() => expect(marketApi.install).toHaveBeenCalledWith(item));
     expect(await screen.findByText(/已把 taiyim\/weather 更新到 v2.0.0/)).toBeInTheDocument();
+  });
+
+  it("全部更新：逐个原地更新；某个失败时停下并说明已更新几项、哪个失败", async () => {
+    const second: SkillCatalog = { ...platformSkill, catalog_id: "skill-p2", skill_id: "platform-p2", display_name: "notes", config: { source: "operator", source_skill_id: "p2", skill_name: "notes" } };
+    const items = [
+      { skill_id: "p1", owner: "platform", slug: "weather", display_name: "weather", summary: "", status: "published", published_version: "2.0.0", content_hash: "h2", installed: true, update_available: true },
+      { skill_id: "p2", owner: "platform", slug: "notes", display_name: "notes", summary: "", status: "published", published_version: "3.0.0", content_hash: "h3", installed: true, update_available: true },
+    ];
+    marketApi.list.mockResolvedValue(items);
+    marketApi.install.mockResolvedValueOnce({}).mockRejectedValueOnce(new Error("平台暂时不可达"));
+    mockApi({ listSkills: vi.fn().mockResolvedValue([platformSkill, second]) });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "全部更新（2）" }));
+    expect(await screen.findByText("已更新 1 项；taiyim/notes 更新失败：平台暂时不可达")).toBeInTheDocument();
+    expect(marketApi.install).toHaveBeenCalledTimes(2);
+    marketApi.list.mockResolvedValue([]);
   });
 
   it("删除技能：经 AlertDialog 确认后调用 deleteSkill", async () => {
