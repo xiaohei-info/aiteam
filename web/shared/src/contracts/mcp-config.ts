@@ -11,7 +11,7 @@
  * 视为访问令牌：自动设 auth=bearer 与请求头名，**令牌值丢弃**，不会进入任何返回值。
  *
  * 桌面端不能 import web/（AGENTS.md §9），`clients/desktop/src/lib/mcpConfigImport.ts` 是同一份逻辑，
- * 两边测试用例相同；修改任一处须同步另一处。
+ * 两边测试用例相同；Manager 的 `server/shared/mcp_config.py`（模型帮装）是第三份。修改任一处须同步其余两处。
  */
 
 export interface McpConfigCandidate {

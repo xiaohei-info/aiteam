@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>企业端技能/MCP 新增与 ClawHub 打通 · 细化方案</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--ink:#1d2330;--sub:#667085;--line:#e4e7ec;--brand:#3b5bdb;--ok:#12a150;--warn:#d98a00;--bad:#d92d20;--op:#7048e8;--mg:#0b7285;--ag:#e8590c}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;font:14px/1.65 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;color:var(--ink);background:var(--bg)}
+nav{position:fixed;top:0;left:0;bottom:0;width:190px;background:#fff;border-right:1px solid var(--line);padding:18px 12px;overflow:auto}
+nav h1{font-size:14px;margin:0 0 14px;color:var(--brand)}
+nav a{display:block;padding:7px 10px;border-radius:6px;color:var(--ink);text-decoration:none;font-size:13px}
+nav a:hover{background:#eef2ff}
+main{margin-left:190px;padding:28px 36px 80px;max-width:1280px}
+section{margin-bottom:46px}
+h2{font-size:21px;margin:0 0 6px}
+h2 small{font-size:13px;color:var(--sub);font-weight:400;margin-left:8px}
+h3{font-size:15px;margin:22px 0 8px}
+p{margin:6px 0}
+.lead{color:var(--sub);margin-bottom:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:10px 0}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+table{border-collapse:collapse;width:100%;background:#fff;border:1px solid var(--line);border-radius:8px;overflow:hidden;font-size:13px}
+th,td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{background:#f9fafb;font-weight:600;white-space:nowrap}
+tr:last-child td{border-bottom:0}
+.tag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;background:#eef2ff;color:var(--brand);margin:1px 2px}
+.tag.ok{background:#e6f6ec;color:var(--ok)}.tag.warn{background:#fff4e0;color:var(--warn)}.tag.bad{background:#fdeceb;color:var(--bad)}
+.tag.op{background:#f1ecff;color:var(--op)}.tag.mg{background:#e3f6f9;color:var(--mg)}.tag.ag{background:#fff0e6;color:var(--ag)}.tag.gray{background:#f2f4f7;color:var(--sub)}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0}
+.tabs button{border:1px solid var(--line);background:#fff;padding:6px 12px;border-radius:16px;cursor:pointer;font-size:13px}
+.tabs button.on{background:var(--brand);color:#fff;border-color:var(--brand)}
+.pane{display:none}.pane.on{display:block}
+/* mock window */
+.win{border:1px solid #cfd4dc;border-radius:10px;background:#fff;overflow:hidden;box-shadow:0 2px 10px rgba(16,24,40,.06);margin:10px 0}
+.win .bar{display:flex;align-items:center;gap:6px;background:#f2f4f7;padding:7px 12px;font-size:12px;color:var(--sub);border-bottom:1px solid var(--line)}
+.win .bar i{width:9px;height:9px;border-radius:50%;background:#d0d5dd;display:inline-block}
+.win .bar b{margin-left:8px;font-weight:600;color:var(--ink)}
+.win .body{padding:14px;font-size:12.5px}
+.win .cols{display:grid;grid-template-columns:260px 1fr;gap:14px}
+.box{border:1px solid var(--line);border-radius:8px;padding:10px;background:#fcfcfd}
+.box h4{margin:0 0 8px;font-size:12.5px}
+.row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:1px dashed var(--line)}
+.row:last-child{border-bottom:0}
+.btn{display:inline-block;padding:4px 12px;border-radius:6px;border:1px solid var(--brand);color:var(--brand);font-size:12px;background:#fff}
+.btn.pri{background:var(--brand);color:#fff}.btn.dis{border-color:#d0d5dd;color:#98a2b3;background:#f2f4f7}.btn.danger{border-color:var(--bad);color:var(--bad)}
+.steps{display:flex;gap:4px;margin:6px 0 10px}
+.steps span{flex:1;text-align:center;padding:4px 0;border-radius:4px;font-size:11.5px;background:#f2f4f7;color:var(--sub)}
+.steps span.done{background:#e6f6ec;color:var(--ok)}.steps span.cur{background:#eef2ff;color:var(--brand);font-weight:600}
+.input{border:1px solid #d0d5dd;border-radius:6px;padding:5px 8px;background:#fff;color:#475467}
+.note{font-size:12px;color:var(--sub);margin-top:6px}
+.callout{border-left:4px solid var(--warn);background:#fffaf0;padding:10px 14px;border-radius:0 8px 8px 0;margin:12px 0}
+.callout.red{border-color:var(--bad);background:#fff5f4}.callout.green{border-color:var(--ok);background:#f3fbf6}
+svg text{font-family:inherit}
+.flow{display:flex;align-items:stretch;gap:0;flex-wrap:wrap;margin:10px 0}
+.flow .s{background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px 10px;min-width:120px;font-size:12px;flex:1}
+.flow .s b{display:block;font-size:12.5px}
+.flow .a{align-self:center;padding:0 6px;color:var(--sub);font-size:18px}
+.sz{font-weight:700}
+.sz.S{color:var(--ok)}.sz.M{color:var(--warn)}.sz.L{color:var(--bad)}
+@media(max-width:900px){nav{display:none}main{margin-left:0;padding:16px}.grid2,.grid3,.win .cols{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<nav>
+<h1>企业端技能/MCP + ClawHub 打通</h1>
+<a href="#s0">总览</a>
+<a href="#s1">1 解决什么问题</a>
+<a href="#s2">2 实现效果（UI）</a>
+<a href="#s3">3 数据流</a>
+<a href="#s4">4 前端要做什么</a>
+<a href="#s5">5 后端要做什么</a>
+<a href="#s6">6 契约与数据变更</a>
+<a href="#s7">7 阶段与依赖</a>
+<a href="#s8">8 待决策</a>
+</nav>
+<main>
+
+<section id="s0">
+<h2>企业端能自己加技能和 MCP、能让模型帮忙找；运营端 ClawHub 全链路走通 <small>2026-11-20 · 已按阶段实现（P0–P4，本地提交未推送），实施记录见 §7</small></h2>
+<p class="lead">一句话：技能包只认纯 Markdown、安全扫描强拦截、企业端没有自建入口 → 放宽技能包契约、扫描改为「显示不拦」、企业端补齐导入 / 自建 MCP / 模型帮装 → 带脚本和资料的技能能从 ClawHub 一路装到成员本机，企业也能自己加。</p>
+<div class="grid3">
+<div class="card"><b>放宽签名技能包（三端同改）</b><p class="note">任意安全相对路径的 UTF-8 文本，256 文件 / 10 MiB；二进制与 <code>hooks/&lt;平台&gt;/</code> 跳过并列出。</p></div>
+<div class="card"><b>企业端补三件事</b><p class="note">导入技能（6 种来源，同桌面端）、企业自建 MCP、「让模型帮我找」只出候选、管理员确认才装。</p></div>
+<div class="card"><b>运营端实测 15 个只通 3 个 → 全通</b><p class="note">预览文件 / 安全 / 跳过项后导入；ClawHub 不通不再拖垮内部市场。</p></div>
+</div>
+<div class="callout"><b>阅读提示：</b>工作量用 S / M / L 粗估，只表示相对大小，不是排期承诺；UI 为示意图，不是最终视觉稿；表格里标「新」的是仓库里目前没有的东西。配套设计文档：<code>2026-11-20-企业端技能MCP新增与ClawHub打通-需求与设计.md</code>（含全部 文件:行号）。</div>
+</section>
+
+<section id="s1">
+<h2>1 解决什么问题</h2>
+<table>
+<tr><th style="width:22%">现在的问题</th><th style="width:40%">本方案怎么解决</th><th>谁受益</th></tr>
+<tr><td>签名技能包只收 <code>SKILL.md</code> + <code>references/*.md</code>，热门 ClawHub 技能（根目录 csv.md、assets/、scripts/）全被拒</td><td>共享契约放宽为任意安全路径的 UTF-8 文本；Python 与 Node 同一规则、同一组用例互验；旧包哈希不变</td><td>运营、企业管理员、成员</td></tr>
+<tr><td>运营端 verify 不过（可疑 / 扫描中）一律拦截</td><td>verify 只做完整性校验；安全结论在预览里双扫描器并列显示，不拦</td><td>运营</td></tr>
+<tr><td>ClawHub 不通时内部市场一起空白；只见前 20 条；每次按键都请求</td><td>内外分开加载、外部可重试；400 ms 防抖；「加载更多」</td><td>运营</td></tr>
+<tr><td>下载前看不到文件与风险；失败只显示「下载失败」</td><td>新增预览接口与抽屉；429 / 404 等原因如实透出</td><td>运营</td></tr>
+<tr><td>企业端技能只能手填 JSON 文件数组</td><td>「导入技能」对话框：文件夹 / zip / 单个 md / 粘贴 / 网址 / ClawHub，先检查再安装（同桌面端）</td><td>企业管理员</td></tr>
+<tr><td>企业端 MCP 只能启用平台条目</td><td>企业自建 MCP：粘贴配置或地址 → 检查鉴权与工具 → 保存；成员像平台条目一样自装</td><td>企业管理员、成员</td></tr>
+<tr><td>成员桌面「添加 MCP」只能粘贴配置，看不到企业已开放的 MCP</td><td>「添加 MCP」增加「从企业拿」列表（平台启用 + 企业自建），一键安装；需要登录 / 令牌的接着登录或当场填写</td><td>成员</td></tr>
+<tr><td>不知道该装什么</td><td>「让模型帮我找」：Manager 用本企业平台模型跑有界工具循环，返回候选；用量计入企业 owner</td><td>企业管理员</td></tr>
+</table>
+<div class="callout red"><b>不能保证的事（需要对外口径一致）：</b>ClawHub 是第三方未签名内容，显示扫描结论不等于安全；图片等二进制资源不分发，依赖它们的技能可能不完整；技能附带的脚本只是文本，能否在成员机器上运行取决于本机环境；模型帮装给的是建议，可能不相关，且受 ClawHub / GitHub 可用性与限速影响；未升级客户端的成员装不了新格式技能；「一键使用」只对无需登录的 MCP 是一次点击，需要登录的还要在浏览器完成登录，需要令牌的要先填令牌。</div>
+</section>
+
+<section id="s2">
+<h2>2 实现效果 <small>点击标签切换界面示意</small></h2>
+<div class="tabs" id="tabs-ui">
+<button class="on" data-p="u1">运营端 · ClawHub 预览导入</button>
+<button data-p="u2">企业端 · 导入技能</button>
+<button data-p="u3">企业端 · 添加企业 MCP</button>
+<button data-p="u4">企业端 · 让模型帮我找</button>
+<button data-p="u5">成员桌面 · 能力页</button>
+<button data-p="u6">成员桌面 · 添加 MCP（从企业拿）</button>
+</div>
+
+<div class="pane on" id="u1">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>运营端 · 技能市场 · ClawHub 外部市场</b></div>
+<div class="body"><div class="cols">
+<div>
+<div class="box"><h4>搜索：pdf（防抖）</h4>
+<div class="row"><span>pdf · awspace · v0.1.0</span><span class="tag ok">已导入</span></div>
+<div class="row"><span>pdf · paudyyin · 8 个脚本</span><span class="btn">预览</span></div>
+<div class="row"><span>self-improving agent · pskoett</span><span class="btn">预览</span></div>
+<p class="note"><span class="btn">加载更多</span>　ClawHub 不通时只此区报错 + 「重试」，内部市场照常。</p></div>
+</div>
+<div>
+<div class="box"><h4>预览：self-improving agent · pskoett · v4.0.5</h4>
+<div class="row"><span>文件</span><span>13 个 · 64 KB（SKILL.md、assets/×4、scripts/extract-skill.sh…）</span></div>
+<div class="row"><span>已跳过</span><span>4 个 OpenClaw 专用文件（hooks/openclaw/*）</span></div>
+<div class="row"><span>规则扫描</span><span class="tag bad">可疑 · 严重 · 不建议安装（18 项）</span></div>
+<div class="row"><span>模型复核</span><span class="tag ok">无异常 · 高置信</span></div>
+<p class="note">第三方未签名内容；导入后按「下载后自动开放」开关决定是否开放。</p>
+<p style="margin-top:8px"><span class="btn pri">导入</span> <span class="btn">打开 ClawHub 页面</span></p>
+</div>
+</div></div></div></div>
+<p class="note">要点：先看清文件、跳过项、两个扫描器结论，再导入；扫描结论不拦截。</p>
+</div>
+
+<div class="pane" id="u2">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>企业端 · 能力目录 · 导入技能</b></div>
+<div class="body">
+<div class="steps"><span class="done">选来源</span><span class="done">检查</span><span class="cur">确认</span><span>结果</span></div>
+<div class="box"><h4>来源</h4>
+<div class="row"><span><span class="tag gray">文件夹</span><span class="tag gray">zip</span><span class="tag gray">单个 .md</span><span class="tag gray">粘贴</span><span class="tag gray">网址</span><span class="tag">ClawHub</span></span><span class="input">https://clawhub.ai/ivangdavila/skills/spreadsheet</span></div>
+</div>
+<div class="box" style="margin-top:8px"><h4>预览</h4>
+<div class="row"><span>名称</span><span>spreadsheet · v1.0.0</span></div>
+<div class="row"><span>文件</span><span>5 个（SKILL.md、csv.md、excel.md…）</span></div>
+<div class="row"><span>目录里已有</span><span class="tag warn">内容不同 → 将升级为新版本</span></div>
+<div class="row"><span>可见范围 / 绑定 / 安装策略</span><span>全员 · 按需 · 成员自装</span></div>
+<p style="margin-top:8px"><span class="btn">取消</span> <span class="btn pri">安装</span></p>
+</div>
+<p class="note">多技能包：列出包内每个技能，勾选后批量装；结果分「成功 / 重复 / 失败」。</p>
+</div></div>
+<p class="note">要点：交互与桌面端「添加技能 → 自定义」一致，装进企业技能目录，成员再自装。</p>
+</div>
+
+<div class="pane" id="u3">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>企业端 · MCP 市场 · 添加企业 MCP</b></div>
+<div class="body"><div class="cols">
+<div>
+<div class="box"><h4>平台 MCP</h4>
+<div class="row"><span>高德地图</span><span class="tag ok">已启用</span></div>
+<h4 style="margin-top:10px">企业自建 <span class="tag mg">新</span></h4>
+<div class="row"><span>内部工单</span><span><span class="btn">编辑</span> <span class="btn danger">删除</span></span></div>
+</div>
+</div>
+<div>
+<div class="box"><h4>粘贴配置或地址</h4>
+<p class="input">{ "mcpServers": { "tickets": { "type": "streamableHttp", "url": "https://mcp.corp.example/…" } } }</p>
+<p style="margin-top:6px"><span class="btn">检查</span></p>
+<div class="row"><span>鉴权</span><span class="tag warn">需要登录（OAuth，支持动态注册）</span></div>
+<div class="row"><span>工具</span><span>create_ticket、search_tickets</span></div>
+<div class="row"><span>标识 / 名称</span><span class="input">tickets</span></div>
+<div class="row"><span>应用编号 / 密钥（可选）</span><span class="input">留空则成员本机动态注册</span></div>
+<p style="margin-top:8px"><span class="btn">取消</span> <span class="btn pri">保存</span></p>
+</div>
+</div></div></div></div>
+<p class="note">要点：令牌不保存；成员在本机登录或填令牌；可选的应用密钥用 Manager 密钥加密。</p>
+</div>
+
+<div class="pane" id="u4">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>企业端 · 让模型帮我找</b></div>
+<div class="body"><div class="cols">
+<div>
+<div class="box"><h4>需求</h4>
+<p class="input">我们要一个能按模板写周报的技能，再找个能查物流轨迹的 MCP</p>
+<div class="row"><span>链接 / 配置 JSON</span><span>（可选）</span></div>
+<div class="row"><span>模型</span><span class="input">本企业可见的平台模型 ▾</span></div>
+<p class="note">用量计入企业 owner；需求与模型输出不保存。</p>
+<p style="margin-top:6px"><span class="btn pri">开始找</span></p>
+</div>
+</div>
+<div>
+<div class="box"><h4>候选（第 4 轮结束，3 个）</h4>
+<div class="row"><span>技能 · weekly-report · ClawHub · 2.1k 下载<br><span class="note">理由：按模板生成周报，纯文档</span></span><span class="btn pri">用这个</span></div>
+<div class="row"><span>技能 · report-templates · GitHub ★320</span><span class="btn">用这个</span></div>
+<div class="row"><span>MCP · 快递轨迹 · https 地址，需令牌</span><span class="btn">用这个</span></div>
+<p class="note">「用这个」打开导入技能 / 添加企业 MCP 窗口并预填，仍要检查 → 确认才装。本次用量：12.3k tokens · ¥0.04</p>
+</div>
+</div></div></div></div>
+<p class="note">要点：模型只出建议、链接必须来自搜索结果；永不自动安装。</p>
+</div>
+
+<div class="pane" id="u5">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>成员桌面 · 能力 · 添加技能 / MCP</b></div>
+<div class="body">
+<div class="box"><h4>从企业拿</h4>
+<div class="row"><span>self-improving-agent · 平台技能市场 · v4.0.5（含 scripts/、assets/）</span><span class="btn pri">安装</span></div>
+<div class="row"><span>spreadsheet · 企业自建 · v1.0.0</span><span class="btn pri">安装</span></div>
+<div class="row"><span>内部工单 MCP · 来源：企业</span><span class="btn pri">安装并登录</span></div>
+</div>
+<p class="note">文案改为「技能可能附带脚本和资料；不会自动执行，员工运行命令仍按审批策略」。客户端未升级时提示「请升级客户端」。</p>
+</div></div>
+<p class="note">要点：成员侧流程不变，只是能装的东西变多、来源标得更清楚。</p>
+</div>
+<div class="pane" id="u6">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>成员桌面 · 能力 · 添加 MCP</b></div>
+<div class="body">
+<p><span class="btn pri">从企业拿</span> <span class="btn">自定义</span> <span class="tag mg">新</span></p>
+<div class="box" style="margin-top:8px"><h4>企业开放的 MCP（平台启用 + 企业自建）</h4>
+<div class="row"><span>高德地图 · <span class="tag gray">平台</span> · 无需登录 · 12 个工具</span><span class="btn pri">安装</span></div>
+<div class="row"><span>内部工单 · <span class="tag mg">企业</span> · 需要登录 · 2 个工具</span><span class="btn pri">安装并登录</span></div>
+<div class="row"><span>快递轨迹 · <span class="tag mg">企业</span> · 需要令牌<br><span class="input">粘贴服务方发的令牌（只存本机）</span></span><span class="btn pri">安装</span></div>
+<div class="row"><span>飞书文档 · <span class="tag gray">平台</span> · 目录已更新到第 3 版</span><span class="btn">更新</span></div>
+<div class="row"><span>GitHub · <span class="tag gray">平台</span></span><span class="tag ok">已安装</span></div>
+<div class="row"><span>notion · <span class="tag gray">平台</span> · 本机已有同名（自己添加的）</span><span class="btn">替换</span></div>
+</div>
+<p class="note">无需登录：点一下即装好；需要登录：点一下进入登录窗口，登录完成即装好；需要令牌：行内填好再点安装。企业服务连不上时这里提示，「自定义」照常可用。</p>
+</div></div>
+<p class="note">要点：与「添加技能 → 从企业拿」同构；地址 / 工具 / 鉴权以企业目录为准，前端不能改。</p>
+</div>
+</section>
+
+<section id="s3">
+<h2>3 数据流</h2>
+<p class="lead">边界：不向用户机器入站；会话内容不上传；平台模型 / 价格仍由 Operator 单写；Manager 租户数据全部经 TenantContext / RLS；Manager 新增的外呼（ClawHub / GitHub / 网址 / MCP 探测 / 本企业 Relay）只在管理员操作时发生，且走 SSRF 防护。</p>
+
+<h3>3.1 总图：谁在哪一端做什么</h3>
+<div class="card" style="overflow:auto">
+<svg viewBox="0 0 1100 560" width="1100" style="max-width:100%">
+<defs><marker id="ar" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8z" fill="#667085"/></marker></defs>
+<rect x="5" y="10" width="1090" height="120" rx="10" fill="#f1ecff" stroke="#c9b8ff"/><text x="18" y="32" font-size="13" font-weight="700" fill="#7048e8">运营端 Operator（oper 库）</text>
+<rect x="5" y="145" width="1090" height="160" rx="10" fill="#e3f6f9" stroke="#9ed8e2"/><text x="18" y="167" font-size="13" font-weight="700" fill="#0b7285">企业端 Manager（租户数据空间 + RLS）</text>
+<rect x="5" y="320" width="1090" height="180" rx="10" fill="#fff0e6" stroke="#ffc9a3"/><text x="18" y="342" font-size="13" font-weight="700" fill="#e8590c">用户本机 Desktop + Agent（本地库，会话不上传）</text>
+<g font-size="12" fill="#1d2330">
+<rect x="30" y="50" width="200" height="48" rx="6" fill="#fff" stroke="#c9b8ff"/><text x="40" y="70">① ClawHub 浏览 / 预览</text><text x="40" y="86" fill="#667085">文件、跳过项、双扫描器</text>
+<rect x="270" y="50" width="200" height="48" rx="6" fill="#fff" stroke="#c9b8ff"/><text x="280" y="70">② 导入（完整性校验）</text><text x="280" y="86" fill="#667085">不看安全结论，按开关开放</text>
+<rect x="510" y="50" width="200" height="48" rx="6" fill="#fff" stroke="#c9b8ff"/><text x="520" y="70">③ pull 已开放技能包</text><text x="520" y="86" fill="#667085">服务身份，Manager 主动拉</text>
+<rect x="760" y="50" width="300" height="48" rx="6" fill="#fff" stroke="#c9b8ff"/><text x="770" y="70">platform_skill(_version) · 平台模型/价格</text><text x="770" y="86" fill="#667085">Relay 令牌签发（不变）</text>
+<rect x="510" y="190" width="200" height="48" rx="6" fill="#fff" stroke="#9ed8e2"/><text x="520" y="210">④ 装平台技能 / 启用平台 MCP</text><text x="520" y="226" fill="#667085">已有链路，放宽上限</text>
+<rect x="270" y="190" width="200" height="48" rx="6" fill="#fff" stroke="#9ed8e2"/><text x="280" y="210">⑤ 新：导入技能 / 自建 MCP</text><text x="280" y="226" fill="#667085">外呼经 net_guard</text>
+<rect x="30" y="190" width="200" height="48" rx="6" fill="#fff" stroke="#9ed8e2"/><text x="40" y="210">⑥ 新：模型帮我找</text><text x="40" y="226" fill="#667085">Relay 有界工具循环，只出候选</text>
+<rect x="760" y="190" width="300" height="48" rx="6" fill="#fff" stroke="#9ed8e2"/><text x="770" y="210">skill_catalog · mcp_catalog(+origin)</text><text x="770" y="226" fill="#667085">usage_rollup（帮装记给 owner）</text>
+<rect x="30" y="370" width="200" height="48" rx="6" fill="#fff" stroke="#ffc9a3"/><text x="40" y="390">⑦ 拉可装列表 grants</text><text x="40" y="406" fill="#667085">技能 / MCP（含 origin）</text>
+<rect x="270" y="370" width="200" height="48" rx="6" fill="#fff" stroke="#ffc9a3"/><text x="280" y="390">⑧ 取签名包并验签</text><text x="280" y="406" fill="#667085">新路径规则 + 上限</text>
+<rect x="510" y="370" width="200" height="48" rx="6" fill="#fff" stroke="#ffc9a3"/><text x="520" y="390">⑨ 本机落盘 / 登录 MCP</text><text x="520" y="406" fill="#667085">0600，不执行；令牌只在本机</text>
+<rect x="760" y="370" width="300" height="48" rx="6" fill="#fff" stroke="#ffc9a3"/><text x="770" y="390">SkillCache · local_capability</text><text x="770" y="406" fill="#667085">source: platform / enterprise_catalog</text>
+</g>
+<g stroke="#667085" stroke-width="1.5" fill="none" marker-end="url(#ar)">
+<path d="M230 74 H270"/><path d="M470 74 H510"/>
+<path d="M610 98 V190" stroke-dasharray="4 3"/>
+<path d="M370 238 V280 H860 V238"/>
+<path d="M130 238 V262 H330 V238"/>
+<path d="M130 370 V312 H610 V238" stroke-dasharray="4 3"/>
+<path d="M230 394 H270"/><path d="M470 394 H510"/>
+</g>
+<text x="620" y="150" font-size="11" fill="#667085">Manager 主动拉（服务间）</text>
+<text x="640" y="300" font-size="11" fill="#667085">Agent 主动访问 Manager（拉可装列表 / 签名包）</text>
+<text x="140" y="276" font-size="11" fill="#667085">候选 → 打开导入窗口</text>
+</svg>
+<p class="note">实线 = 同端流程；虚线 = 跨端调用。方向只有：Manager 主动拉 Operator、Agent 主动访问 Manager、Agent 本机内部；没有入站到用户机器。Manager 对外网与 Relay 的调用只在管理员发起时发生。</p>
+</div>
+
+<h3>3.2 主流程（企业端导入技能）</h3>
+<div class="flow">
+<div class="s"><b>选来源</b>文件夹 / zip / md / 粘贴 / 网址 / ClawHub，或从模型候选进入</div><div class="a">→</div>
+<div class="s"><b>检查</b>下载 / 解包 / 规范化：跳过二进制与平台钩子，校验 SKILL.md</div><div class="a">→</div>
+<div class="s"><b>确认</b>预览、勾选多技能、同名升版本、可见范围</div><div class="a">→</div>
+<div class="s"><b>入目录</b>写 skill_catalog + 审计（不记内容）</div><div class="a">→</div>
+<div class="s"><b>成员自装</b>Agent 拉签名包验签落盘</div>
+</div>
+
+<h3>3.3 状态与处置矩阵</h3>
+<table>
+<tr><th>情况</th><th>运营端导入</th><th>企业端导入</th><th>成员 Agent</th></tr>
+<tr><td><span class="tag ok">纯文本 / 带脚本与资料</span></td><td>可导入</td><td>可导入</td><td>验签通过，落盘 0600</td></tr>
+<tr><td><span class="tag warn">含二进制 / 平台钩子</span></td><td>跳过并在预览列出</td><td>跳过并列出</td><td>拿到的包里没有这些文件</td></tr>
+<tr><td><span class="tag warn">扫描可疑 / 扫描中</span></td><td>显示结论，不拦</td><td>显示结论，不拦</td><td>—</td></tr>
+<tr><td><span class="tag bad">verify 不可用 / 清单不符</span></td><td>拒绝并说明（完整性）</td><td>不适用</td><td>—</td></tr>
+<tr><td><span class="tag bad">超上限 / 无 SKILL.md / 路径不安全</span></td><td>拒绝</td><td>拒绝</td><td>验签拒绝</td></tr>
+<tr><td><span class="tag bad">旧版客户端</span></td><td>—</td><td>—</td><td>新格式包验签失败，提示升级；已装技能不受影响</td></tr>
+<tr><td><span class="tag bad">网址指向内网 / 跳转到内网</span></td><td>—</td><td>拒绝（SSRF 防护）</td><td>—</td></tr>
+</table>
+</section>
+
+<section id="s4">
+<h2>4 前端要做什么</h2>
+<p class="lead">已核对：<code>web/operation/src/features/skill-market</code>、<code>web/manager/src/features/{capability,mcp-market}</code>、<code>clients/desktop/src/pages/Capabilities</code>。以下在其上扩展。</p>
+<table>
+<tr><th style="width:15%">位置</th><th>要做什么</th><th style="width:9%">阶段</th><th style="width:7%">量级</th></tr>
+<tr><td><span class="tag op">web/operation</span></td><td>技能市场：内外分开加载 + 重试；防抖；加载更多；<b>预览抽屉（新）</b>；贴 ClawHub 链接导入；内部卡片显示扫描徽标；<code>PlatformSkillSelector</code> 同步</td><td>P1</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag mg">web/manager</span></td><td><b>导入技能对话框（新）</b>（6 来源、检查、多技能、候选、安全、跳过、策略、结果）；技能表加「来源」列；上限文案</td><td>P2</td><td class="sz L">L</td></tr>
+<tr><td><span class="tag mg">web/manager</span></td><td>MCP 市场分「平台 / 企业自建」；<b>添加 / 编辑企业 MCP 对话框（新）</b>（复用 <code>parseMcpConfig</code>）</td><td>P3</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag mg">web/manager</span></td><td><b>让模型帮我找对话框（新）</b>：需求、链接 / JSON、模型选择、候选列表 → 预填打开导入窗口；用量页显示「管理工具」来源</td><td>P4</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag ag">clients/desktop</span></td><td><b>「添加 MCP」增加「从企业拿」tab（新）</b>：列表、状态（安装 / 已安装 / 更新 / 替换）、三种鉴权的一键行为、搜索、空状态；能力页空状态文案</td><td>P3</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag ag">clients/desktop</span></td><td>两处「技能只包含说明文档」文案；MCP <code>enterprise_catalog</code> 来源文案「企业」；随包 Agent 重打</td><td>P0 / P3</td><td class="sz S">S</td></tr>
+<tr><td>全部</td><td>i18n、按角色显隐（owner / enterprise_admin）、对话框结构守卫测试、长内容 + 1440×640 截图与真实点击验证</td><td>随各期</td><td class="sz M">M</td></tr>
+</table>
+</section>
+
+<section id="s5">
+<h2>5 后端要做什么</h2>
+<table>
+<tr><th style="width:15%">位置</th><th>要做什么</th><th style="width:9%">阶段</th><th style="width:7%">量级</th></tr>
+<tr><td><span class="tag">server/shared</span></td><td><b>契约变更</b>：<code>skill.py</code> 路径规则与上限常量；<b>新</b> <code>skill_import/</code>（zip 解包、规范化、ClawHub 客户端、GitHub/网址获取）；<b>新</b> <code>net_guard</code>（从 mcp_probe 抽 SSRF 防护）；<code>mcp_probe.py</code> 从 operation 移入；<code>InstallableMcpServer.origin</code></td><td>P0 / P3</td><td class="sz L">L</td></tr>
+<tr><td><span class="tag op">operation_service</span></td><td>导入改用共享规范化；verify 只做完整性；预览 / resolve 接口（新）；错误透出；浏览不强制过滤</td><td>P1</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag mg">manager_service</span></td><td>上限常量与 <code>package_shaped</code> SQL；<b>新</b> <code>skill_import_service</code> + 路由；迁移 <code>0056_mcp_catalog_origin</code> + 自建 MCP 路由与 probe；<b>新</b> <code>capability_assist</code>（三协议适配、工具循环、用量记 owner、审计）</td><td>P0 / P2 / P3 / P4</td><td class="sz L">L</td></tr>
+<tr><td><span class="tag ag">agent_service（Node）</span></td><td><code>skills.ts</code> 验签规则；<code>manager-client.ts</code> 透传 origin；<code>connectors.ts</code> 写 <code>enterprise_catalog</code> 并放开工具交集 / 重新登录两处；<b>新</b> 路由 <code>GET installable-mcp-servers</code>（带本机安装状态）、<code>POST mcp/catalog/:server_id/install</code>（复用目录安装分支，返回能力或待登录）</td><td>P0 / P3</td><td class="sz M">M</td></tr>
+<tr><td>全部</td><td><code>application/problem+json</code>；OpenAPI；单元 / 集成 / 跨租户隔离 / SSRF 负例 / 跨端签名验签闭环测试</td><td>随各期</td><td class="sz M">M</td></tr>
+</table>
+<div class="callout"><b>注意：</b>放宽后的技能包必须<b>先让 Agent 能验签</b>（随包 Agent 发版）再让 Manager / Operation 导入；反过来发，未升级成员会装不上。</div>
+</section>
+
+<section id="s6">
+<h2>6 契约与数据变更</h2>
+<table>
+<tr><th style="width:18%">变更</th><th>内容</th><th style="width:14%">影响面</th><th style="width:8%">风险</th></tr>
+<tr><td><code>SkillFile.path</code> / Agent <code>canonicalPath</code></td><td>任意安全相对路径；段不以 <code>.</code> 开头；≤256 文件 / 单文件 5 MiB / 总 10 MiB；哈希算法不变</td><td>四端</td><td class="sz L">高</td></tr>
+<tr><td>概要设计 04 §6.7 / D18</td><td>Manager 可为「管理员能力帮装」经本企业 Relay 调模型；不落内容；用量记 owner</td><td>架构口径</td><td class="sz L">高</td></tr>
+<tr><td><code>InstallableMcpServer.origin</code></td><td>新增 <code>platform | enterprise</code>（默认 platform）；<code>server_id</code> 说明改为可含 <code>ent-</code> 前缀；<code>api.json</code> 同步</td><td>Manager / Agent</td><td class="sz M">中</td></tr>
+<tr><td>Agent 北向（新）</td><td><code>GET /api/agent/capabilities/installable-mcp-servers</code>、<code>POST /api/agent/capabilities/mcp/catalog/:server_id/install</code>；<code>api.json</code> 同步</td><td>桌面 / Agent</td><td class="sz M">中</td></tr>
+<tr><td><code>mcp_catalog.origin</code></td><td>新列 + CHECK；企业条目自管 revision</td><td>Manager 库</td><td class="sz M">中</td></tr>
+<tr><td>北向 API（新）</td><td>Operation：preview、resolve；Manager：skills/import(/preview)、mcp-market/probe、mcp-market/custom、capability-assist</td><td>Operation / Manager</td><td class="sz M">中</td></tr>
+<tr><td><code>usage_rollup</code> 新来源</td><td><code>manager-assist-*</code>，<code>employee_id</code> 空，<code>member_id</code> = owner，沿用投递回执</td><td>Manager / Operator 汇总</td><td class="sz M">中</td></tr>
+</table>
+<div class="callout red"><b>高风险：</b>以上前两项属共享契约 / 地基裁决变更（AGENTS.md §8）；用户已于 2026-11-20 确认方向。发布顺序：① shared + Agent 验签 + 随包 Agent 发版 → ② Manager → ③ Operation。</div>
+</section>
+
+<section id="s7">
+<h2>7 阶段与依赖</h2>
+<table>
+<tr><th style="width:12%">阶段</th><th>内容</th><th style="width:22%">依赖</th><th style="width:26%">验收</th></tr>
+<tr><td>P0 契约放宽</td><td>共享契约、Agent 验签、Manager 上限、共享规范化</td><td>—</td><td>Python / Node 同组用例互验（脚本、json 资源、钩子跳过、二进制跳过、<code>.env</code> 拒绝、257 文件拒绝）；旧包哈希不变；跨端签名验签闭环</td></tr>
+<tr><td>P1 运营端打通</td><td>预览、完整性校验、错误透出、页面解耦 / 防抖 / 分页、链接导入</td><td>P0</td><td>假 ClawHub 跑通至 Agent 验签缓存；真实 ClawHub 复测 15 个样本（verify 不可用的除外）全部可导入；断网时内部市场可用；截图</td></tr>
+<tr><td>P2 企业导入技能</td><td>导入服务 + 对话框</td><td>P0</td><td>6 来源各一条集成用例；多技能、同名升版本；SSRF 负例；跨租户隔离；成员能装上；截图 + 主按钮可点</td></tr>
+<tr><td>P3 企业自建 MCP + 桌面企业 MCP 列表</td><td>迁移、路由、probe、对话框、Agent origin；Agent 列表 / 目录安装接口；桌面「从企业拿」</td><td>P0（可与 P2 并行；桌面列表可先于企业自建交付）</td><td>新建 / 编辑 / 删除；成员可装列表带 origin；Agent 落 <code>enterprise_catalog</code> 并能登录（动态注册与预登记各一）；桌面「从企业拿」三种鉴权各一键装通、已安装 / 更新 / 替换状态正确、企业服务断开时有提示；平台条目不回归；截图（长列表 + 1440×640，主按钮真实可点）</td></tr>
+<tr><td>P4 模型帮装</td><td>capability-assist、对话框、文档修订</td><td>P2、P3</td><td>假 Relay 测轮数 / 时限上限、编造链接丢弃、用量记 owner、审计无内容；真实模型冒烟一次；截图</td></tr>
+</table>
+<p class="note">P2 与 P3 可并行；P4 依赖二者的导入窗口；每阶段结束跑本阶段测试并截图，最后统一重打随包 Agent。</p>
+<h3>实施记录（2026-11-20）</h3>
+<table>
+<tr><th style="width:12%">阶段</th><th>落地与偏差</th><th style="width:34%">实测发现并已修复（均有回归测试）</th></tr>
+<tr><td>P0–P2</td><td>按设计落地；运营端真实 ClawHub 热门 15 个全部可导入（原来 3 个）。</td><td>—</td></tr>
+<tr><td>P3</td><td>迁移另加约束：企业条目 <code>server_id</code> 必须 <code>ent-</code> 开头；登记时不外呼，只在「读取工具」时外呼（走 net_guard）；顺带修复 MCP 市场审计一直静默丢弃的问题。</td><td>① 目录声明的「需要令牌」被探测结果改成 OAuth，成员填的令牌被忽略（平台目录路径早已存在）② 成员看到写给模型的提示语 ③ 装好后整张列表锁住数秒</td></tr>
+<tr><td>P4</td><td>响应多 <code>incomplete / dropped / verified</code>，不回传 MCP 配置（令牌已丢，鉴权由「读取工具」判断）；运营端不可用 → 503；没有在职 owner 时用量记发起管理员；用量页与账单把帮装用量标「管理工具」，与「未知员工」分行。</td><td>① 运营端不可达时接口返回 500 ② 用量表两行 <code>group_id</code> 为空时行键冲突 ③ 可选的「粘贴 MCP 配置」默认展开</td></tr>
+<tr><td>验收追加（MD §4.7）</td><td>技能编辑器按 SKILL.md 本质重做：名称 / 说明 / 指令 / 附带文件（自动归入 <code>scripts/</code>、<code>references/</code>、<code>assets/</code>），设置只留「成员可以自己安装」与「停用」；企业端「技能管理」分「企业技能」/「平台技能市场」两页，平台装来的只读但两个开关可改；运营端新增「新增自定义技能」（导入 + 从零写一个 + 编辑，每次保存成新版本，ClawHub 技能只读）。</td><td>① 平台技能开关保存 404（仓储 SQL 守卫拦截，已加真 PG 用例）② 自建技能误显示「未取得扫描结论」③ 中文表单出现英文「Required」</td></tr>
+</table>
+<div class="callout"><b>未验证：</b>真实平台模型冒烟（本环境没有运营端与真实上游密钥，只验到「运营端不可用 → 503」）；anthropic 协议的 Relay 地址（<code>base/v1/messages</code>，与成员 Agent 拼法相同）。浏览器测试里只有 <code>capability-assist</code> 与 <code>platform-models</code> 两个接口是拦截返回的，其余都是真实 Manager。</div>
+</section>
+
+<section id="s8">
+<h2>8 还需要决策的方面</h2>
+<h3>已决定（不再讨论，仅备查）</h3>
+<p><span class="tag ok">技能包放宽为安全路径 UTF-8 文本</span><span class="tag ok">运营端扫描显示不拦</span><span class="tag ok">Manager 可直连外网做自定义导入</span><span class="tag ok">Manager 经 Relay 调模型出候选（推翻 D18，限此用途）</span><span class="tag ok">帮装用量计入企业 owner</span><span class="tag ok">桌面「添加 MCP」增加企业 MCP 列表、一键安装</span></p>
+
+<h3>待决策</h3>
+<table>
+<tr><th style="width:4%">#</th><th style="width:24%">事项</th><th>建议</th><th style="width:14%">卡住谁</th></tr>
+<tr><td>1</td><td>多个 owner 时用量记给谁</td><td>最早创建且在职的 owner；审计另记实际发起人</td><td><span class="tag bad">P4</span></td></tr>
+<tr><td>2</td><td>模型帮装支持哪些协议</td><td>三种都支持（openai-completions / openai-responses / anthropic-messages），模型选择器不过滤</td><td><span class="tag bad">P4</span></td></tr>
+<tr><td>3</td><td>企业自建 MCP 能否自动安装</td><td>不能，与桌面现有口径一致</td><td><span class="tag warn">P3</span></td></tr>
+<tr><td>4</td><td>Manager 对 MCP 地址探测外呼</td><td>视为已决定「直连外网」的延伸，同走 net_guard</td><td><span class="tag warn">P3</span></td></tr>
+<tr><td>5</td><td>运营端浏览是否强制 nonSuspiciousOnly</td><td>不强制；扫描结论在预览里看</td><td><span class="tag warn">P1</span></td></tr>
+<tr><td>6</td><td>桌面「技能只包含说明文档，不执行代码」文案</td><td>改为「可能附带脚本和资料；不会自动执行，员工运行命令仍按审批策略」</td><td><span class="tag bad">P0</span></td></tr>
+<tr><td>7</td><td>企业导入版本号规则</td><td>frontmatter version 合法则用，否则内容哈希前 12 位；内容变化预览提示升级</td><td><span class="tag warn">P2</span></td></tr>
+<tr><td>8</td><td>verify 不可用 / 清单不符</td><td>拒绝导入并说明（完整性，不是安全拦截）</td><td><span class="tag warn">P1</span></td></tr>
+</table>
+<div class="callout green"><b>建议你最先拍板：</b>#6（P0 就要动文案）、#2 与 #1（决定 P4 工作量与用量归属）。</div>
+</section>
+
+</main>
+<script>
+document.querySelectorAll('#tabs-ui button').forEach(function(b){
+  b.addEventListener('click',function(){
+    document.querySelectorAll('#tabs-ui button').forEach(function(x){x.classList.remove('on')});
+    document.querySelectorAll('#s2 .pane').forEach(function(x){x.classList.remove('on')});
+    b.classList.add('on');
+    document.querySelector('#' + CSS.escape(b.dataset.p)).classList.add('on');
+  });
+});
+</script>
+</body>
+</html>

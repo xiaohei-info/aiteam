@@ -21,7 +21,7 @@ from .routes_catalog import router as catalog_router, router_pull as catalog_pul
 from .routes_enterprise import router as enterprise_router
 from .routes_rollup import router as rollup_router
 from .routes_platform_provider import router as platform_provider_router
-from .routes_skill_market import router as skill_market_router
+from .routes_skill_market import CUSTOM_SKILL_MAX_BODY_BYTES, router as skill_market_router
 from .routes_mcp_market import router as mcp_market_router
 from .routes_solution_authoring import router as solution_authoring_router
 from .routes_admin import build_admin_router
@@ -80,9 +80,10 @@ async def whoami(claims: TokenClaims = Depends(require_claims(_verifier))) -> En
     return Envelope[TokenClaims](data=claims)
 
 
-# 行业文档生成的上传在读请求体前就按大小拦截（单文件上限 + 1 MiB 的 multipart 开销余量）。
+# 上传在读请求体前就按大小拦截：行业文档生成（单文件上限 + 1 MiB 的 multipart 开销余量）、自建技能（检查与保存）。
 app = create_app(settings, router, body_limits=(
     BodyLimit("/api/operation/solution-authoring/", MAX_SOURCE_BYTES + 1024 * 1024),
+    BodyLimit("/api/operation/skill-market/custom", CUSTOM_SKILL_MAX_BODY_BYTES),
 ))
 # 系统账号认证服务 + 受保护端点共享验签器（挂 app.state 供业务路由运行时读取）。
 app.state._operation_auth = _auth

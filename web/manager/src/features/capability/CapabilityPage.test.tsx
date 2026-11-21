@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { createI18n, sharedMessages, type AuthSession } from "@aiteam/shared";
 import { SessionContext, type SessionContextValue } from "../../auth/session";
@@ -10,11 +10,14 @@ import { useCapabilityApi, type CapabilityApi } from "./useCapabilityApi";
 import type { ConnectorCatalog, MemoryPolicyCatalog, SkillCatalog } from "./types";
 
 vi.mock("./useCapabilityApi", () => ({ useCapabilityApi: vi.fn() }));
+const modelsApi = { list: async () => ({ providers: [], models: [] }) };
+vi.mock("../platform-models/usePlatformModelsApi", () => ({ usePlatformModelsApi: () => modelsApi }));
 
 const skill: SkillCatalog = {
   catalog_id: "skill-c1", skill_id: "skill-a", display_name: "技能 A", version: "1",
-  install_policy: "on_demand", binding_policy: "opt_in", visibility: "private",
-  config: {}, catalog_version: 1,
+  install_policy: "on_demand", binding_policy: "opt_in", visibility: "tenant",
+  config: {}, catalog_version: 1, package_status: "ready",
+  files: [{ path: "SKILL.md", content: "---\nname: skill-a\ndescription: 技能 A 的说明。写周报时使用。\n---\n# A\n" }, { path: "scripts/a.sh", content: "echo a\n" }],
 };
 const connector: ConnectorCatalog = {
   catalog_id: "connector-c1", connector_id: "connector-a", display_name: "连接器 A",
@@ -39,6 +42,15 @@ function sessionValue(roles: string[]): SessionContextValue {
   return { session, token: "tok", signIn: () => {}, signOut: () => {}, onUnauthorized: () => {} };
 }
 
+/** 「新增技能」是菜单：导入技能 / 让模型帮我找 / 从零写一个。 */
+async function openNewSkillEditor() {
+  fireEvent.click(screen.getByRole("button", { name: "新增技能" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "从零写一个" }));
+  return screen.findByRole("dialog", { name: "从零写一个技能" });
+}
+
+const saved = { origin: { kind: "editor", label: "在线编辑" }, results: [{ root: "", name: "skill-b", version: "abc", status: "installed" }] };
+
 function mockApi(overrides: Partial<CapabilityApi> = {}): CapabilityApi {
   const api: CapabilityApi = {
     listSkills: vi.fn().mockResolvedValue([skill]),
@@ -53,17 +65,20 @@ function mockApi(overrides: Partial<CapabilityApi> = {}): CapabilityApi {
     createMemoryPolicy: vi.fn().mockResolvedValue(memory),
     updateMemoryPolicy: vi.fn().mockResolvedValue(memory),
     deleteMemoryPolicy: vi.fn().mockResolvedValue(undefined),
+    updateSkillSettings: vi.fn().mockResolvedValue(skill),
+    previewSkillImport: vi.fn().mockResolvedValue(null),
+    importSkills: vi.fn().mockResolvedValue(saved),
     ...overrides,
   };
   (useCapabilityApi as unknown as ReturnType<typeof vi.fn>).mockReturnValue(api);
   return api;
 }
 
-function renderPage(roles: string[] = ["owner"]) {
+function renderPage(roles: string[] = ["owner"], state?: unknown) {
   return render(
     <I18nContext.Provider value={makeI18n()}>
       <SessionContext.Provider value={sessionValue(roles)}>
-        <MemoryRouter><CapabilityPage /></MemoryRouter>
+        <MemoryRouter initialEntries={[{ pathname: "/capability", state }]}><CapabilityPage /></MemoryRouter>
       </SessionContext.Provider>
     </I18nContext.Provider>,
   );
@@ -90,51 +105,115 @@ describe("CapabilityPage", () => {
     expect(screen.queryByRole("button", { name: "删除" })).not.toBeInTheDocument();
   });
 
-  it("创建技能：提交默认策略与输入字段", async () => {
+  it("技能表按技能本身展示：说明取自 SKILL.md、成员自装、状态；没有安装 / 绑定策略列", async () => {
+    mockApi({ listSkills: vi.fn().mockResolvedValue([skill, { ...skill, catalog_id: "c2", display_name: "技能 B", visibility: "private", binding_policy: "disabled" }]) });
+    renderPage();
+    const table = await screen.findByRole("table", { name: "技能目录" });
+    expect(within(table).getAllByText("技能 A 的说明。写周报时使用。")).toHaveLength(2);
+    expect(within(table).getByText("可以")).toBeInTheDocument();
+    expect(within(table).getByText("仅配给专家")).toBeInTheDocument();
+    expect(within(table).getByText("已停用")).toBeInTheDocument();
+    for (const gone of ["安装策略", "绑定策略", "可见性", "执行包"]) expect(within(table).queryByText(gone)).toBeNull();
+  });
+
+  it("从零写一个：按 SKILL.md 填名称、说明、指令，存为在线编辑来源并带上两项设置", async () => {
     const api = mockApi();
     renderPage();
     await screen.findByText("技能 A");
-    fireEvent.click(screen.getByRole("button", { name: "新增技能" }));
-    expect(screen.getByRole("dialog", { name: "新增技能" })).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText(/标识/), { target: { value: "skill-b" } });
-    fireEvent.change(screen.getByLabelText(/名称/), { target: { value: "技能 B" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
-    await waitFor(() => expect(api.createSkill).toHaveBeenCalledWith({
-      skill_id: "skill-b",
-      display_name: "技能 B",
-      version: "1",
-      install_policy: "on_demand",
-      binding_policy: "opt_in",
-      visibility: "private",
-      config: {},
-    }));
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "新增技能" })).not.toBeInTheDocument());
+    const dialog = within(await openNewSkillEditor());
+    for (const gone of [/安装策略/, /绑定策略/, /JSON/]) expect(dialog.queryByText(gone)).toBeNull();
+    fireEvent.change(dialog.getByRole("textbox", { name: /^名称/ }), { target: { value: "skill-b" } });
+    fireEvent.change(dialog.getByRole("textbox", { name: /^说明/ }), { target: { value: "整理会议纪要。开完会要出纪要时使用。" } });
+    fireEvent.click(dialog.getByRole("checkbox", { name: /成员可以自己安装/ }));
+    fireEvent.click(dialog.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(api.importSkills).toHaveBeenCalledTimes(1));
+    const input = vi.mocked(api.importSkills).mock.calls[0]![0];
+    expect(input).toMatchObject({ source: "editor", visibility: "private", binding_policy: "opt_in" });
+    expect(input.files!.map((item) => item.path)).toEqual(["SKILL.md"]);
+    expect(await screen.findByText("已新建技能 skill-b")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "从零写一个技能" })).toBeNull();
   });
 
-  it("创建失败：显示错误且保留 Dialog", async () => {
-    const api = mockApi({ createSkill: vi.fn().mockRejectedValue(new Error("boom")) });
+  it("从零写一个：与已有技能重名时提示，不覆盖；保存失败留在弹窗里", async () => {
+    const api = mockApi({ importSkills: vi.fn().mockResolvedValue({ ...saved, results: [{ ...saved.results[0], status: "failed", reason: "技能包不符合规则" }] }) });
     renderPage();
     await screen.findByText("技能 A");
-    fireEvent.click(screen.getByRole("button", { name: "新增技能" }));
-    fireEvent.change(screen.getByLabelText(/标识/), { target: { value: "skill-b" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
-    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("操作失败，请重试"));
-    expect(screen.getByRole("dialog", { name: "新增技能" })).toBeInTheDocument();
-    expect(api.createSkill).toHaveBeenCalledTimes(1);
+    const dialog = within(await openNewSkillEditor());
+    fireEvent.change(dialog.getByRole("textbox", { name: /^名称/ }), { target: { value: "skill-a" } });
+    fireEvent.change(dialog.getByRole("textbox", { name: /^说明/ }), { target: { value: "说明" } });
+    fireEvent.click(dialog.getByRole("button", { name: "保存" }));
+    expect(await dialog.findByText(/企业技能里已有「skill-a」/)).toBeInTheDocument();
+    expect(api.importSkills).not.toHaveBeenCalled();
+    fireEvent.change(dialog.getByRole("textbox", { name: /^名称/ }), { target: { value: "skill-c" } });
+    fireEvent.click(dialog.getByRole("button", { name: "保存" }));
+    expect(await dialog.findByText("技能包不符合规则")).toBeInTheDocument();
   });
 
-  it("编辑技能：保存调用 updateSkill", async () => {
+  it("编辑技能：名称锁定；只改设置时只调 updateSkillSettings，不存新版本", async () => {
     const api = mockApi();
     renderPage();
     await screen.findByText("技能 A");
     fireEvent.click(screen.getAllByRole("button", { name: "编辑" })[0]!);
-    expect(screen.getByRole("dialog", { name: "编辑技能" })).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText(/名称/), { target: { value: "技能 A+" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
-    await waitFor(() => expect(api.updateSkill).toHaveBeenCalledWith(
-      "skill-c1",
-      expect.objectContaining({ display_name: "技能 A+" }),
-    ));
+    const dialog = within(await screen.findByRole("dialog", { name: "编辑技能 技能 A" }));
+    expect(dialog.getByRole("textbox", { name: /^名称/ })).toBeDisabled();
+    expect(dialog.getByRole("textbox", { name: "指令" })).toHaveValue("# A\n");
+    expect(dialog.getByText("scripts/a.sh · 7 B")).toBeInTheDocument();
+    fireEvent.click(dialog.getByRole("checkbox", { name: /停用/ }));
+    fireEvent.click(dialog.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(api.updateSkillSettings).toHaveBeenCalledWith("skill-c1", { skill_id: "skill-a", visibility: "tenant", binding_policy: "disabled" }));
+    expect(api.importSkills).not.toHaveBeenCalled();
+    expect(await screen.findByText("已更新 技能 A 的设置")).toBeInTheDocument();
+  });
+
+  it("改一个开关不动另一项：旧数据的 auto_bind / public 原样保留", async () => {
+    const api = mockApi({ listSkills: vi.fn().mockResolvedValue([{ ...skill, visibility: "public", binding_policy: "auto_bind" }]) });
+    renderPage();
+    await screen.findByText("技能 A");
+    fireEvent.click(screen.getAllByRole("button", { name: "编辑" })[0]!);
+    let dialog = within(await screen.findByRole("dialog", { name: "编辑技能 技能 A" }));
+    fireEvent.click(dialog.getByRole("checkbox", { name: /成员可以自己安装/ }));
+    fireEvent.click(dialog.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(api.updateSkillSettings).toHaveBeenCalledWith("skill-c1", { skill_id: "skill-a", visibility: "private", binding_policy: "auto_bind" }));
+
+    vi.mocked(api.updateSkillSettings).mockClear();
+    fireEvent.click(screen.getAllByRole("button", { name: "编辑" })[0]!);
+    dialog = within(await screen.findByRole("dialog", { name: "编辑技能 技能 A" }));
+    fireEvent.click(dialog.getByRole("checkbox", { name: /停用/ }));
+    fireEvent.click(dialog.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(api.updateSkillSettings).toHaveBeenCalledWith("skill-c1", { skill_id: "skill-a", visibility: "public", binding_policy: "disabled" }));
+  });
+
+  it("编辑技能内容：附带文件照带，存为新版本", async () => {
+    const api = mockApi();
+    renderPage();
+    await screen.findByText("技能 A");
+    fireEvent.click(screen.getAllByRole("button", { name: "编辑" })[0]!);
+    const dialog = within(await screen.findByRole("dialog", { name: "编辑技能 技能 A" }));
+    fireEvent.change(dialog.getByRole("textbox", { name: "指令" }), { target: { value: "# A 改过\n" } });
+    fireEvent.click(dialog.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(api.importSkills).toHaveBeenCalledTimes(1));
+    const input = vi.mocked(api.importSkills).mock.calls[0]![0];
+    expect(input.source).toBe("editor");
+    expect(input.files!.map((item) => item.path)).toEqual(["SKILL.md", "scripts/a.sh"]);
+    expect(input).not.toHaveProperty("visibility");  // 升级保留原设置
+    expect(api.updateSkillSettings).not.toHaveBeenCalled();
+  });
+
+  it("平台技能市场装的技能：只能查看内容，两项设置可改，没有删除", async () => {
+    const api = mockApi({ listSkills: vi.fn().mockResolvedValue([{ ...skill, config: { source: "operator" } }]) });
+    renderPage();
+    const table = await screen.findByRole("table", { name: "技能目录" });
+    await within(table).findByText("技能 A");
+    expect(within(table).queryByRole("button", { name: "删除" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "查看" }));
+    const dialog = within(await screen.findByRole("dialog", { name: "查看技能 技能 A" }));
+    expect(dialog.getByText(/内容由运营端维护/)).toBeInTheDocument();
+    expect(dialog.getByRole("textbox", { name: /^说明/ })).toBeDisabled();
+    expect(dialog.queryByRole("button", { name: "添加文件" })).toBeNull();
+    fireEvent.click(dialog.getByRole("checkbox", { name: /成员可以自己安装/ }));
+    fireEvent.click(dialog.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(api.updateSkillSettings).toHaveBeenCalledWith("skill-c1", { skill_id: "skill-a", visibility: "private", binding_policy: "opt_in" }));
+    expect(api.importSkills).not.toHaveBeenCalled();
   });
 
   it("删除技能：经 AlertDialog 确认后调用 deleteSkill", async () => {
@@ -149,35 +228,115 @@ describe("CapabilityPage", () => {
   });
 });
 
-describe("S05 executable skill package contract", () => {
-  it("metadata-only edits omit files/hash and show a draft as non-executable", async () => {
-    const api = mockApi();
-    renderPage();
-    expect(await screen.findByText("草稿（不可执行）")).toBeInTheDocument();
-    fireEvent.click(screen.getAllByRole("button", { name: "编辑" })[0]!);
-    fireEvent.change(screen.getByLabelText(/名称/), { target: { value: "Only metadata" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
-    await waitFor(() => expect(api.updateSkill).toHaveBeenCalled());
-    const body = vi.mocked(api.updateSkill).mock.calls[0]![1];
-    expect(body).not.toHaveProperty("files");
-    expect(body).not.toHaveProperty("content_hash");
-    expect(body.version).toBe("1");
+describe("导入技能", () => {
+  const item = (root: string, name: string, extra: Record<string, unknown> = {}) => ({
+    root, ok: true, name, description: `${name} 的说明`, version: "1.0.0", file_count: 2, total_bytes: 300,
+    files: [{ path: "SKILL.md", size: 200 }, { path: "scripts/run.sh", size: 100 }], skipped: [], existing: "none", ...extra,
   });
 
-  it("explicit complete package is sent, while malformed JSON is not silently converted to a draft", async () => {
-    const api = mockApi({ listSkills: vi.fn().mockResolvedValue([{ ...skill, package_status: "ready" }]) });
+  async function openImport() {
+    fireEvent.click(await screen.findByRole("button", { name: "新增技能" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "导入技能" }));
+    return screen.findByRole("dialog", { name: "导入技能" });
+  }
+
+  it("表格显示来源列", async () => {
+    mockApi({ listSkills: vi.fn().mockResolvedValue([{ ...skill, config: { source: "clawhub" } }, { ...skill, catalog_id: "c2", config: { source: "operator" } }]) });
     renderPage();
-    expect(await screen.findByText("已验证包")).toBeInTheDocument();
-    fireEvent.click(screen.getAllByRole("button", { name: "编辑" })[0]!);
-    const input = screen.getByLabelText("完整技能包（JSON 文件数组，可选）");
-    fireEvent.change(input, { target: { value: "[invalid" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
-    expect(api.updateSkill).not.toHaveBeenCalled();
-    expect(screen.getByText(/技能包必须是包含 SKILL.md/)).toBeInTheDocument();
-    const files = [{ path: "SKILL.md", content: "---\ndescription: Test\n---\nSynthetic instructions" }];
-    fireEvent.change(input, { target: { value: JSON.stringify(files) } });
-    fireEvent.change(screen.getByLabelText("版本"), { target: { value: "2" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
-    await waitFor(() => expect(api.updateSkill).toHaveBeenCalledWith("skill-c1", expect.objectContaining({ files, version: "2" })));
+    expect(await screen.findByText("ClawHub")).toBeInTheDocument();
+    expect(screen.getByText("平台市场")).toBeInTheDocument();
+  });
+
+  it("粘贴 SKILL.md：检查 → 预览 → 导入，结果分组显示并刷新目录", async () => {
+    const api = mockApi({
+      previewSkillImport: vi.fn().mockResolvedValue({ origin: { kind: "text", label: "粘贴" }, preview: item("", "weekly-report", { skipped: [{ path: "hooks/openclaw/h.js", reason: "platform_hook" }] }) }),
+      importSkills: vi.fn().mockResolvedValue({ origin: { kind: "text", label: "粘贴" }, results: [{ root: "", name: "weekly-report", version: "1.0.0", status: "installed" }] }),
+    });
+    renderPage();
+    await openImport();
+    fireEvent.click(screen.getByRole("button", { name: "粘贴 SKILL.md" }));
+    fireEvent.change(screen.getByLabelText(/SKILL.md 内容/), { target: { value: "---\nname: weekly-report\n---" } });
+    expect(screen.getByRole("button", { name: "导入" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "检查" }));
+    expect(await screen.findByText("weekly-report · v1.0.0")).toBeInTheDocument();
+    expect(screen.getByText("新增")).toBeInTheDocument();
+    expect(screen.getByText("hooks/openclaw/h.js")).toBeInTheDocument();
+    expect(screen.getByText("其他平台专用钩子")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "导入" }));
+    await waitFor(() => expect(api.importSkills).toHaveBeenCalledWith(expect.objectContaining({ source: "text", roots: [""], visibility: "tenant" })));
+    expect(await screen.findByText("已新增 1 个")).toBeInTheDocument();
+    expect(api.listSkills).toHaveBeenCalledTimes(2);
+  });
+
+  it("包里多个技能：只导入勾选的，不能导入的标出原因，同内容的不可选", async () => {
+    const api = mockApi({
+      previewSkillImport: vi.fn().mockResolvedValue({ origin: { kind: "url", label: "u" }, scan: [
+        item("a", "alpha"), item("b", "beta", { existing: "update", existing_version: "0.9.0" }), item("c", "gamma", { existing: "same" }),
+        { ...item("d", ""), ok: false, reason: "SKILL.md 缺少 name" },
+      ] }),
+      importSkills: vi.fn().mockResolvedValue({ origin: { kind: "url", label: "u" }, results: [{ root: "b", name: "beta", version: "1.0.0", status: "updated" }] }),
+    });
+    renderPage();
+    await openImport();
+    fireEvent.click(screen.getByRole("button", { name: "网址" }));
+    fireEvent.change(screen.getByLabelText(/^网址/), { target: { value: "https://github.com/a/b" } });
+    fireEvent.click(screen.getByRole("button", { name: "检查" }));
+    expect(await screen.findByText("将升级 v0.9.0 → v1.0.0")).toBeInTheDocument();
+    expect(screen.getByText("SKILL.md 缺少 name")).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: /gamma/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "导入 2 个" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("checkbox", { name: /alpha/ }));
+    fireEvent.click(screen.getByRole("button", { name: "导入" }));
+    await waitFor(() => expect(api.importSkills).toHaveBeenCalledWith(expect.objectContaining({ roots: ["b"] })));
+    expect(await screen.findByText("已升级新版本 1 个")).toBeInTheDocument();
+  });
+
+  it("ClawHub 同名多作者：选作者后再检查，显示两个扫描器结论与风险提示", async () => {
+    const preview = vi.fn()
+      .mockResolvedValueOnce({ origin: { kind: "clawhub", label: "ClawHub" }, clawhub: { candidates: [{ owner: "a", slug: "x", url: "https://clawhub.ai/a/skills/x" }, { owner: "b", slug: "x", url: "https://clawhub.ai/b/skills/x" }] } })
+      .mockResolvedValueOnce({ origin: { kind: "clawhub", label: "ClawHub" }, preview: item("", "x"), clawhub: { candidates: null, security: { status: "clean", has_warnings: true, scanners: [{ name: "skillspector", status: "suspicious" }, { name: "llm", status: "clean" }] } } });
+    mockApi({ previewSkillImport: preview });
+    renderPage();
+    await openImport();
+    fireEvent.click(screen.getByRole("button", { name: "ClawHub" }));
+    fireEvent.change(screen.getByLabelText(/ClawHub 地址/), { target: { value: "https://clawhub.ai/skills/x" } });
+    fireEvent.click(screen.getByRole("button", { name: "检查" }));
+    fireEvent.click(await screen.findByRole("button", { name: "b/x" }));
+    await waitFor(() => expect(preview).toHaveBeenLastCalledWith({ source: "clawhub", url: "https://clawhub.ai/b/skills/x" }));
+    expect(await screen.findByText("静态扫描：有可疑项")).toBeInTheDocument();
+    expect(screen.getByText("模型复核：未发现风险")).toBeInTheDocument();
+    expect(screen.getByText("扫描提示有风险，仅供参考")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "导入" })).toBeEnabled();
+  });
+
+  it("检查失败显示原因，弹窗保留", async () => {
+    const { ApiError } = await import("@aiteam/shared");
+    mockApi({ previewSkillImport: vi.fn().mockRejectedValue(new ApiError("地址指向内网、本机或保留网段，不允许访问", 422, "validation_error")) });
+    renderPage();
+    const dialog = await openImport();
+    fireEvent.click(screen.getByRole("button", { name: "网址" }));
+    fireEvent.change(screen.getByLabelText(/^网址/), { target: { value: "https://127.0.0.1/a.md" } });
+    fireEvent.click(screen.getByRole("button", { name: "检查" }));
+    expect(await screen.findByText(/不允许访问/)).toBeInTheDocument();
+    expect(dialog).toBeInTheDocument();
+  });
+});
+
+describe("让模型帮我找（技能目录）", () => {
+  it("「新增技能」菜单里有入口，打开查找对话框", async () => {
+    mockApi();
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: /新增技能|添加技能/ }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "让模型帮我找" }));
+    expect(await screen.findByRole("dialog", { name: "让模型帮我找" })).toBeInTheDocument();
+  });
+
+  it("MCP 市场交过来的技能候选：打开导入对话框，停在 ClawHub 并填好地址", async () => {
+    mockApi();
+    const candidate = { kind: "skill", source: "clawhub", url: "https://clawhub.ai/alice/skills/minutes", title: "会议纪要", summary: "", reason: "", verified: true };
+    renderPage(["owner"], { assistCandidate: candidate });
+    const dialog = await screen.findByRole("dialog", { name: "导入技能" });
+    expect(within(dialog).getByRole("button", { name: "ClawHub" })).toHaveAttribute("aria-current", "page");
+    expect(within(dialog).getByDisplayValue("https://clawhub.ai/alice/skills/minutes")).toBeInTheDocument();
   });
 });

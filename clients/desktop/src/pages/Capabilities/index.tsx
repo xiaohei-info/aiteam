@@ -1,6 +1,6 @@
 /**
  * 左侧栏「能力」页：成员本人的个人 MCP 与技能（只在本机、只对本人会话生效）。
- * - MCP：添加 MCP（粘贴配置 / 检查鉴权 / 登录或填令牌）、鉴权状态、重新登录 / 更新令牌 / 退出登录、撤销
+ * - MCP：添加 MCP（从企业拿一键安装 / 粘贴配置、检查鉴权、登录或填令牌）、鉴权状态、重新登录 / 更新令牌 / 退出登录、撤销
  * - 技能：添加技能（企业开放给本人的技能目录）、升级、撤销
  * - 自动安装授权（设计 §11.3）的查看与撤销
  * 原先在「设置」页里，现在单独成页；设置页只留一行链接。
@@ -155,7 +155,7 @@ export default function Capabilities() {
           <h2 id={`capabilities-${kind}-title`}>{mcp ? 'MCP' : '技能'}</h2>
           <p>{mcp
             ? '连接外部服务的工具。可以自己添加，或在对话中员工请求时由你批准安装；需要登录的服务，令牌只加密保存在本机。'
-            : '企业开放给你的说明文档类技能，也可以导入自己的技能（文件夹 / zip / 粘贴 / 网址）。安装后下一轮对话起可用。'}</p>
+            : '企业开放给你的技能，也可以导入自己的技能（文件夹 / zip / 粘贴 / 网址）。安装后下一轮对话起可用。'}</p>
         </div>
         <span className="capabilities-heading-action">
           {items && <span className={`file-access-status ${list.length ? 'granted' : ''}`} style={{ marginLeft: 0 }}>{list.length ? `已安装 ${list.length} 个` : '未安装'}</span>}
@@ -167,7 +167,7 @@ export default function Capabilities() {
       {loading ? <p className="file-access-note" role="status"><LoaderCircle className="file-access-spinner" size={14} aria-hidden="true" />正在读取…</p>
         : items && list.length === 0 ? <div className="file-access-empty">
           <Icon size={20} strokeWidth={1.5} aria-hidden="true" />
-          <div><strong>{mcp ? '还没有安装 MCP' : '还没有安装技能'}</strong><p>{mcp ? '点右上角「添加 MCP」，粘贴服务方给的配置或地址即可。' : '点右上角「添加技能」，从企业开放的技能里选，或导入你自己的技能。'}</p></div>
+          <div><strong>{mcp ? '还没有安装 MCP' : '还没有安装技能'}</strong><p>{mcp ? '点右上角「添加 MCP」，从企业开放的 MCP 里一键安装，或粘贴服务方给的配置或地址。' : '点右上角「添加技能」，从企业开放的技能里选，或导入你自己的技能。'}</p></div>
         </div>
           : items && <ul className="file-access-grants" aria-label={mcp ? '已安装的 MCP' : '已安装的技能'}>{list.map(row)}</ul>}
     </section>
@@ -206,7 +206,7 @@ export default function Capabilities() {
           </span>
         </div>
       </section>
-      <p className="file-access-note"><ShieldCheck size={13} aria-hidden="true" /><span>MCP 每次调用仍需你审批；技能只包含说明文档，不执行代码。撤销后下一轮对话起失效，不影响企业配置。</span></p>
+      <p className="file-access-note"><ShieldCheck size={13} aria-hidden="true" /><span>MCP 每次调用仍需你审批；技能可能附带脚本和资料，不会自动执行，员工运行命令仍按审批策略。撤销后下一轮对话起失效，不影响企业配置。</span></p>
     </div>
     {dialog?.type === 'add-mcp' && <AddMcpDialog onInstalled={() => void load()} onClose={() => setDialog(null)} />}
     {dialog?.type === 'add-skill' && <AddSkillDialog installed={items ?? []} onInstalled={load} onClose={() => setDialog(null)} />}

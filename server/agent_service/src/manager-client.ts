@@ -150,10 +150,11 @@ export interface ManagerKnowledgeSpace {
 }
 
 export interface InstallableSkill { skill_id: string; display_name: string; version: string; content_hash: string; source_skill_id: string; origin: "platform" | "enterprise" }
-/** A platform MCP the enterprise enabled (design §11.3; auth fields: MCP鉴权与配置导入 §3.8). Never carries a secret. */
+/** An MCP the enterprise enabled from the platform catalog or built itself (design §11.3, 2026-11-20 §4.4; auth fields: MCP鉴权与配置导入 §3.8). Never carries a secret. */
 export interface InstallableMcpServer {
   server_id: string; ref: string; display_name: string; summary: string; url: string; tools: string[]; revision: number;
   auth: "none" | "oauth" | "bearer"; auth_header: string; oauth_scopes: string; timeout_ms?: number; oauth_client: "preregistered" | "dynamic";
+  origin: "platform" | "enterprise";
 }
 
 export interface ManagerClient {
@@ -352,6 +353,8 @@ export class HttpManagerClient implements ManagerClient {
         oauth_scopes: typeof item.oauth_scopes === "string" ? item.oauth_scopes : "",
         ...(typeof item.timeout_ms === "number" ? { timeout_ms: item.timeout_ms } : {}),
         oauth_client: item.oauth_client === "preregistered" ? "preregistered" : "dynamic",
+        // Older Managers list only entries enabled from the platform catalog.
+        origin: item.origin === "enterprise" ? "enterprise" : "platform",
       };
     });
   }

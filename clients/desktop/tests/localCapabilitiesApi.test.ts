@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { cancelMcpLogin, deleteCapabilityAutoInstall, deleteLocalCapability, deleteMcpCredential, getApprovalMcpLogin, getMcpLogin, importCustomSkill, installMcpServer, listCapabilityAutoInstall, listLocalCapabilities, probeMcpServer, reopenMcpLogin, startMcpLogin, updateMcpToken } from '../src/api/agent/capabilities.ts'
+import { cancelMcpLogin, deleteCapabilityAutoInstall, deleteLocalCapability, deleteMcpCredential, getApprovalMcpLogin, getMcpLogin, importCustomSkill, installCatalogMcpServer, installMcpServer, listCapabilityAutoInstall, listInstallableMcpServers, listLocalCapabilities, probeMcpServer, reopenMcpLogin, startMcpLogin, updateMcpToken } from '../src/api/agent/capabilities.ts'
 import { isDocumentedRequest } from '../src/api/agent/contract.ts'
 import { approvals } from '../src/api/agent/approvals.ts'
 import { autoInstallKindLabel, capabilitySourceLabel, customSkillIntegrityLabel, isAutoInstalled } from '../src/pages/Capabilities/capabilityLabels.ts'
@@ -133,4 +133,19 @@ test('一个包里多个技能：检查返回清单，安装带 roots', async ()
   assert.equal(first?.scan?.[1]?.ok, false)
   await importCustomSkill(client as never, { source: 'zip', path: '/tmp/a.zip', roots: ['01-weekly-report'] })
   assert.deepEqual(calls[1]!.body, { source: 'zip', path: '/tmp/a.zip', roots: ['01-weekly-report'] })
+})
+
+test('«从企业拿» MCP uses the documented endpoints, encodes the id and sends only replace and the token', async () => {
+  const calls: { method: string; path: string; body?: unknown }[] = []
+  const client = { request: async (o: { method: string; path: string; body?: unknown }) => { calls.push(o); return null } }
+  assert.deepEqual(await listInstallableMcpServers(client as never), [])
+  assert.deepEqual(await installCatalogMcpServer(client as never, 'ent-a/b'), { capability: null, login: null })
+  await installCatalogMcpServer(client as never, 'ent-1', { replace: true, credential: { token: 't' } })
+  assert.deepEqual(calls.map(c => `${c.method} ${c.path}`), [
+    'GET /api/agent/capabilities/installable-mcp-servers',
+    'POST /api/agent/capabilities/mcp/catalog/ent-a%2Fb/install',
+    'POST /api/agent/capabilities/mcp/catalog/ent-1/install',
+  ])
+  assert.deepEqual(calls.map(c => c.body), [undefined, {}, { replace: true, credential: { token: 't' } }])
+  for (const call of calls) assert.equal(isDocumentedRequest(call.method, call.path), true, call.path)
 })

@@ -5,6 +5,7 @@
  * 目录写操作需 owner/enterprise_admin（后端鉴权兜底，前端仅做 UI 门控）。
  */
 import { useMemo } from "react";
+import { skillImportBody } from "@aiteam/shared";
 import { createManagerApiClient } from "../../api/client";
 import { useSession } from "../../auth/session";
 import type {
@@ -14,6 +15,9 @@ import type {
   SkillCatalogIn,
   ConnectorCatalogIn,
   MemoryPolicyCatalogIn,
+  SkillImportInput,
+  SkillImportResponse,
+  SkillSettingsIn,
 } from "./types";
 
 const M = "/api/manager";
@@ -24,6 +28,8 @@ export interface CapabilityApi {
   listMemoryPolicies: () => Promise<MemoryPolicyCatalog[]>;
   createSkill: (input: SkillCatalogIn) => Promise<SkillCatalog | null>;
   updateSkill: (catalogId: string, input: SkillCatalogIn) => Promise<SkillCatalog | null>;
+  /** 只改企业自己的两项设置（成员能否自己安装 / 停用）；平台市场装的技能也可以改。 */
+  updateSkillSettings: (catalogId: string, input: SkillSettingsIn) => Promise<SkillCatalog | null>;
   deleteSkill: (catalogId: string) => Promise<void>;
   createConnector: (input: ConnectorCatalogIn) => Promise<ConnectorCatalog | null>;
   updateConnector: (catalogId: string, input: ConnectorCatalogIn) => Promise<ConnectorCatalog | null>;
@@ -31,6 +37,19 @@ export interface CapabilityApi {
   createMemoryPolicy: (input: MemoryPolicyCatalogIn) => Promise<MemoryPolicyCatalog | null>;
   updateMemoryPolicy: (catalogId: string, input: MemoryPolicyCatalogIn) => Promise<MemoryPolicyCatalog | null>;
   deleteMemoryPolicy: (catalogId: string) => Promise<void>;
+  /** 检查要导入的技能（不写库）。 */
+  previewSkillImport: (input: SkillImportInput) => Promise<SkillImportResponse | null>;
+  /** 把勾选的技能写入企业目录。 */
+  importSkills: (input: SkillImportInput) => Promise<SkillImportResponse | null>;
+}
+
+/** 上传来源与在线编辑用 multipart，其余用 JSON；企业端附带新建条目的可见范围与停用。 */
+function importBody(input: SkillImportInput): FormData | Record<string, unknown> {
+  const { visibility, binding_policy, ...rest } = input;
+  const extra: Record<string, string> = {};
+  if (visibility) extra.visibility = visibility;
+  if (binding_policy) extra.binding_policy = binding_policy;
+  return skillImportBody(rest, extra);
 }
 
 export function useCapabilityApi(): CapabilityApi {
@@ -52,6 +71,7 @@ export function useCapabilityApi(): CapabilityApi {
       async listMemoryPolicies() { return (await c.listGet<MemoryPolicyCatalog>("/api/manager/memory-policies")).items; },
       createSkill: (input) => postSkill(input),
       updateSkill: (catalogId, input) => putSkill(catalogId, input),
+      updateSkillSettings: (catalogId, input) => c.put<SkillCatalog>(`/api/manager/skills/${catalogId}`, { body: input }),
       deleteSkill: async (catalogId) => { await delSkill(catalogId); },
       createConnector: (input) => postConn(input),
       updateConnector: (catalogId, input) => putConn(catalogId, input),
@@ -59,6 +79,8 @@ export function useCapabilityApi(): CapabilityApi {
       createMemoryPolicy: (input) => postMem(input),
       updateMemoryPolicy: (catalogId, input) => putMem(catalogId, input),
       deleteMemoryPolicy: async (catalogId) => { await delMem(catalogId); },
+      previewSkillImport: (input) => c.post<SkillImportResponse>(`${M}/skills/import/preview`, { body: importBody(input) }),
+      importSkills: (input) => c.post<SkillImportResponse>(`${M}/skills/import`, { body: importBody(input) }),
     };
   }, [token, onUnauthorized]);
 }

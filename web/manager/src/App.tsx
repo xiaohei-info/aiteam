@@ -21,7 +21,7 @@ import { OrgPage } from "./features/org";
 import { AuditPage } from "./features/audit";
 import { SolutionApplyHistoryPage } from "./features/solution-apply";
 import { SettingsPage } from "./features/settings";
-import { SkillMarketPage } from "./features/skill-market/SkillMarketPage";
+import { SkillManagementPage } from "./features/skill-market/SkillManagementPage";
 import { McpMarketPage } from "./features/mcp-market/McpMarketPage";
 
 export function App(): React.ReactNode {
@@ -40,7 +40,7 @@ export function App(): React.ReactNode {
         <Route path="/governance" element={<GovernancePage />} />
         <Route path="/knowledge" element={<KnowledgePage />} />
         <Route path="/capability" element={<CapabilityPage />} />
-        <Route path="/skill-market" element={<SkillMarketPage />} />
+        <Route path="/skill-market" element={<SkillManagementPage />} />
         <Route path="/mcp-market" element={<McpMarketPage />} />
         <Route path="/usage" element={<UsagePage />} />
         <Route path="/billing" element={<BillingPage />} />

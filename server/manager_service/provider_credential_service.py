@@ -8,7 +8,8 @@
 - 明文凭据在 service 层经 CryptoService.encrypt 加密后入 repository；service 内部按需解密给
   受控编排面（如按授权 pull provider 配置到用户端，由 Pi ModelRuntime 最小装配）。
 - 可见性/成员级授权真相态：visibility=tenant（租户内全员可用）| members（仅 allowed_member_ids）。
-- 本地最小注入语义不在控制面执行 provider 调用（Manager 不调用 LLM/Relay，04 §6.7 澄清）。
+- 本地最小注入语义不在控制面执行 provider 调用（Manager 不为成员 / 会话调用 LLM/Relay，04 §6.7）。
+  唯一例外是管理员「让模型帮我找」：`capability_assist.py` 经本企业 Relay 做有界调用（设计 2026-11-20 §4.5）。
 - tenant_id 全程经 TenantContext，不手写过滤（D22）。
 """
 

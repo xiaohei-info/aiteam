@@ -1,0 +1,84 @@
+{
+  "_comment": "Shared by server/tests/shared/test_skill_package_contract.py and server/agent_service/src/skills.test.ts. Python signs, Node verifies; both apply the same path cases. Test-only key (seed = bytes 0..31).",
+  "accepted_paths": [
+    "SKILL.md",
+    "references/a.md",
+    "csv.md",
+    "README.md",
+    "package.json",
+    "scripts/extract-skill.sh",
+    "assets/schema.json",
+    "a/b/c/d/e/f/g/h.md",
+    "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  ],
+  "rejected_paths": [
+    "",
+    "../SKILL.md",
+    "/abs.md",
+    "./SKILL.md",
+    "a//b.md",
+    "references\\x.md",
+    ".env",
+    ".aiteam-manifest.json",
+    "scripts/.hidden",
+    ".git/config",
+    "has space.md",
+    "中文.md",
+    "a/b/c/d/e/f/g/h/i.md",
+    "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "a/../b.md"
+  ],
+  "public_key": "MCowBQYDK2VwAyEAA6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=",
+  "key_id": "fixture-key",
+  "signed": {
+    "package": {
+      "skill_id": "self-improving-agent",
+      "version": "4.0.5",
+      "content_hash": "14dac69f84cdd42a",
+      "display_name": "self-improving agent",
+      "description": "Captures learnings",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "content": "---\nname: self-improving-agent\ndescription: Captures learnings\n---\n# Self-Improvement\n",
+          "content_hash": "f52063aa57a69ea9"
+        },
+        {
+          "path": "CHANGELOG.md",
+          "content": "## 4.0.5\n",
+          "content_hash": "acf6ddd3743f54d9"
+        },
+        {
+          "path": "assets/LEARNINGS.md",
+          "content": "# Learnings\n",
+          "content_hash": "302e1a59cb88869c"
+        },
+        {
+          "path": "assets/schema.json",
+          "content": "{\"type\": \"object\"}\n",
+          "content_hash": "eb217225d785a7a5"
+        },
+        {
+          "path": "scripts/extract-skill.sh",
+          "content": "#!/bin/sh\necho extract \"$1\"\n",
+          "content_hash": "dd58a9b367ddd9de"
+        },
+        {
+          "path": "references/deep/a/b/c/d/e/f.md",
+          "content": "deep\n",
+          "content_hash": "64896f89fd111900"
+        },
+        {
+          "path": "csv.md",
+          "content": "# CSV 处理\n逗号分隔。\n",
+          "content_hash": "6cae8e0d13bc3ea4"
+        }
+      ]
+    },
+    "tenant_id": "tenant-a",
+    "member_id": "member-a",
+    "key_id": "fixture-key",
+    "algorithm": "Ed25519",
+    "signature": "jZfquQCjez/bsIGIqKoqwE81pgvhiBWOxSkX2f1QbnCS7UTzGGh1eXWAf8lTE13butB8iJPvRt+L32jnoLSNCQ=="
+  }
+}

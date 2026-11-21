@@ -14,13 +14,13 @@ from shared.contracts.tenancy import TenantContext
 from shared.db import PgTenantRouter
 from shared.errors import Conflict, Forbidden, NotFound, ValidationProblem
 
-from .custom_skill_package import package_status, validate_custom_package
 from .capability_catalog_repository import (
     CapabilityCatalogRepository,
     ConnectorCatalogRow,
     MemoryPolicyCatalogRow,
     SkillCatalogRow,
 )
+from .custom_skill_package import package_status, validate_custom_package
 from .schemas import (
     ConnectorCatalogIn,
     ConnectorCatalogOut,
@@ -38,12 +38,16 @@ _CATALOG_WRITE_ROLES = [
 ]
 
 
-_RESERVED_SKILL_CONFIG_KEYS = ("source", "source_skill_id", "source_version", "source_content_hash")
+_RESERVED_SKILL_CONFIG_KEYS = ("source_skill_id", "source_version", "source_content_hash")
+# 企业导入技能的来源标记（设计 2026-11-20 §4.3）；只有 operator 代表平台技能市场。
+_ENTERPRISE_SKILL_SOURCES = ("custom", "url", "clawhub")
 
 
 def _reject_reserved_skill_config(config: dict | None) -> None:
     """企业自建技能不能冒充平台技能市场来源（设计 §11.3：平台来源可被成员设为自动安装）。"""
     reserved = sorted(key for key in (config or {}) if key in _RESERVED_SKILL_CONFIG_KEYS)
+    if "source" in (config or {}) and (config or {})["source"] not in _ENTERPRISE_SKILL_SOURCES:
+        reserved.append("source")
     if reserved:
         raise ValidationProblem(detail=f"config 不能包含保留键：{', '.join(reserved)}（平台技能只能从技能市场安装）", errors=None)
 
@@ -83,11 +87,13 @@ class CapabilityCatalogService:
     def update_skill(self, ctx: TenantContext, body: SkillCatalogIn, *, catalog_id: str) -> SkillCatalogOut:
         _ensure_can_write(ctx)
         current = self._require_skill(ctx, catalog_id)
-        if current.config.get("source") == "operator":
-            raise Conflict("Operator-managed skills are immutable; update through the platform skill market")
         if body.skill_id != current.skill_id:
             raise Conflict("skill_id is immutable")
         supplied = body.model_fields_set
+        # Platform-market packages are immutable, but whether members may install them and whether the
+        # skill is switched off are the enterprise's own settings (design §4.7).
+        if current.config.get("source") == "operator" and supplied - {"skill_id", "visibility", "binding_policy"}:
+            raise Conflict("Operator-managed skills are immutable; update through the platform skill market")
         if "config" in supplied:
             _reject_reserved_skill_config(body.config)
         files = None

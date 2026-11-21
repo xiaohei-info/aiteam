@@ -12,15 +12,24 @@ verifier 注入：照 build_employee_router 模式，由 app 闭包注入避免�
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request, status
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response
+from pydantic import ValidationError
+from starlette.datastructures import UploadFile
 
 from shared.auth import require_claims, tenant_context_from
 from shared.contracts.auth import TokenClaims
 from shared.contracts.envelope import Envelope, ListEnvelope
 from shared.db import PgTenantRouter
-from shared.errors import AppError
+from shared.errors import AppError, ValidationProblem
+from shared.skill_import import MAX_ARCHIVE_ENTRIES
 
-from .capability_catalog_service import CapabilityCatalogService, build_capability_catalog_service
+from .capability_catalog_repository import CapabilityCatalogRepository
+from .capability_catalog_service import (
+    CapabilityCatalogService,
+    build_capability_catalog_service,
+)
+from .enterprise_audit_repository import build_enterprise_audit_repository
 from .schemas import (
     ConnectorCatalogIn,
     ConnectorCatalogOut,
@@ -28,7 +37,80 @@ from .schemas import (
     MemoryPolicyCatalogOut,
     SkillCatalogIn,
     SkillCatalogOut,
+    SkillImportJsonIn,
+    SkillImportOut,
 )
+from .skill_import_service import ImportRequest, SkillImportService
+
+# 导入请求体上限：技能包 10 MiB + multipart 开销（design 2026-11-20 §4.3；app 以 BodyLimit 在读体前拦截）。
+SKILL_IMPORT_MAX_BODY_BYTES = 12 * 1024 * 1024
+_UPLOAD_SOURCES = ("folder", "zip", "file", "editor")
+_IMPORT_FORM_SCHEMA = {
+    "type": "object",
+    "required": ["source", "files"],
+    "properties": {
+        "source": {"type": "string", "enum": list(_UPLOAD_SOURCES), "description": "folder 上传文件夹；zip 上传一个压缩包；file 上传一个 .md；editor 控制台 SKILL.md 编辑器写的文件（同文件夹）。"},
+        "files": {"type": "array", "items": {"type": "string", "format": "binary"}, "description": "上传的文件；文件夹上传每个文件一项。"},
+        "paths": {"type": "array", "items": {"type": "string"}, "description": "与 files 一一对应的相对路径（文件夹上传用 webkitRelativePath）；缺省用文件名。"},
+        "roots": {"type": "array", "items": {"type": "string"}, "description": "安装时勾选的技能根目录；缺省安装全部可用技能。"},
+        "visibility": {"type": "string", "enum": ["private", "tenant", "public"], "description": "新建条目的可见范围。"},
+        "binding_policy": {"type": "string", "enum": ["opt_in", "auto_bind", "disabled"], "description": "新建条目的绑定策略。"},
+        "install_policy": {"type": "string", "enum": ["on_demand", "pre_install", "pinned"], "description": "新建条目的安装策略。"},
+    },
+}
+_IMPORT_REQUEST_BODY = {
+    "requestBody": {
+        "required": True,
+        "description": "JSON（text / url / clawhub）或 multipart/form-data（folder / zip / file）；请求体最大 12 MiB，技能包最多 256 个文件、共 10 MiB。",
+        "x-max-body-bytes": SKILL_IMPORT_MAX_BODY_BYTES,
+        "content": {
+            "application/json": {"schema": SkillImportJsonIn.model_json_schema()},
+            "multipart/form-data": {"schema": _IMPORT_FORM_SCHEMA},
+        },
+    },
+}
+
+
+def _import_service(request: Request) -> SkillImportService:
+    injected = getattr(request.app.state, "_skill_import_service", None)
+    if injected is not None:
+        return injected
+    dsn = request.app.state.settings.db_url
+    if not dsn:
+        raise _ManagerNotConfigured("Manager 业务 DB 未配置（设置 DB_URL）")
+    router = PgTenantRouter(dsn)
+    service = SkillImportService(CapabilityCatalogRepository(router), audit=build_enterprise_audit_repository(router))
+    request.app.state._skill_import_service = service
+    return service
+
+
+async def _read_import(request: Request) -> tuple[ImportRequest, SkillImportJsonIn]:
+    """multipart（上传）或 JSON（粘贴 / 网址 / ClawHub）→ 统一的导入请求。"""
+    try:
+        if request.headers.get("content-type", "").startswith("multipart/form-data"):
+            form = await request.form(max_files=MAX_ARCHIVE_ENTRIES, max_fields=MAX_ARCHIVE_ENTRIES * 2 + 16)
+            uploads = [item for item in form.getlist("files") if isinstance(item, UploadFile)]
+            paths = [str(item) for item in form.getlist("paths")]
+            if paths and len(paths) != len(uploads):
+                raise ValidationProblem("paths 必须与 files 一一对应")
+            roots = [str(item) for item in form.getlist("roots")]
+            options = SkillImportJsonIn.model_validate({
+                "source": form.get("source"), "roots": roots or None,
+                **{key: form[key] for key in ("visibility", "binding_policy", "install_policy") if form.get(key)},
+            })
+            if options.source not in _UPLOAD_SOURCES:
+                raise ValidationProblem("multipart 只用于 folder / zip / file / editor 来源")
+            entries = [(paths[i] if paths else (upload.filename or ""), await upload.read()) for i, upload in enumerate(uploads)]
+            return ImportRequest(source=options.source, entries=entries, roots=options.roots), options
+        options = SkillImportJsonIn.model_validate(await request.json())
+    except ValidationError as exc:
+        raise ValidationProblem("导入请求格式不对：" + "; ".join(err["msg"] for err in exc.errors()[:3])) from exc
+    except ValueError as exc:  # malformed JSON / multipart
+        raise ValidationProblem("导入请求体无法解析") from exc
+    if options.source in _UPLOAD_SOURCES:
+        raise ValidationProblem("文件夹、压缩包和 .md 文件请用 multipart/form-data 上传")
+    return ImportRequest(source=options.source, text=options.text, url=options.url, roots=options.roots,
+                         expected_hashes=options.expected_hashes), options
 
 
 class _ManagerNotConfigured(AppError):
@@ -63,6 +145,29 @@ def build_capability_router(verifier) -> APIRouter:
     ) -> Envelope[SkillCatalogOut]:
         svc = _service(request)
         return Envelope[SkillCatalogOut](data=svc.create_skill(tenant_context_from(claims), body))
+
+    @router.post(
+        "/skills/import/preview", summary="检查要导入的技能",
+        description="从上传的文件夹 / 压缩包 / .md、粘贴的 SKILL.md、公开 https 网址或 ClawHub 读取技能，校验后返回将导入的文件、跳过的文件、同名情况与 ClawHub 安全扫描结论；不写库。仅 owner / enterprise_admin。",
+        operation_id="manager_skill_import_preview", openapi_extra=_IMPORT_REQUEST_BODY,
+    )
+    async def preview_skill_import(request: Request, claims: TokenClaims = Depends(require)) -> Envelope[SkillImportOut]:
+        req, _options = await _read_import(request)
+        data = await run_in_threadpool(_import_service(request).preview, tenant_context_from(claims), req)
+        return Envelope[SkillImportOut](data=SkillImportOut.model_validate(data))
+
+    @router.post(
+        "/skills/import", summary="导入技能到企业目录",
+        description="按预览勾选的技能写入企业技能目录：新名称新建条目，同名内容不同则升新版本（保留原可见范围与策略），内容相同记为重复；逐个返回结果并写审计（不含文件内容）。仅 owner / enterprise_admin。",
+        operation_id="manager_skill_import", openapi_extra=_IMPORT_REQUEST_BODY,
+    )
+    async def import_skill(request: Request, claims: TokenClaims = Depends(require)) -> Envelope[SkillImportOut]:
+        req, options = await _read_import(request)
+        data = await run_in_threadpool(
+            _import_service(request).install, tenant_context_from(claims), req,
+            visibility=options.visibility, binding_policy=options.binding_policy, install_policy=options.install_policy,
+        )
+        return Envelope[SkillImportOut](data=SkillImportOut.model_validate(data))
 
     @router.get("/skills", description="列本租户所有技能目录条目。", summary="列本租户技能目录", operation_id="manager_skill_catalog_list")
     async def list_skills(

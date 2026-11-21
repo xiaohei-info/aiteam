@@ -1,6 +1,7 @@
 /**
  * 设置「个人能力」里的 MCP 鉴权窗口（设计 2026-11-18 MCP鉴权与配置导入 §3.6 / §3.9）：
- * - 添加 MCP：粘贴配置识别 → 检查鉴权 → 填令牌或到服务方网页登录 → 本机安装（不经对话与模型）
+ * - 添加 MCP：「从企业拿」一键安装企业目录里的 MCP（设计 2026-11-20 §4.4b）；
+ *   「自定义」粘贴配置识别 → 检查鉴权 → 填令牌或到服务方网页登录 → 本机安装（不经对话与模型）
  * - 登录进度：等待浏览器登录，可让本机 Agent 重新打开登录页 / 复制链接 / 取消
  * - 更新令牌：Agent 先用新令牌读一次工具列表，被拒则不保存
  * 令牌只在桌面端 → 本机 Agent 之间流转，提交后立即从界面清空。
@@ -13,6 +14,7 @@ import type { LocalCapability, McpLogin } from '../../api/agent/types'
 import { parseMcpConfig, type McpConfigCandidate, type McpConfigRejected } from '../../lib/mcpConfigImport'
 import { addMcpProblem, addMcpRequest, signInFailureText, type AddMcpForm } from '../../lib/mcpSignIn'
 import { alreadyInstalledText } from '../../lib/alreadyInstalled'
+import { CatalogMcpPanel } from './CatalogMcpPanel'
 import './McpAuth.css'
 
 const errorText = (error: unknown, fallback: string) => error instanceof Error && error.message ? error.message : fallback
@@ -117,8 +119,50 @@ export function McpTokenDialog({ item, onSaved, onClose }: { item: LocalCapabili
 const EMPTY: AddMcpForm = { ref: '', displayName: '', url: '', timeoutMs: 30000, reason: '', auth: null, token: '', header: '', clientId: '', clientSecret: '', replace: false }
 const AUTH_TEXT = { none: '无需登录', oauth: '需要登录服务方账号', bearer: '需要访问令牌' } as const
 
-/** 添加个人 MCP：成员本人在设置里添加，不经对话与模型。 */
+type McpSourceTab = 'catalog' | 'custom'
+
+/** 添加个人 MCP：成员本人在设置里添加，不经对话与模型。默认「从企业拿」，「自定义」为粘贴配置。 */
 export function AddMcpDialog({ onInstalled, onClose }: { onInstalled: () => void; onClose: () => void }) {
+  const [tab, setTab] = useState<McpSourceTab>('catalog')
+  const [login, setLogin] = useState<{ login: McpLogin; name: string } | null>(null)
+  /** 自定义添加完成：只给成功界面，不再显示表单与添加按钮。 */
+  const [done, setDone] = useState('')
+
+  if (login) {
+    return <ChatDialog title={`登录 ${login.name}`} description="登录完成后自动安装" icon={<LogIn size={18} />} className="mcp-dialog" onClose={onClose}>
+      <McpSignInPanel login={login.login} onCompleted={() => { onInstalled(); onClose() }} onClose={onClose} />
+    </ChatDialog>
+  }
+  if (done) {
+    return <ChatDialog title="添加 MCP" description="只装在本机、只对你自己的会话生效" icon={<Plug size={18} />} className="mcp-dialog" onClose={onClose}>
+      <div className="skill-success" aria-label="添加结果">
+        <p className="skill-success-title"><BadgeCheck size={16} aria-hidden="true" />添加完成</p>
+        <ul><li>{done}</li></ul>
+        <footer><button type="button" className="skill-install" onClick={onClose}>完成</button></footer>
+      </div>
+    </ChatDialog>
+  }
+  const onLogin = (next: McpLogin, name: string) => setLogin({ login: next, name })
+  return <ChatDialog title="添加 MCP" description="从企业拿，或粘贴配置自己添加；只装在本机、只对你自己的会话生效" icon={<Plug size={18} />} className="mcp-dialog" onClose={onClose}>
+    <div className="mcp-form">
+      <div className="skill-source-tabs" role="tablist" aria-label="MCP 来源">
+        <button type="button" role="tab" aria-selected={tab === 'catalog'} className={tab === 'catalog' ? 'on' : ''} onClick={() => setTab('catalog')}>从企业拿</button>
+        <button type="button" role="tab" aria-selected={tab === 'custom'} className={tab === 'custom' ? 'on' : ''} onClick={() => setTab('custom')}>自定义</button>
+      </div>
+      {tab === 'catalog'
+        ? <CatalogMcpPanel onInstalled={onInstalled} onLogin={onLogin} onClose={onClose} />
+        : <CustomMcpPanel onInstalled={onInstalled} onLogin={onLogin} onDone={setDone} onClose={onClose} />}
+    </div>
+  </ChatDialog>
+}
+
+/** 「自定义」：粘贴配置或手填地址，检查鉴权后安装。 */
+function CustomMcpPanel({ onInstalled, onLogin, onDone, onClose }: {
+  onInstalled: () => void
+  onLogin: (login: McpLogin, name: string) => void
+  onDone: (text: string) => void
+  onClose: () => void
+}) {
   const [paste, setPaste] = useState('')
   const [imported, setImported] = useState<{ servers: McpConfigCandidate[]; rejected: McpConfigRejected[]; droppedSecret: boolean } | null>(null)
   const [form, setForm] = useState<AddMcpForm>(EMPTY)
@@ -127,11 +171,8 @@ export function AddMcpDialog({ onInstalled, onClose }: { onInstalled: () => void
   const [clash, setClash] = useState(false)
   /** 撞同名已装：展示为状态，不是错误。 */
   const [installed, setInstalled] = useState('')
-  /** 安装完成：只给成功界面，不再显示表单与添加按钮。 */
-  const [done, setDone] = useState('')
   const [busy, setBusy] = useState<'probe' | 'install' | null>(null)
   const [error, setError] = useState('')
-  const [login, setLogin] = useState<McpLogin | null>(null)
   const set = (patch: Partial<AddMcpForm>) => setForm((current) => ({ ...current, ...patch }))
 
   const choose = (server: McpConfigCandidate) => {
@@ -177,12 +218,12 @@ export function AddMcpDialog({ onInstalled, onClose }: { onInstalled: () => void
     const problem = addMcpProblem(current)
     if (problem) { setError(problem); return }
     setBusy('install')
-    setError(''); setDone('')
+    setError('')
     try {
       const result = await agentApi.installMcpServer(addMcpRequest(current))
       set({ token: '', clientSecret: '' })
-      if (result.login) setLogin(result.login)
-      else { setDone(`已添加「${current.displayName || current.ref}」`); onInstalled() }
+      if (result.login) onLogin(result.login, current.displayName || current.ref)
+      else { onDone(`已添加「${current.displayName || current.ref}」`); onInstalled() }
     } catch (err) {
       set({ token: '' })
       // 撞同名已装：不是失败，是「已经装好了」的状态；同时给出覆盖入口。
@@ -192,24 +233,9 @@ export function AddMcpDialog({ onInstalled, onClose }: { onInstalled: () => void
     } finally { setBusy(null) }
   }
 
-  if (login) {
-    return <ChatDialog title={`登录 ${form.displayName || form.ref}`} description="登录完成后自动安装" icon={<LogIn size={18} />} className="mcp-dialog" onClose={onClose}>
-      <McpSignInPanel login={login} onCompleted={() => { onInstalled(); onClose() }} onClose={onClose} />
-    </ChatDialog>
-  }
   const problem = form.url.trim() ? addMcpProblem({ ...form, auth: form.auth === 'bearer' ? 'bearer' : null }) : '请填写 MCP 地址'
   const disabled = busy !== null
-  if (done) {
-    return <ChatDialog title="添加 MCP" description="只装在本机、只对你自己的会话生效" icon={<Plug size={18} />} className="mcp-dialog" onClose={onClose}>
-      <div className="skill-success" aria-label="添加结果">
-        <p className="skill-success-title"><BadgeCheck size={16} aria-hidden="true" />添加完成</p>
-        <ul><li>{done}</li></ul>
-        <footer><button type="button" className="skill-install" onClick={onClose}>完成</button></footer>
-      </div>
-    </ChatDialog>
-  }
-  return <ChatDialog title="添加 MCP" description="只装在本机、只对你自己的会话生效" icon={<Plug size={18} />} className="mcp-dialog" onClose={onClose}>
-    <form className="mcp-form" onSubmit={(event) => { event.preventDefault(); if (!problem && !disabled) void install() }}>
+  return <form className="mcp-form" onSubmit={(event) => { event.preventDefault(); if (!problem && !disabled) void install() }}>
       <label>粘贴配置（可选）
         <textarea
           rows={4} spellCheck={false} value={paste} disabled={disabled}
@@ -279,6 +305,5 @@ export function AddMcpDialog({ onInstalled, onClose }: { onInstalled: () => void
         <button type="button" onClick={onClose}>取消</button>
         <button type="submit" disabled={Boolean(problem) || disabled}>{busy === 'install' ? '正在添加…' : form.auth === 'oauth' ? '添加并登录' : '添加'}</button>
       </footer>
-    </form>
-  </ChatDialog>
+  </form>
 }

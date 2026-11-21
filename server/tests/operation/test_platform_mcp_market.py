@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from operation_service.mcp_probe import (
+from shared.mcp_probe import (
     McpProbeRequest,
     McpProbeResult,
     ProbeBlocked,

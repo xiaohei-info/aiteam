@@ -12,9 +12,6 @@ import uuid
 
 import pytest
 
-from shared.contracts.tenancy import TenantContext
-from shared.errors import Conflict, Forbidden, NotFound
-
 from manager_service.capability_catalog_repository import (
     ConnectorCatalogRow,
     MemoryPolicyCatalogRow,
@@ -29,7 +26,8 @@ from manager_service.schemas import (
     SkillCatalogIn,
     SkillCatalogOut,
 )
-
+from shared.contracts.tenancy import TenantContext
+from shared.errors import Conflict, Forbidden, NotFound
 
 # ---- runtime 中立性（D16 红线：不配置 runtime 非中立）+ 红线相关断言 ----
 
@@ -240,13 +238,17 @@ def test_operator_managed_skill_ids_and_rows_are_immutable_via_generic_crud():
         install_policy="on_demand", binding_policy="opt_in", visibility="tenant",
         config={"source": "operator"}, files=[{"path": "SKILL.md", "content": "# X"}], content_hash="hash",
     )
-    with pytest.raises(Conflict, match="immutable"):
-        svc.update_skill(ctx, SkillCatalogIn(skill_id="platform-real"), catalog_id=row.catalog_id)
+    for change in ({"display_name": "Renamed"}, {"version": "2.0.0"}, {"files": [{"path": "SKILL.md", "content": "# Y"}]}, {"config": {}}):
+        with pytest.raises(Conflict, match="immutable"):
+            svc.update_skill(ctx, SkillCatalogIn(skill_id="platform-real", **change), catalog_id=row.catalog_id)
+    # The enterprise's own switches stay editable: members may self-install / switched off.
+    updated = svc.update_skill(ctx, SkillCatalogIn(skill_id="platform-real", visibility="private", binding_policy="disabled"), catalog_id=row.catalog_id)
+    assert (updated.visibility, updated.binding_policy, updated.version, updated.display_name) == ("private", "disabled", "1.0.0", "Platform")
     with pytest.raises(Conflict, match="immutable"):
         svc.delete_skill(ctx, catalog_id=row.catalog_id)
 
 
-@pytest.mark.parametrize("config", [{"source": "operator"}, {"source_skill_id": "plat-x"}, {"source": "custom"}])
+@pytest.mark.parametrize("config", [{"source": "operator"}, {"source_skill_id": "plat-x"}, {"source": "anything-else"}])
 def test_custom_skills_cannot_claim_platform_origin(config):
     """平台来源的技能可被成员设为自动安装（设计 §11.3），企业自建技能不能写入来源保留键。"""
     from shared.errors import ValidationProblem
@@ -257,6 +259,15 @@ def test_custom_skills_cannot_claim_platform_origin(config):
     created = svc.create_skill(ctx, SkillCatalogIn(skill_id="honest", config={"lang": "py"}))
     with pytest.raises(ValidationProblem):
         svc.update_skill(ctx, SkillCatalogIn(skill_id="honest", config=config), catalog_id=created.catalog_id)
+
+
+@pytest.mark.parametrize("source", ["custom", "url", "clawhub"])
+def test_imported_skill_sources_stay_editable(source):
+    """企业导入的技能带 source=custom|url|clawhub（设计 2026-11-20 §4.3），手动编辑时原样提交不应被拒。"""
+    svc = CapabilityCatalogService(_FakeRepo())
+    ctx = _ctx("t-a")
+    created = svc.create_skill(ctx, SkillCatalogIn(skill_id="imported", config={"source": source}))
+    svc.update_skill(ctx, SkillCatalogIn(skill_id="imported", config={"source": source, "x": 1}), catalog_id=created.catalog_id)
 
 
 def test_skill_id_conflict_within_tenant():

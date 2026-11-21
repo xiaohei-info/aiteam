@@ -645,6 +645,29 @@ export interface McpInstallResult {
   login: McpLogin | null
 }
 
+/**
+ * 「添加 MCP · 从企业拿」的一行：企业从平台启用的或企业自建的 MCP（设计 2026-11-20 §4.4b）。不含任何凭据。
+ * state：install 本机未装；installed 已从该条目装好；update 本机装的是旧修订；conflict 本机已有同标识的其他 MCP。
+ */
+export interface CatalogMcp {
+  server_id: string
+  ref: string
+  display_name: string
+  summary: string
+  url: string
+  tools: string[]
+  auth: 'none' | 'oauth' | 'bearer'
+  origin: 'platform' | 'enterprise'
+  revision: number
+  state: 'install' | 'installed' | 'update' | 'conflict'
+}
+
+/** 地址、工具与鉴权方式都以企业目录为准；更新或替换同标识的其他 MCP 须 replace=true。 */
+export interface CatalogMcpInstallRequest {
+  replace?: boolean
+  credential?: McpBearerCredential
+}
+
 // -------------------- 本地附件 / 产物 --------------------
 
 export interface LocalFileUploadRequest {

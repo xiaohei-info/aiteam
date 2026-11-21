@@ -306,7 +306,7 @@ export interface LocalCapability {
    * user_import: skill the member imported themselves (folder / zip / pasted / https URL, never uploaded).
    */
   source: "user_url" | "enterprise_catalog" | "platform_catalog" | "user_import" | "clawhub_catalog";
-  /** Installed skill version; empty for an MCP. */
+  /** Installed skill version; for an MCP installed from the enterprise catalog, the catalog revision it was installed at; empty otherwise. */
   version: string;
   /** Platform skill id an enterprise-catalog skill was installed from (matches solution recommendations); empty otherwise. */
   source_ref: string;

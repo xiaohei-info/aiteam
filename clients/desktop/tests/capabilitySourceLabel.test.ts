@@ -9,6 +9,8 @@ test('来源显示：本地导入=自定义，ClawHub=平台名', () => {
   assert.equal(capabilitySourceLabel({ kind: 'skill', source: 'enterprise_catalog' }), '企业自建技能')
   assert.equal(capabilitySourceLabel({ kind: 'skill', source: 'platform_catalog' }), '平台技能市场')
   assert.equal(capabilitySourceLabel({ kind: 'mcp', source: 'user_url' }), '手动地址')
+  assert.equal(capabilitySourceLabel({ kind: 'mcp', source: 'enterprise_catalog' }), '企业自建 MCP')
+  assert.equal(capabilitySourceLabel({ kind: 'mcp', source: 'platform_catalog' }), '平台 MCP 目录')
 })
 
 test('ClawHub 技能也有文件完整性标签（与本地导入一致）', () => {

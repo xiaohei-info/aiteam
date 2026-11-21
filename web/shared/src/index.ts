@@ -14,3 +14,4 @@ export * from "./i18n/index.js";
 export * from "./page-shell/index.js";
 export * from "./service-url.js";
 export * from "./theme/index.js";
+export * from "./skills/index.js";

@@ -12,6 +12,8 @@ export interface ExternalSkill {
 
 export interface InternalSkill {
   skill_id: string;
+  /** clawhub 从 ClawHub 导入；custom 运营端自建（上传 / 粘贴 / 网址 / 在线编辑），只有它可以在这里编辑。 */
+  source?: "clawhub" | "custom";
   owner: string;
   slug: string;
   display_name: string;
@@ -23,6 +25,56 @@ export interface InternalSkill {
   content_hash?: string | null;
   status: "draft" | "published" | "unpublished" | "blocked";
   latest_version_status?: "draft" | "published";
+  /** 最新版本导入时的 ClawHub 安全扫描结论（只提示，不拦截）。 */
+  security?: SkillSecurity | null;
+}
+
+/** ClawHub 单个扫描器的结论；两个扫描器并列展示，不合并成一个词。 */
+export interface SkillSecurityScanner {
+  name: string;
+  status: string;
+  verdict?: string | null;
+  confidence?: string | null;
+  recommendation?: string | null;
+  severity?: string | null;
+  issue_count?: number | null;
+}
+
+export interface SkillSecurity {
+  status: string;
+  has_warnings: boolean;
+  scanners: SkillSecurityScanner[];
+}
+
+export interface SkippedFile {
+  path: string;
+  reason: "platform_hook" | "binary" | "unsupported_path";
+}
+
+export interface ExternalSkillPreview {
+  owner: string;
+  slug: string;
+  display_name: string;
+  summary: string;
+  version: string;
+  canonical_url: string;
+  files: { path: string; size: number }[];
+  total_bytes: number;
+  skipped: SkippedFile[];
+  security: SkillSecurity | null;
+  imported_version: string | null;
+}
+
+export interface ClawHubCandidate {
+  owner: string;
+  slug: string;
+  url: string;
+}
+
+export interface ClawHubResolve {
+  slug: string;
+  owner: string | null;
+  candidates: ClawHubCandidate[];
 }
 
 export interface DownloadedSkill {
@@ -30,10 +82,25 @@ export interface DownloadedSkill {
   version: string;
   content_hash: string;
   status: "draft" | "published";
+  owner?: string;
+  slug?: string;
+  display_name?: string;
+  skipped?: SkippedFile[];
+  security?: SkillSecurity | null;
 }
 
 export interface PlatformSkillRef {
   skill_id: string;
   version: string;
   content_hash: string;
+}
+
+/** 平台技能当前版本的全部文件（查看 / 编辑用）。 */
+export interface PlatformSkillFiles {
+  skill_id: string;
+  source: "clawhub" | "custom";
+  display_name: string;
+  summary: string;
+  version?: string | null;
+  files: { path: string; content: string }[];
 }

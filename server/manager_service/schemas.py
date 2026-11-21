@@ -19,6 +19,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from shared.contracts.enums import EnterpriseRole
+from shared.contracts.skill import MAX_SKILL_FILES
 from shared.contracts.snapshot import ExecutionPolicy, ModelPolicy
 
 # resource_type 取值（对齐 MemberGrant 契约）。
@@ -496,7 +497,7 @@ class SkillFileIn(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    path: str = Field(description="技能目录内相对路径（posix，例 SKILL.md / references/foo.md）")
+    path: str = Field(description="技能目录内相对路径（posix，例 SKILL.md / references/foo.md / scripts/run.sh）；各段不得以点开头")
     content: str = Field(default="", description="文件文本内容（utf-8）")
 
 
@@ -518,7 +519,7 @@ class SkillCatalogIn(BaseModel):
     visibility: CatalogVisibility = Field(default="private")
     config: dict[str, Any] = Field(default_factory=dict, description="中立配置（不含 runtime 原生格式，D16）。")
     # M2：技能真相（文件列表 + 包级内容哈希）；供 Agent 端 cache 按 version/hash 判定更新。
-    files: list[SkillFileIn] = Field(default_factory=list, max_length=64, description="显式更新的完整文本包（含 SKILL.md）；PUT省略时保留，空列表仅创建草稿")
+    files: list[SkillFileIn] = Field(default_factory=list, max_length=MAX_SKILL_FILES, description="显式更新的完整 UTF-8 文本包（含 SKILL.md，可带脚本与资料）；PUT省略时保留，空列表仅创建草稿")
     content_hash: str = Field(default="", description="包级内容指纹（SkillPackage 同步 key）")
 
 
@@ -532,6 +533,145 @@ class SkillCatalogOut(SkillCatalogIn):
     files: Any = Field(default_factory=list, description="已存文件原值；旧非法 scalar/object 保留供诊断，package_status=invalid")
     catalog_version: int = Field(description="目录条目版本；配置变更单调递增")
     package_status: Literal["draft", "ready", "invalid"] = Field(default="draft", description="实际包状态；draft/invalid 不可分发执行")
+
+
+SkillImportSource = Literal["folder", "zip", "file", "text", "editor", "url", "clawhub"]
+
+
+class SkillImportJsonIn(BaseModel):
+    """导入技能（JSON 来源：粘贴 / 网址 / ClawHub）。文件夹、压缩包、单个 .md 用 multipart 上传。"""
+
+    model_config = ConfigDict(extra="forbid")
+    source: SkillImportSource = Field(description="来源：text 粘贴 SKILL.md；url 公开 https 网址（GitHub / .zip / .md）；clawhub ClawHub 技能页地址。")
+    text: str = Field(default="", max_length=1024 * 1024, description="source=text 时的 SKILL.md 内容。")
+    url: str = Field(default="", max_length=2048, description="source=url / clawhub 时的地址（仅 https）。")
+    roots: list[str] | None = Field(default=None, max_length=MAX_SKILL_FILES, description="安装时勾选的技能根目录（预览返回的 root）；缺省安装全部可用技能。")
+    expected_hashes: dict[str, str] | None = Field(default=None, max_length=MAX_SKILL_FILES, description="预览返回的 root → content_hash；带上时来源内容与预览不一致即 409 content_changed，需重新预览。远程来源（网址 / ClawHub）建议总是带上。")
+    visibility: CatalogVisibility = Field(default="tenant", description="新建条目的可见范围；已存在的同名技能升版本时保留原值。")
+    binding_policy: SkillBindingPolicy = Field(default="opt_in", description="新建条目的绑定策略。")
+    install_policy: SkillInstallPolicy = Field(default="on_demand", description="新建条目的安装策略。")
+
+
+class SkillImportFileOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    path: str = Field(description="文件相对路径。")
+    size: int = Field(ge=0, description="字节数。")
+
+
+class SkillImportSkippedOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    path: str = Field(description="被跳过的文件路径。")
+    reason: Literal["platform_hook", "binary", "unsupported_path"] = Field(description="platform_hook 其他平台专用钩子；binary 二进制；unsupported_path 路径不支持。")
+
+
+class SkillImportItemOut(BaseModel):
+    """来源里的一个技能（一个含 SKILL.md 的目录）。"""
+
+    model_config = ConfigDict(extra="forbid")
+    root: str = Field(description="包内技能根目录；包根本身是技能时为空串。")
+    ok: bool = Field(description="是否可以导入；否时见 reason。")
+    reason: str | None = Field(default=None, description="不能导入的原因。")
+    name: str = Field(description="SKILL.md 的 name，即目录里的 skill_id。")
+    description: str = Field(description="SKILL.md 的 description。")
+    version: str = Field(description="将写入的版本：frontmatter version，否则内容哈希前 12 位。")
+    content_hash: str | None = Field(default=None, description="内容哈希；导入时放进 expected_hashes，确认导入的就是这次预览的内容。")
+    file_count: int = Field(ge=0, description="将导入的文件数。")
+    total_bytes: int = Field(ge=0, description="将导入的总字节数。")
+    files: list[SkillImportFileOut] = Field(default_factory=list, description="将导入的文件。")
+    skipped: list[SkillImportSkippedOut] = Field(default_factory=list, description="被跳过的文件及原因。")
+    existing: Literal["none", "same", "update"] = Field(description="目录里同名技能：none 没有；same 内容相同（已导入）；update 内容不同（将升新版本）。")
+    existing_version: str | None = Field(default=None, description="目录里同名技能的当前版本。")
+
+
+class SkillImportCandidateOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    owner: str = Field(description="ClawHub 作者。")
+    slug: str = Field(description="技能标识。")
+    url: str = Field(description="ClawHub 页面地址；用它再预览一次即可。")
+
+
+class SkillImportClawHubOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    candidates: list[SkillImportCandidateOut] | None = Field(default=None, description="地址没写作者且有多个同名技能时的候选；否则为空。")
+    security: dict[str, Any] | None = Field(default=None, description="ClawHub 安全扫描结论（status / has_warnings / scanners[]）；只提示不拦截，取不到时为空。")
+    owner: str | None = Field(default=None, description="确定的作者。")
+    slug: str | None = Field(default=None, description="技能标识。")
+
+
+class SkillImportOriginOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: SkillImportSource = Field(description="来源种类。")
+    label: str = Field(description="给人看的来源说明。")
+    url: str | None = Field(default=None, description="远程来源地址。")
+
+
+class SkillImportResultOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    root: str = Field(description="包内技能根目录。")
+    name: str = Field(description="技能名（skill_id）。")
+    version: str = Field(description="写入或已有的版本。")
+    status: Literal["installed", "updated", "duplicate", "failed"] = Field(description="installed 新增；updated 升新版本；duplicate 内容相同未变；failed 失败见 reason。")
+    reason: str | None = Field(default=None, description="失败或重复的原因。")
+    catalog_id: str | None = Field(default=None, description="写入的目录条目 ID。")
+
+
+class SkillImportOut(BaseModel):
+    """预览：单个技能给 preview、多个给 scan；ClawHub 同名多作者只给 clawhub.candidates。安装：给 results。"""
+
+    model_config = ConfigDict(extra="forbid")
+    origin: SkillImportOriginOut = Field(description="来源。")
+    preview: SkillImportItemOut | None = Field(default=None, description="来源里只有一个技能时的预览。")
+    scan: list[SkillImportItemOut] | None = Field(default=None, description="来源里有多个技能时逐个列出，供勾选。")
+    clawhub: SkillImportClawHubOut | None = Field(default=None, description="ClawHub 来源的候选与安全扫描结论。")
+    results: list[SkillImportResultOut] | None = Field(default=None, description="安装结果，逐个技能给出。")
+
+
+class CapabilityAssistModelIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    provider_id: str = Field(min_length=1, max_length=128, description="平台 Provider ID（取自 GET /api/manager/platform-models）。")
+    model_id: str = Field(min_length=1, max_length=256, description="平台模型 ID。")
+
+
+class CapabilityAssistIn(BaseModel):
+    """让模型帮忙找技能 / MCP：只返回候选，不安装、不保存需求与模型输出。"""
+
+    model_config = ConfigDict(extra="forbid")
+    requirement: str = Field(min_length=1, max_length=2000, description="想给员工增加的能力（自然语言）。")
+    link: str = Field(default="", max_length=2048, description="可选：已知的 https 链接（技能页 / 仓库 / MCP 地址）。")
+    config_json: str = Field(default="", max_length=20_000, description="可选：MCP 配置原文。在服务端解析，令牌值丢弃，只把地址与鉴权方式交给模型；不保存。")
+    model: CapabilityAssistModelIn = Field(description="从本企业可见的平台模型中选一个；用量计入企业 owner。")
+
+
+class CapabilityAssistCandidateOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["skill", "mcp"] = Field(description="技能或 MCP。")
+    source: Literal["clawhub", "github", "url", "config"] = Field(description="候选来自哪里。")
+    url: str = Field(description="技能链接或 MCP 地址；必定出现在本次工具结果或管理员给的链接里。")
+    title: str = Field(description="名称。")
+    summary: str = Field(description="用途说明。")
+    reason: str = Field(description="模型给出的推荐理由。")
+    verified: bool = Field(description="模型是否已用 inspect_link 核实过这个链接。")
+    security: dict[str, Any] | None = Field(default=None, description="ClawHub 安全扫描结论；只提示不拦截。")
+
+
+class CapabilityAssistUsageOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    input_tokens: int = Field(description="输入 token（含缓存命中）。")
+    output_tokens: int = Field(description="输出 token。")
+    cost: str | None = Field(default=None, description="USD 费用（十进制字符串）；价格未知时为空。")
+    pricing_status: Literal["known", "unknown"] = Field(description="价格是否已知。")
+
+
+class CapabilityAssistOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    candidates: list[CapabilityAssistCandidateOut] = Field(description="候选，最多 8 个；管理员逐个检查后自行安装。")
+    notes: str = Field(description="模型的补充说明。")
+    incomplete: bool = Field(description="轮数 / 工具次数 / 时间用完或中途出错，结果可能不全。")
+    dropped: int = Field(description="链接不在工具结果里等原因被丢弃的候选数。")
+    error: str | None = Field(default=None, description="模型服务中途出错时的原因。")
+    rounds: int = Field(description="模型调用轮数。")
+    tool_calls: int = Field(description="工具调用次数。")
+    usage: CapabilityAssistUsageOut = Field(description="本次用量，计入企业 owner。")
 
 
 class ConnectorCatalogIn(BaseModel):

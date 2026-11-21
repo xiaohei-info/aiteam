@@ -22,6 +22,12 @@ export interface SkillCatalogIn {
   visibility: CatalogVisibility;
   config: Record<string, unknown>;
 }
+/** 只改两项设置时的请求体：未提供的字段（名称、版本、内容）保持不变。 */
+export interface SkillSettingsIn {
+  skill_id: string;
+  visibility: CatalogVisibility;
+  binding_policy: SkillBindingPolicy;
+}
 export interface ConnectorCatalogIn {
   connector_id: string;
   display_name: string;
@@ -37,4 +43,21 @@ export interface MemoryPolicyCatalogIn {
   retention_days: number | null;
   visibility: CatalogVisibility;
   config: Record<string, unknown>;
+}
+
+/** 导入技能 / 技能编辑（设计 2026-11-20 §4.3 / §4.7）：与运营端共用 @aiteam/shared 的类型。 */
+export type {
+  SkillImportItem,
+  SkillImportResponse,
+  SkillImportResult,
+  SkillImportSource,
+  SkillSecurity,
+  SkillSecurityScanner,
+} from "@aiteam/shared";
+import type { SkillImportInput as SharedSkillImportInput } from "@aiteam/shared";
+
+/** 企业端导入时附带新建条目的设置：可见范围决定成员能否自己安装；停用对应 binding_policy=disabled。 */
+export interface SkillImportInput extends SharedSkillImportInput {
+  visibility?: CatalogVisibility;
+  binding_policy?: SkillBindingPolicy;
 }

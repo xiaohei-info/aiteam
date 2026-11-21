@@ -317,7 +317,8 @@ class BillingRepository:
         with self._router.session(ctx) as s:
             rows = s.execute(
                 "SELECT u.id, u.employee_id, u.member_id, "
-                "COALESCE(NULLIF(e.display_name, ''), NULLIF(e.employee_slug, '')) AS employee_name, "
+                "CASE WHEN u.employee_id IS NULL AND u.summary_id LIKE 'manager-assist-%%' THEN '管理工具' "
+                "ELSE COALESCE(NULLIF(e.display_name, ''), NULLIF(e.employee_slug, '')) END AS employee_name, "
                 "COALESCE(NULLIF(m.display_name, ''), NULL) AS member_name, "
                 "u.window_start, u.window_end, u.token_total, u.cost_total, u.run_count, "
                 "u.pricing_status, u.prompt_count "
