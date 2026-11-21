@@ -390,3 +390,51 @@ def test_route_returns_candidates_and_enforces_roles_and_shape():
     assert client.post("/api/manager/capability-assist", json=body, headers=_hdr(("member",))).status_code == 403
     assert client.post("/api/manager/capability-assist", json={**body, "requirement": ""}, headers=_hdr()).status_code == 422
     assert client.post("/api/manager/capability-assist", json={**body, "extra": 1}, headers=_hdr()).status_code == 422
+
+
+def test_assist_service_wiring_reuses_router_bills_usage_and_needs_db_and_catalog(monkeypatch):
+    """`_assist_service` builds the real service from app state: one cached router, usage billed to the enterprise."""
+    from types import SimpleNamespace
+
+    import manager_service.routes_capability_assist as routes
+
+    built: list[dict] = []
+    routers: list[str] = []
+    upserts: list[tuple] = []
+
+    class _Router:
+        def __init__(self, dsn):
+            routers.append(dsn)
+
+    class _Usage:
+        def __init__(self, router):
+            self.router = router
+
+        def upsert_usage_with_delivery(self, ctx, *, payload, enterprise_id):
+            upserts.append((ctx, payload, enterprise_id))
+
+    monkeypatch.setattr(routes, "PgTenantRouter", _Router)
+    monkeypatch.setattr(routes, "UsageAuditQuotaRepository", _Usage)
+    monkeypatch.setattr(routes, "_import_service", lambda request: "import-service")
+    monkeypatch.setattr(routes, "build_enterprise_audit_repository", lambda router: "audit")
+    monkeypatch.setattr(routes, "_lookup_enterprise_id", lambda request, tenant_id: f"ent-{tenant_id}")
+    monkeypatch.setattr(routes, "earliest_owner", lambda router, ctx: f"owner-of-{ctx}")
+    monkeypatch.setattr(routes, "CapabilityAssistService", lambda **kwargs: built.append(kwargs) or kwargs)
+
+    state = SimpleNamespace(settings=SimpleNamespace(db_url="postgresql://db"), _operator_catalog="operator")
+    request = SimpleNamespace(app=SimpleNamespace(state=state))
+    first = routes._assist_service(request)
+    routes._assist_service(request)
+    assert routers == ["postgresql://db"]  # second call reuses the cached router
+    assert (first["operator"], first["import_service"], first["audit"]) == ("operator", "import-service", "audit")
+    assert first["owner_lookup"]("ctx") == "owner-of-ctx"
+    first["usage_sink"](SimpleNamespace(tenant_id="t1"), {"tokens": 1})
+    assert upserts[0][1:] == ({"tokens": 1}, "ent-t1")
+
+    state._capability_assist_service = "injected"
+    assert routes._assist_service(request) == "injected"
+
+    for missing in (SimpleNamespace(settings=SimpleNamespace(db_url=""), _operator_catalog="operator"),
+                    SimpleNamespace(settings=SimpleNamespace(db_url="postgresql://db"))):
+        with pytest.raises(ServiceUnavailable):
+            routes._assist_service(SimpleNamespace(app=SimpleNamespace(state=missing)))
