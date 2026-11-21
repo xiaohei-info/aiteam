@@ -4,7 +4,7 @@
  * 编辑的是技能本身（SKILL.md 的名称、说明、指令 + 附带文件），用共享的 SkillEditorDialog；
  * 企业自己的设置只有两项真正生效的：
  * - 「成员可以自己安装」：visibility tenant ↔ private（private 时只能由管理员配给专家）；
- * - 「停用」：binding_policy disabled（专家和成员都不能用）。
+ * - 「停用」：binding_policy disabled（成员不能再安装；专家下次同步后跳过；成员自装的不收回）。
  * 从平台技能市场装的技能（设计「技能MCP命名空间出处与更新提示」§4.2）：改了内容就另存为企业自己的副本
  * （企业名/名称，「改自 taiyim/…」），平台原件保留并继续跟随平台更新；只改两项设置则作用于原件。
  */
@@ -58,7 +58,7 @@ function SkillSettings({ memberInstall, disabled, onMemberInstall, onDisabled }:
     <VStack gap={2}>
       <CheckboxInput label="成员可以自己安装" description={MEMBER_INSTALL_HINT} value={memberInstall} onChange={onMemberInstall} />
       {onDisabled && (
-        <CheckboxInput label="停用" description="停用后专家和成员都不能用这个技能，已配置的也会失效。" value={Boolean(disabled)} onChange={onDisabled} />
+        <CheckboxInput label="停用" description="停用后成员不能再安装；已配给专家的，下次同步后专家不再使用它（专家其他能力照常）；成员已自行安装的不受影响。" value={Boolean(disabled)} onChange={onDisabled} />
       )}
     </VStack>
   );
