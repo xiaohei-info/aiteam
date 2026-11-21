@@ -562,6 +562,8 @@ export class HttpManagerClient implements ManagerClient {
           ...(body === undefined ? {} : { "Content-Type": "application/json" }),
           ...(caller.accessToken ? { Authorization: `Bearer ${caller.accessToken}` } : {}),
           ...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}),
+          // 声明本 Agent 能装的技能包格式（2 = 带脚本 / 资料）；企业端据此对老版本提示升级。
+          [SKILL_PACKAGE_FORMAT_HEADER]: String(SKILL_PACKAGE_FORMAT),
         },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
@@ -575,6 +577,7 @@ export class HttpManagerClient implements ManagerClient {
       const message = `Manager returned HTTP ${response.status} for ${path}${detail ? `: ${detail}` : ""}`;
       if (response.status === 404 || response.status === 409) throw new ManagerPolicyDeniedError(response.status, message, problemCode);
       if (response.status === 422) throw new ManagerValidationError(message, problemCode);
+      if (response.status === 426) throw new AgentUpgradeRequiredError(detail.replace(/^agent_upgrade_required:\s*/u, "") || "请升级桌面客户端到最新版");
       throw new ManagerUnavailableError(message, { status: response.status, problemCode });
     }
     return response;
@@ -586,6 +589,10 @@ export class HttpManagerClient implements ManagerClient {
     return body.data ?? value;
   }
 }
+
+/** 技能包格式（对应 Manager shared/contracts/skill.py SKILL_PACKAGE_FORMAT）。 */
+export const SKILL_PACKAGE_FORMAT_HEADER = "X-AITeam-Skill-Package-Format";
+export const SKILL_PACKAGE_FORMAT = 2;
 
 export class ManagerUnavailableError extends Error {
   /** Upstream HTTP status when Manager answered with an unclassified error (for example 413 or 5xx). */
@@ -1113,3 +1120,11 @@ function stringValue(value: unknown, name: string): string {
 }
 function stringArray(value: unknown): string[] { return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []; }
 function objectValue(value: unknown): Record<string, unknown> | undefined { return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined; }
+
+/** 企业端要下发的内容本 Agent 版本处理不了：带着企业端的中文说明让成员升级客户端。 */
+export class AgentUpgradeRequiredError extends ManagerUnavailableError {
+  constructor(message: string) {
+    super(message, { status: 426, problemCode: "agent_upgrade_required" });
+    this.name = "AgentUpgradeRequiredError";
+  }
+}

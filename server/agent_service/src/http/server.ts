@@ -25,7 +25,7 @@ import { ConversationBusyError, EventCursorStaleError, InvalidEventCursorError, 
 import type { ImageContent } from "@earendil-works/pi-ai";
 import { IdempotencyConflictError, IdempotencyUnknownError, type AgentSqliteStore, type ConversationMetadata as StoredConversationMetadata, type IdempotencyReceipt } from "../storage/sqlite.js";
 import { JwtClockError, type AuthenticatedCaller, type AuthenticateRequest } from "./auth.js";
-import { ManagerAuthError, ManagerAuthorizationError, ManagerPolicyDeniedError, ManagerUnavailableError, ManagerValidationError, normalizeAuthorizedConfig, type ManagerClient, type MarketplaceTemplate } from "../manager-client.js";
+import { AgentUpgradeRequiredError, ManagerAuthError, ManagerAuthorizationError, ManagerPolicyDeniedError, ManagerUnavailableError, ManagerValidationError, normalizeAuthorizedConfig, type ManagerClient, type MarketplaceTemplate } from "../manager-client.js";
 import { SessionAuthorizationError, type PromptDeliveryOptions } from "../pi/session-host.js";
 import { serializePiEntry, serializePiEvent } from "../pi/event-sse.js";
 import { materializeAttachments } from "../pi/attachment-tool.js";
@@ -2760,11 +2760,14 @@ export class AgentHttpServer {
           return Array.isArray(values) ? values.filter((ref): ref is string => typeof ref === "string") : [];
         });
         refs.push(...this.options.store.listSnapshots(caller.tenantId, memberId).filter((snapshot) => currentEmployeeIds.has(snapshot.employee_id)).flatMap((snapshot) => skillRefsForSnapshot(snapshot as { skill_refs?: unknown; skills?: unknown })));
-        this.options.skillCache.reconcile({ tenantId: caller.tenantId, memberId }, signedPackages, refs, verification, { authoritative: skillPackagesAuthoritative });
+        // 有会话正在运行时只加新版本、不清旧文件：正在用的技能目录不能被删掉；下次同步再清。
+        const running = this.options.host.hasActiveRunsFor?.(caller.tenantId, memberId) ?? false;
+        this.options.skillCache.reconcile({ tenantId: caller.tenantId, memberId }, signedPackages, refs, verification, { authoritative: skillPackagesAuthoritative && !running });
       }
       this.writeJson(response, 200, { data: { ok: true, ...result, partial: skippedEmployeeIds.length > 0, skipped_employee_ids: skippedEmployeeIds } });
     } catch (error) {
       if (error instanceof ManagerAuthorizationError) throw new HttpProblem(error.status, error.status === 401 ? "unauthenticated" : "forbidden", error.message);
+      if (error instanceof AgentUpgradeRequiredError) throw new HttpProblem(426, "agent_upgrade_required", error.message);
       if (error instanceof ManagerUnavailableError || error instanceof TypeError) throw new HttpProblem(503, "manager_unavailable", "Manager sync is unavailable");
       throw error;
     }
@@ -2809,9 +2812,10 @@ export class AgentHttpServer {
         ? [{ ref: "snapshot", status: "blocked", reason: "skill_snapshot_invalid" }]
         : caller.tenantId && this.options.skillCache
           ? this.options.skillCache.readinessFor({ tenantId: caller.tenantId, memberId }, refs, verification)
-          : refs.map((ref) => ({ ref, status: "blocked", reason: "skill_missing" }));
+          : refs.map((ref) => ({ ref, status: "blocked", reason: "skill_cache_unavailable" }));
     } catch { skills = malformedSnapshot ? [{ ref: "snapshot", status: "blocked", reason: "skill_snapshot_invalid" }] : refs.map((ref) => ({ ref, status: "blocked", reason: "skill_invalid_or_expired" })); }
-    const missing = skills.filter((skill) => skill.status !== "ready");
+    // 企业已删除 / 停用的技能（缓存里没有）运行时会跳过，不让整个专家不可用。
+    const missing = skills.filter((skill) => skill.status !== "ready" && skill.reason !== "skill_missing");
     return { employee_id: expert.employee_id, display_name: expert.display_name, handle: expert.handle, available: !expert.availability_reason && runtime && provider === "ready" && lifecycle === "ready" && missing.length === 0, runtime: runtime ? "ready" : "blocked", provider, skills, capabilities: [], reasons: [ ...missing.map((skill) => `Required skill ${skill.ref}: ${skill.reason}`), ...(runtime ? [] : ["Pi runtime is not ready"]), ...(lifecycle === "ready" ? [] : ["Manager has not activated this expert"]), ...(expert.availability_reason ? [dependencyUnavailable ? "Employee model, provider or price is unavailable" : "Employee is unavailable"] : []), ...(provider === "ready" || dependencyUnavailable ? [] : ["Manager snapshot has no model provider"]) ] };
   }
 
@@ -3511,7 +3515,8 @@ export class AgentHttpServer {
   private writeError(response: ServerResponse, error: unknown, requestId: string): void {
     if (response.writableEnded) return;
     let problem: { status: number; code: string; detail: string; errors?: unknown; meta?: Record<string, string | number | boolean | null> };
-    if (error instanceof HttpProblem || error instanceof AutomationError) problem = { status: error.status, code: error.code, detail: error.message, errors: error instanceof HttpProblem ? error.errors : undefined, meta: error instanceof HttpProblem ? error.meta : undefined };
+    if (error instanceof AgentUpgradeRequiredError) problem = { status: 426, code: "agent_upgrade_required", detail: error.message };
+    else if (error instanceof HttpProblem || error instanceof AutomationError) problem = { status: error.status, code: error.code, detail: error.message, errors: error instanceof HttpProblem ? error.errors : undefined, meta: error instanceof HttpProblem ? error.meta : undefined };
     else if (error instanceof IdempotencyConflictError) problem = { status: 409, code: "idempotency_conflict", detail: error.message };
     else if (error instanceof IdempotencyUnknownError) problem = { status: 409, code: "idempotency_unknown", detail: error.message };
     else if (error instanceof ConversationBusyError) problem = { status: 409, code: "conversation_busy", detail: error.message };

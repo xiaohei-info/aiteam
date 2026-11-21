@@ -498,6 +498,15 @@ export class SessionHost {
     return aborted;
   }
 
+  /** 这位成员是否有任何会话正在运行（含定时任务、群聊、后台任务）：同步时据此推迟清理旧版本技能文件。 */
+  hasActiveRunsFor(tenantId: string | undefined, memberId: string): boolean {
+    return [...this.records.values()].some((record) => {
+      if (!record.prompting && !record.promptPromise) return false;
+      const conversation = this.options.store.getConversation(record.conversationId);
+      return !conversation || ((conversation.tenantId ?? undefined) === tenantId && conversation.memberId === memberId);
+    });
+  }
+
   isPrompting(conversationId: string): boolean {
     return [...this.records.values()].some((record) => record.conversationId === conversationId && record.prompting);
   }

@@ -20,6 +20,17 @@ _SAFE_SEGMENT = re.compile(r"^[A-Za-z0-9._-]+$")
 _PATH_CHARS = re.compile(r"[A-Za-z0-9._/-]+")
 
 # Package limits, aligned with the desktop's local skill import (custom-skills.ts).
+# 技能包格式：1 = 只有 SKILL.md 与 references/*.md；2 = 任意安全相对路径的文本（脚本、资料）。
+# 新版 Agent 在请求头声明自己支持的格式；不声明的视为 1（老 Agent 验签会整包拒绝格式 2 的技能）。
+SKILL_PACKAGE_FORMAT_HEADER = "X-AITeam-Skill-Package-Format"
+SKILL_PACKAGE_FORMAT = 2
+
+
+def required_package_format(paths: list[str]) -> int:
+    legacy = all(path == "SKILL.md" or (path.startswith("references/") and path.endswith(".md")) for path in paths)
+    return 1 if legacy else 2
+
+
 MAX_SKILL_FILES = 256
 MAX_SKILL_FILE_BYTES = 5 * 1024 * 1024
 MAX_SKILL_TOTAL_BYTES = 10 * 1024 * 1024

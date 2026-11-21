@@ -63,6 +63,12 @@ class TooManyRequests(AppError):
     status, code, title = 429, "rate_limited", "Too Many Requests"
 
 
+class UpgradeRequired(AppError):
+    """调用方（成员桌面端内嵌的 Agent）版本太旧，处理不了这次要下发的内容。"""
+
+    status, code, title = 426, "agent_upgrade_required", "Client upgrade required"
+
+
 class ServiceUnavailable(AppError):
     status, code, title = 503, "service_unavailable", "Service Unavailable"
 

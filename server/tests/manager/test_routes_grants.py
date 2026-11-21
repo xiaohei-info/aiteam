@@ -239,8 +239,10 @@ def test_installable_skills_routes_are_not_captured_by_grant_detail():
     fake_auth_cfg.installable_skills.return_value = [
         InstallableSkill(skill_id="sheet", display_name="表格", version="1.0.0", content_hash="h1"),
     ]
+    from shared.contracts.skill import SignedSkillPackage, SkillPackage
     fake_auth_cfg.installable_skill_package.return_value = InstallableSkillPackage.model_construct(
-        package={"skill_id": "sheet"}, signing_keys=[])
+        package=SignedSkillPackage.model_construct(package=SkillPackage.model_construct(skill_id="sheet", files=[])),
+        signing_keys=[])
     with patch("manager_service.routes_member.build_member_dept_service", return_value=(MagicMock(), grant_svc)), \
          patch("manager_service.routes_member._auth_service", return_value=MagicMock()), \
          patch("manager_service.routes_grants.AuthorizedConfigService", return_value=fake_auth_cfg):
@@ -252,3 +254,44 @@ def test_installable_skills_routes_are_not_captured_by_grant_detail():
         assert r.status_code == 200, r.text
     grant_svc.get_grant.assert_not_called()
     fake_auth_cfg.installable_skill_package.assert_called_once()
+
+
+def _package(paths):
+    from shared.contracts.skill import SignedSkillPackage
+    return SignedSkillPackage.model_construct(
+        package=MagicMock(files=[MagicMock(path=path) for path in paths]),
+        tenant_id="t1", member_id="u1", key_id="k", algorithm="Ed25519", signature="s")
+
+
+def test_authorized_config_asks_old_agents_to_upgrade_for_skills_with_scripts():
+    """老 Agent（不声明包格式）遇到带脚本的技能会整次同步失败：改为明确的 426 升级提示。"""
+    from shared.contracts.skill import SKILL_PACKAGE_FORMAT_HEADER
+    from shared.errors import UpgradeRequired
+
+    fakes = (MagicMock(), _fake_grant_svc())
+    fake_auth_cfg = MagicMock()
+    with patch("manager_service.routes_member.build_member_dept_service", return_value=fakes), \
+         patch("manager_service.routes_member._auth_service", return_value=MagicMock()), \
+         patch("manager_service.routes_grants.AuthorizedConfigService", return_value=fake_auth_cfg):
+        c = _client("postgresql://fake/fake")
+        body = {"tenant_id": "t1", "member_id": "u1"}
+        fake_auth_cfg.pull.return_value = MagicMock(skill_packages=[_package(["SKILL.md", "scripts/run.sh"])])
+        r = c.post("/api/manager/grants/authorized-config", json=body, headers=_hdr(user_id="u1"))
+        assert r.status_code == 426 and r.json()["code"] == "agent_upgrade_required" and "升级" in r.json()["detail"]
+        # 只有 SKILL.md / references/*.md 的老格式技能，老 Agent 照常同步。
+        fake_auth_cfg.pull.return_value = AuthorizedConfigPullResponse()
+        assert c.post("/api/manager/grants/authorized-config", json=body, headers=_hdr(user_id="u1")).status_code == 200
+
+    # 新 Agent 声明格式 2，带脚本的照常下发；乱填的头按老版本对待。
+    from manager_service.routes_grants import _ensure_client_can_install
+    scripted = [_package(["SKILL.md", "scripts/run.sh"])]
+    _ensure_client_can_install(MagicMock(headers={SKILL_PACKAGE_FORMAT_HEADER: "2"}), scripted)
+    with pytest.raises(UpgradeRequired):
+        _ensure_client_can_install(MagicMock(headers={SKILL_PACKAGE_FORMAT_HEADER: "x"}), scripted)
+
+
+def test_required_package_format():
+    from shared.contracts.skill import required_package_format
+    assert required_package_format(["SKILL.md", "references/a.md"]) == 1
+    assert required_package_format(["SKILL.md", "scripts/a.sh"]) == 2
+    assert required_package_format(["SKILL.md", "references/data.json"]) == 2

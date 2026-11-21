@@ -153,6 +153,50 @@ test("authoritative empty Manager sync prunes revoked cached skills", async () =
   }
 });
 
+test("sync while a run is active keeps cached skill files, and prunes them on a later idle sync", async () => {
+  const key = generateKeyPairSync("ed25519");
+  const publicKey = key.publicKey.export({ format: "der", type: "spki" }).toString("base64");
+  const cacheRoot = mkdtempSync(join(realpathSync(tmpdir()), "aiteam-skill-active-run-"));
+  const fixture = await createFixture();
+  const cache = new SkillCache(cacheRoot);
+  let running = true;
+  (fixture.host as any).hasActiveRunsFor = (tenantId: string, memberId: string) => running && tenantId === "tenant-a" && memberId === "member-a";
+  cache.reconcile({ tenantId: "tenant-a", memberId: "member-a" }, [signed(key)], ["review"], verification(publicKey));
+  const http = new AgentHttpServer({
+    host: fixture.host,
+    store: fixture.store,
+    skillCache: cache,
+    authenticate: () => ({ callerId: "member-a", userId: "member-a", tenantId: "tenant-a", roles: ["member"] }),
+    managerClient: {
+      pullAuthorizedConfig: async () => ({
+        experts: [{ employee_id: "employee-1", tenant_id: "tenant-a", member_id: "member-a", version: "1", skills: ["review"] }],
+        solutions: [],
+        skill_packages: [],
+      }),
+    } as any,
+  });
+  process.env.AITEAM_SKILL_SIGNING_PUBLIC_KEY = publicKey;
+  process.env.AITEAM_SKILL_SIGNING_KEY_ID = "skill-key-1";
+  await http.listen(0);
+  const address = http.server.address();
+  assert(address && typeof address === "object");
+  try {
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/agent/grants/sync`, { method: "POST", headers: { Authorization: "Bearer test", "Content-Type": "application/json" }, body: JSON.stringify({ tenant_id: "tenant-a", member_id: "member-a", known_versions: {} }) });
+    assert.equal(response.status, 200);
+    assert.equal(cache.pathsFor({ tenantId: "tenant-a", memberId: "member-a" }, ["review"], verification(publicKey)).length, 1);
+    running = false;
+    const idle = await fetch(`http://127.0.0.1:${address.port}/api/agent/grants/sync`, { method: "POST", headers: { Authorization: "Bearer test", "Content-Type": "application/json" }, body: JSON.stringify({ tenant_id: "tenant-a", member_id: "member-a", known_versions: {} }) });
+    assert.equal(idle.status, 200);
+    assert.deepEqual(cache.pathsFor({ tenantId: "tenant-a", memberId: "member-a" }, ["review"], verification(publicKey)), []);
+  } finally {
+    delete process.env.AITEAM_SKILL_SIGNING_PUBLIC_KEY;
+    delete process.env.AITEAM_SKILL_SIGNING_KEY_ID;
+    await http.close();
+    await fixture.close();
+    rmSync(cacheRoot, { recursive: true, force: true });
+  }
+});
+
 test("non-authoritative empty signing keys preserve an existing usable cache", async () => {
   const key = generateKeyPairSync("ed25519");
   const publicKey = key.publicKey.export({ format: "der", type: "spki" }).toString("base64");
@@ -388,7 +432,7 @@ test("skill verification fails closed for missing/mismatched key, scope and trav
   assert.throws(() => verifySignedSkillPackage(bad, { keyId: "skill-key-1", publicKey }), SkillVerificationError);
 });
 
-test("required skill readiness uses persisted signed cache and blocks missing, tampered or unparseable packages", async () => {
+test("required skill readiness uses persisted signed cache, skips missing and blocks tampered or unparseable packages", async () => {
   const key = generateKeyPairSync("ed25519");
   const scope = { tenantId: "tenant-a", memberId: "member-a" };
   const keys = [metadata(key, "skill-key-1")];
@@ -406,7 +450,8 @@ test("required skill readiness uses persisted signed cache and blocks missing, t
     return (await response.json() as any).data;
   };
   try {
-    assert.equal((await get()).available, false);
+    // 缓存里没有（企业删除 / 停用了）：列出原因，但不让专家整个不可用。
+    assert.equal((await get()).available, true);
     assert.equal((await get()).skills[0].reason, "skill_missing");
     cache.reconcile(scope, [signed(key)], ["review@1"], { publicKeys: keys });
     const ready = await get();
@@ -419,7 +464,8 @@ test("required skill readiness uses persisted signed cache and blocks missing, t
     assert.equal(new SkillCache(root).readinessFor(scope, ["review@1"])[0]?.status, "blocked");
     rmSync(join(root, scope.tenantId, scope.memberId, "review", "1"), { recursive: true });
     assert.equal(new SkillCache(root).readinessFor(scope, ["review@1"])[0]?.reason, "skill_missing");
-    assert.throws(() => createControlledResourceLoader("system", cache, { caller: { callerId: scope.memberId, userId: scope.memberId, tenantId: scope.tenantId, roles: [] }, employeeId: "s05", snapshot: { employee_id: "s05", version: "1", snapshot_version: "s1", display_name: "Fixture", skill_refs: ["review@1"] } }), /Required signed skill/);
+    // 缺失的技能运行时跳过，会话照常建出来。
+    assert.doesNotThrow(() => createControlledResourceLoader("system", cache, { caller: { callerId: scope.memberId, userId: scope.memberId, tenantId: scope.tenantId, roles: [] }, employeeId: "s05", snapshot: { employee_id: "s05", version: "1", snapshot_version: "s1", display_name: "Fixture", skill_refs: ["review@1"] } }));
   } finally { await http.close(); await fixture.close(); rmSync(root, { recursive: true, force: true }); }
 });
 

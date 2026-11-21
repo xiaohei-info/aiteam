@@ -643,7 +643,12 @@ export function skillResourcePaths(cache: SkillCache, scope: SkillScope, refs: r
   const loadedPaths = new Set<string>();
   for (const ref of new Set(refs)) {
     const paths = cache.pathsFor(scope, [ref], verification);
-    if (paths.length !== 1) throw new SkillVerificationError("Required signed skill is missing, invalid or expired; sync with Manager");
+    if (paths.length === 0 && cache.readinessFor(scope, [ref], verification)[0]?.reason === "skill_missing") {
+      // 企业删除或停用了专家配的技能：缓存里已没有它，跳过这一个，专家照常可用（被篡改 / 过期的仍然拦下）。
+      diagnostics.push({ type: "warning", message: `Skill ${ref} is no longer provided by the enterprise; skipped` });
+      continue;
+    }
+    if (paths.length !== 1) throw new SkillVerificationError("Required signed skill is invalid or expired; sync with Manager");
     const path = paths[0]!;
     const result = loadSkillsFromDir({ dir: path, source: "aiteam-manager" });
     if (result.skills.length !== 1) throw new SkillVerificationError("Required signed skill cannot be loaded by Pi; sync with Manager");

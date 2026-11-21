@@ -21,7 +21,8 @@ from shared.contracts.crosstier import (
 )
 from shared.contracts.envelope import Envelope, ListEnvelope
 from shared.db import PgTenantRouter
-from shared.errors import AppError, Forbidden, ValidationProblem
+from shared.contracts.skill import SKILL_PACKAGE_FORMAT_HEADER, SignedSkillPackage, required_package_format
+from shared.errors import AppError, Forbidden, UpgradeRequired, ValidationProblem
 
 from .capability_origin import app_enterprise_namespace
 from .authorized_config_service import AuthorizedConfigService
@@ -119,6 +120,19 @@ async def list_installable_skills(
         ctx, enterprise_namespace=app_enterprise_namespace(request.app)(ctx)))
 
 
+_UPGRADE_MESSAGE = "企业配置的技能带有脚本或资料，当前桌面客户端版本装不了，请升级到最新版后重新打开"
+
+
+def _ensure_client_can_install(request: Request, packages: list[SignedSkillPackage]) -> None:
+    """老版本 Agent 遇到格式 2 的技能会整次同步失败：明确告诉成员升级，而不是报「企业服务不可用」。"""
+    try:
+        supported = int(request.headers.get(SKILL_PACKAGE_FORMAT_HEADER) or 1)
+    except ValueError:
+        supported = 1
+    if any(required_package_format([f.path for f in item.package.files]) > supported for item in packages):
+        raise UpgradeRequired(_UPGRADE_MESSAGE)
+
+
 @router.get(
     "/grants/skills/{skill_id}/package",
     description="取为当前成员签名的技能包与验签公钥。技能不在可自行安装范围内返回 404。只读。",
@@ -131,7 +145,9 @@ async def get_installable_skill_package(
     claims: TokenClaims = Depends(_token_claims),
 ) -> Envelope[InstallableSkillPackage]:
     ctx = tenant_context_from(claims)
-    return Envelope[InstallableSkillPackage](data=_authorized_config_service(request).installable_skill_package(ctx, skill_id))
+    package = _authorized_config_service(request).installable_skill_package(ctx, skill_id)
+    _ensure_client_can_install(request, [package.package])
+    return Envelope[InstallableSkillPackage](data=package)
 
 
 @router.get("/grants/{grant_id}", description="授权详情（按 tenant 裁剪）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="授权详情（按 tenant 裁剪）", operation_id="manager_get_grant")
@@ -188,4 +204,6 @@ async def pull_authorized_config(
         raise Forbidden("tenant_id mismatch: body does not match token claims")
     ctx = tenant_context_from(claims)
     svc = _authorized_config_service(request)
-    return Envelope[AuthorizedConfigPullResponse](data=svc.pull(ctx, body))
+    result = svc.pull(ctx, body)
+    _ensure_client_can_install(request, result.skill_packages)
+    return Envelope[AuthorizedConfigPullResponse](data=result)
