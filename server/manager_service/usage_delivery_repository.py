@@ -60,6 +60,9 @@ _DELIVERY_COLUMNS = (
     "member_id, employee_id"
 )
 
+# claim_due 的 UPDATE ... FROM due 里 due 也有 id：RETURNING 必须带表别名，否则 PG 报「列引用 "id" 存在歧义」。
+_QUALIFIED_DELIVERY_COLUMNS = ", ".join(f"delivery.{column.strip()}" for column in _DELIVERY_COLUMNS.split(","))
+
 
 def _to_uuid(value: str | UUID | None) -> UUID | None:
     if value is None or value == "":
@@ -448,7 +451,7 @@ class UsageOperatorDeliveryRepository:
                     claim_token = %s, claimed_at = now(), updated_at = now()
                 FROM due
                 WHERE delivery.id = due.id
-                RETURNING """ + _DELIVERY_COLUMNS,
+                RETURNING """ + _QUALIFIED_DELIVERY_COLUMNS,
                 (
                     MAX_DELIVERY_ATTEMPTS,
                     DELIVERY_CLAIM_LEASE_SECONDS,
