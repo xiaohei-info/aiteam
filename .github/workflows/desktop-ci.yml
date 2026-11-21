@@ -170,3 +170,11 @@ jobs:
       - name: Clippy
         working-directory: clients/desktop/src-tauri
         run: cargo clippy --locked --all-targets -- -D warnings
+
+      # 安装器脚本只在 Windows 安装阶段执行，这里至少保证它能被 PowerShell 解析（含 BOM/中文编码）。
+      - name: Installer scripts
+        shell: pwsh
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile('src-tauri/resources/installer/fetch-gitbash.ps1', [ref]$null, [ref]$errors) | Out-Null
+          if ($errors.Count) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }

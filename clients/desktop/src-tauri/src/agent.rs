@@ -169,6 +169,98 @@ const INHERITED_ENV: &[&str] = if cfg!(windows) {
     &["HOME", "USER", "LOGNAME", "PATH", "TMPDIR", "LANG"]
 };
 
+/// A full Git for Windows installation, which Pi's `getShellConfig` checks before PATH. Its tool set
+/// is larger than MinGit's, so the bundled copy must never take precedence over it.
+#[cfg(windows)]
+fn full_git_bash() -> Option<PathBuf> {
+    ["ProgramFiles", "ProgramFiles(x86)"]
+        .iter()
+        .filter_map(std::env::var_os)
+        .map(|root| PathBuf::from(root).join("Git").join("bin").join("bash.exe"))
+        .find(|bash| bash.is_file())
+}
+
+/// Directories of the MinGit tree the installer drops next to the bundled Agent
+/// (`<install>/gitbash`). The Agent resolves its shell with `where bash.exe`, so these must lead PATH;
+/// `cmd` carries the git wrapper used by the bash tool. Neither exists when the installer could not
+/// fetch MinGit, in which case the inherited PATH is left untouched. A full Git installation wins:
+/// prepending MinGit there would shadow its larger tool set for every bash tool call.
+#[cfg(windows)]
+fn bundled_bash_dirs_with(agent: &Path, full_git: Option<&Path>) -> Vec<PathBuf> {
+    if full_git.is_some() {
+        return Vec::new();
+    }
+    let Some(gitbash) = agent.parent().map(|parent| parent.join("gitbash")) else {
+        return Vec::new();
+    };
+    let bin = gitbash.join("usr").join("bin");
+    if !bin.join("bash.exe").is_file() {
+        return Vec::new();
+    }
+    let cmd = gitbash.join("cmd");
+    if cmd.is_dir() {
+        vec![bin, cmd]
+    } else {
+        vec![bin]
+    }
+}
+
+#[cfg(windows)]
+fn bundled_bash_dirs(agent: &Path) -> Vec<PathBuf> {
+    let full_git = full_git_bash();
+    bundled_bash_dirs_with(agent, full_git.as_deref())
+}
+
+/// `where bash.exe` candidates that Pi can actually use. The Windows WSL stub has no `-c` transport
+/// (`getShellConfig` rewrites it), but plain `bash.exe` under System32 is not a usable Git Bash.
+#[cfg(windows)]
+fn is_usable_bash_path(line: &str) -> bool {
+    let normalized = line.trim().replace('/', "\\").to_ascii_lowercase();
+    !normalized.is_empty()
+        && !normalized.ends_with("\\windows\\system32\\bash.exe")
+        && !normalized.ends_with("\\windows\\sysnative\\bash.exe")
+}
+
+/// Whether the Agent will find a shell on this machine; used to explain readiness timeouts.
+#[cfg(windows)]
+fn bash_is_available(agent: &Path) -> bool {
+    if full_git_bash().is_some() || !bundled_bash_dirs_with(agent, None).is_empty() {
+        return true;
+    }
+    Command::new("where")
+        .arg("bash.exe")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| {
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .any(is_usable_bash_path)
+        })
+        .unwrap_or(false)
+}
+
+/// Build a PATH value with `dirs` first and the inherited entries after them.
+#[cfg(windows)]
+fn prepend_path_dirs(dirs: &[PathBuf], inherited: Option<&std::ffi::OsStr>) -> OsString {
+    let mut path = OsString::new();
+    for dir in dirs {
+        if !path.is_empty() {
+            path.push(";");
+        }
+        path.push(dir.as_os_str());
+    }
+    if let Some(existing) = inherited {
+        if !existing.is_empty() {
+            if !path.is_empty() {
+                path.push(";");
+            }
+            path.push(existing);
+        }
+    }
+    path
+}
+
 fn copy_config_tree(source: &Path, destination: &Path) -> std::io::Result<()> {
     fs::create_dir_all(destination)?;
     for entry in fs::read_dir(source)? {
@@ -279,6 +371,18 @@ fn launch(agent: &Path, root: &Path, log: &Path) -> Result<Child, String> {
     for key in INHERITED_ENV {
         if let Some(value) = std::env::var_os(key) {
             command.env(key, value);
+        }
+    }
+    // The installer ships MinGit under `<install>/gitbash`; put it ahead of the inherited PATH so
+    // Pi's `where bash.exe` resolves on machines without Git for Windows.
+    #[cfg(windows)]
+    {
+        let bash_dirs = bundled_bash_dirs(agent);
+        if !bash_dirs.is_empty() {
+            command.env(
+                "PATH",
+                prepend_path_dirs(&bash_dirs, std::env::var_os("PATH").as_deref()),
+            );
         }
     }
     // The private directory-authority channel is a macOS Unix-socket feature.
@@ -452,9 +556,27 @@ async fn wait_until_ready(
         }
         tokio::time::sleep(Duration::from_millis(300)).await;
     }
-    Err(format!(
+    let mut message = format!(
         "Agent 启动超时，未通过 healthz / readyz 检查；最后状态：{last_observation}"
-    ))
+    );
+    #[cfg(windows)]
+    {
+        let agent_dir = state.0.lock().unwrap().agent_dir.clone();
+        if let Some(agent) = agent_dir {
+            if !bash_is_available(&agent) {
+                crate::diagnostics::host_event_fields(
+                    root,
+                    "agent.bash_missing",
+                    "error",
+                    serde_json::json!({ "code": "bash_missing" }),
+                );
+                message = format!(
+                    "本机缺少可用的 bash：内置 Git Bash 未安装，且系统没有 Git for Windows。请联网后重新运行安装程序，或安装 Git for Windows；最后状态：{last_observation}"
+                );
+            }
+        }
+    }
+    Err(message)
 }
 
 impl Runtime {
@@ -635,6 +757,71 @@ mod tests {
         let root = std::env::temp_dir().join(format!("aiteam-{label}-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         root
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn bundled_bash_dirs_follow_the_installed_gitbash_tree() {
+        let root = temporary_root("gitbash");
+        let agent = root.join("agent");
+        fs::create_dir_all(&agent).unwrap();
+        assert!(bundled_bash_dirs_with(&agent, None).is_empty());
+        fs::create_dir_all(root.join("gitbash/usr/bin")).unwrap();
+        fs::write(root.join("gitbash/usr/bin/bash.exe"), "stub").unwrap();
+        assert_eq!(
+            bundled_bash_dirs_with(&agent, None),
+            vec![root.join("gitbash/usr/bin")]
+        );
+        fs::create_dir_all(root.join("gitbash/cmd")).unwrap();
+        assert_eq!(
+            bundled_bash_dirs_with(&agent, None),
+            vec![root.join("gitbash/usr/bin"), root.join("gitbash/cmd")]
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_full_git_install_wins_over_the_bundled_tree() {
+        let root = temporary_root("gitbash-preference");
+        let agent = root.join("agent");
+        fs::create_dir_all(&agent).unwrap();
+        fs::create_dir_all(root.join("gitbash/usr/bin")).unwrap();
+        fs::write(root.join("gitbash/usr/bin/bash.exe"), "stub").unwrap();
+        let full_git = root.join("Git/bin/bash.exe");
+        fs::create_dir_all(full_git.parent().unwrap()).unwrap();
+        fs::write(&full_git, "stub").unwrap();
+        // MinGit's tool set is smaller, so it must never shadow a real Git for Windows install.
+        assert!(bundled_bash_dirs_with(&agent, Some(&full_git)).is_empty());
+        assert!(!bundled_bash_dirs_with(&agent, None).is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_wsl_bash_stub_is_not_a_usable_shell() {
+        assert!(is_usable_bash_path(r"C:\Program Files\Git\bin\bash.exe"));
+        assert!(is_usable_bash_path(r"C:\msys64\usr\bin\bash.exe"));
+        assert!(!is_usable_bash_path(r"C:\Windows\System32\bash.exe"));
+        assert!(!is_usable_bash_path("C:/Windows/Sysnative/bash.exe"));
+        assert!(!is_usable_bash_path("  "));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn bundled_bash_leads_the_agent_path() {
+        let dirs = [
+            PathBuf::from(r"C:\app\gitbash\usr\bin"),
+            PathBuf::from(r"C:\app\gitbash\cmd"),
+        ];
+        assert_eq!(
+            prepend_path_dirs(&dirs, Some(std::ffi::OsStr::new(r"C:\Windows"))),
+            OsString::from(r"C:\app\gitbash\usr\bin;C:\app\gitbash\cmd;C:\Windows")
+        );
+        assert_eq!(
+            prepend_path_dirs(&dirs, None),
+            OsString::from(r"C:\app\gitbash\usr\bin;C:\app\gitbash\cmd")
+        );
     }
 
     fn write_env(root: &Path, body: &str) -> PathBuf {

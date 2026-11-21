@@ -54,7 +54,8 @@ async function bundle() {
       b.onResolve({ filter: /^\.\.?\// }, (a: any) => {
         if (a.kind === 'entry-point' || /\.css$/.test(a.path)) return undefined
         if (a.path === './components/Layout') return undefined
-        if (a.importer.endsWith('Layout/index.tsx') && a.path === './TopBar') return undefined
+        // esbuild reports importer paths with the host separator (backslashes on Windows).
+        if (/(?:^|[\\/])Layout[\\/]index\.tsx$/.test(a.importer) && a.path === './TopBar') return undefined
         return { path: a.path, namespace: 'stub' }
       })
       b.onLoad({ filter: /.*/, namespace: 'stub' }, ({ path }: { path: string }) => ({

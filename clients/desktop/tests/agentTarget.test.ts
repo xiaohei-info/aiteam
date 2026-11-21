@@ -18,18 +18,26 @@ test('each target launches its own bundled Node executable', () => {
   assert.throws(() => agentRuntimePath('win32-arm64'), /Unsupported/)
 })
 
-test('Windows extracts with System32 bsdtar, never unzip or a PATH tar', () => {
+test('Windows extracts with Windows PowerShell Expand-Archive, never unzip or a PATH tar', () => {
   const calls: Array<{ command: string; args: readonly string[] }> = []
   const run = (command: string, args: readonly string[] = []) => {
     calls.push({ command, args })
     return ''
   }
-  extractArchive('C:\\dl\\a.zip', 'C:\\tmp\\x', { platform: 'win32', run })
-  assert.match(calls[0].command, /System32[\\/]tar\.exe$/i)
-  assert.deepEqual(calls[0].args, ['-xf', 'C:\\dl\\a.zip', '-C', 'C:\\tmp\\x'])
+  extractArchive('C:\\dl\\a.zip', 'C:\\tmp\\x', { platform: 'win32', run, systemRoot: 'C:\\Windows' })
+  assert.match(calls[0].command, /System32[\\/]WindowsPowerShell[\\/]v1\.0[\\/]powershell\.exe$/i)
+  assert.deepEqual(calls[0].args.slice(0, 4), ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass'])
+  const script = calls[0].args.at(-1) ?? ''
+  // The module path is built with path.join, so it carries the host separator on non-Windows CI.
+  const modulePath = path.join('C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'Modules', 'Microsoft.PowerShell.Archive', 'Microsoft.PowerShell.Archive.psd1')
+  const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  assert.match(script, new RegExp(`Import-Module '${escapeRegExp(modulePath)}' -Force`))
+  assert.match(script, /Expand-Archive -LiteralPath 'C:\\dl\\a\.zip' -DestinationPath 'C:\\tmp\\x' -Force/)
+  extractArchive("C:\\dl\\o'brien.zip", "C:\\tmp\\o'brien", { platform: 'win32', run, systemRoot: 'C:\\Windows' })
+  assert.match(calls[1].args.at(-1) ?? '', /-LiteralPath 'C:\\dl\\o''brien\.zip' -DestinationPath 'C:\\tmp\\o''brien'/)
   extractArchive('/dl/a.zip', '/tmp/x', { platform: 'darwin', run })
   extractArchive('/dl/a.tar.gz', '/tmp/x', { platform: 'darwin', run })
-  assert.deepEqual(calls.slice(1).map((call) => call.command), ['unzip', 'tar'])
+  assert.deepEqual(calls.slice(2).map((call) => call.command), ['unzip', 'tar'])
 })
 
 // Fake extractor: each archive name maps to the entries it "contains".
