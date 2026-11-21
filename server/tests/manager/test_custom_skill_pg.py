@@ -175,3 +175,28 @@ def test_platform_market_row_allows_only_the_enterprise_switches_in_sql(migrated
     with pytest.raises(Conflict, match="immutable"):
         service.update_skill(ctx, SkillCatalogIn(skill_id="platform-pg-switches", display_name="Renamed"), catalog_id=row.catalog_id)
     assert repo.get_skill(ctx, catalog_id=row.catalog_id).display_name == "Platform"
+    # The enterprise may remove it from its list (no SQL guard against DELETE); it can be added again later.
+    service.delete_skill(ctx, catalog_id=row.catalog_id)
+    assert repo.get_skill(ctx, catalog_id=row.catalog_id) is None
+
+
+def test_platform_package_moves_in_place_and_only_for_platform_rows(migrated_db, two_tenants):
+    """Design「技能MCP命名空间出处与更新提示」§4.3: one row per platform skill; updates keep id, switches and bindings."""
+    router = PgTenantRouter(migrated_db)
+    ctx = TenantContext(tenant_id=two_tenants[0], user_id="fixture", roles=["owner"])
+    repo = CapabilityCatalogRepository(router)
+    files = [{"path": "SKILL.md", "content": "---\nname: x\ndescription: d\n---\n"}]
+    row = repo.create_skill(ctx, skill_id="platform-pg-move", display_name="X", version="1", install_policy="on_demand",
+                            binding_policy="disabled", visibility="private", config={"source": "operator", "source_version": "1"},
+                            files=files, content_hash="h1")
+    moved = repo.replace_platform_package(ctx, catalog_id=row.catalog_id, display_name="X2", version="2",
+                                          config={"source": "operator", "source_version": "2"}, files=files, content_hash="h2")
+    assert (moved.skill_id, moved.version, moved.content_hash, moved.visibility, moved.binding_policy) == ("platform-pg-move", "2", "h2", "private", "disabled")
+    assert moved.catalog_version > row.catalog_version
+    own = repo.create_skill(ctx, skill_id="own-pg-move", display_name="o", version="1", install_policy="on_demand", binding_policy="opt_in",
+                            visibility="tenant", config={"source": "custom"}, files=files, content_hash="h")
+    assert repo.replace_platform_package(ctx, catalog_id=own.catalog_id, display_name="o", version="2", config={"source": "operator"},
+                                         files=files, content_hash="h2") is None
+    other = TenantContext(tenant_id=two_tenants[1], user_id="fixture", roles=["owner"])
+    assert repo.replace_platform_package(other, catalog_id=row.catalog_id, display_name="x", version="3", config={"source": "operator"},
+                                         files=files, content_hash="h3") is None

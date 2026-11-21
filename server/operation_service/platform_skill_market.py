@@ -11,6 +11,12 @@ from urllib.parse import quote
 
 import httpx
 
+from shared.capability_namespace import (
+    PLATFORM_NAMESPACE,
+    clawhub_provenance,
+    namespace_for,
+    normalize_provenance,
+)
 from shared.errors import Conflict, NotFound, TooManyRequests, ValidationProblem
 from shared.skill_import import (  # noqa: F401 (clawhub_url_parts / normalize_security re-exported)
     CLAWHUB_REGISTRY_FILES,
@@ -202,6 +208,7 @@ class CustomSkillState:
     latest_version: str | None
     latest_hash: str | None
     versions: dict[str, str]  # version -> content_hash
+    provenance: dict | None = None  # where it came from, when not written by the platform itself
 
 
 def plan_custom_version(existing: CustomSkillState | None, *, content_hash: str, declared: str) -> tuple[str, str]:
@@ -223,6 +230,12 @@ def plan_custom_version(existing: CustomSkillState | None, *, content_hash: str,
     if version in existing.versions:
         raise Conflict("这个版本号已被占用，请改 SKILL.md 里的 version")
     return "update", version
+
+
+def skill_origin(source: str, owner: str, slug: str, stored: Any) -> dict[str, Any]:
+    """`namespace` / `provenance` of a platform skill (design「技能MCP命名空间出处与更新提示」§4.1)."""
+    provenance = clawhub_provenance(owner, slug) if source == "clawhub" else normalize_provenance(stored)
+    return {"namespace": namespace_for(PLATFORM_NAMESPACE, provenance), "provenance": provenance}
 
 
 def _stored_security(value: Any) -> dict | None:
@@ -277,7 +290,7 @@ class PlatformSkillRepository:
         sql = (
             "SELECT s.id, s.external_owner, s.external_slug, s.display_name, s.summary, "
             "s.latest_external_version, s.latest_internal_version, s.published_version, s.status, "
-            "latest.content_hash, published.content_hash, latest.status, latest.security, s.source "
+            "latest.content_hash, published.content_hash, latest.status, latest.security, s.source, s.provenance "
             "FROM platform_skill s "
             "LEFT JOIN platform_skill_version latest ON latest.platform_skill_id=s.id AND latest.version=s.latest_internal_version "
             "LEFT JOIN platform_skill_version published ON published.platform_skill_id=s.id AND published.version=s.published_version"
@@ -288,7 +301,7 @@ class PlatformSkillRepository:
         sql += " ORDER BY s.display_name, s.external_owner, s.external_slug"
         with psycopg.connect(self._dsn, autocommit=True) as conn:
             rows = conn.execute(sql, args).fetchall()
-        return [{"skill_id": str(r[0]), "owner": r[1], "slug": r[2], "display_name": r[3], "summary": r[4], "latest_external_version": r[5], "latest_internal_version": r[6], "published_version": r[7], "status": r[8], "latest_content_hash": r[9], "content_hash": r[10], "latest_version_status": r[11], "security": _stored_security(r[12]), "source": r[13]} for r in rows]
+        return [{"skill_id": str(r[0]), "owner": r[1], "slug": r[2], "display_name": r[3], "summary": r[4], "latest_external_version": r[5], "latest_internal_version": r[6], "published_version": r[7], "status": r[8], "latest_content_hash": r[9], "content_hash": r[10], "latest_version_status": r[11], "security": _stored_security(r[12]), "source": r[13], **skill_origin(r[13], r[1], r[2], r[14])} for r in rows]
 
     def find_custom(self, *, name: str) -> CustomSkillState | None:
         import psycopg
@@ -298,7 +311,7 @@ class PlatformSkillRepository:
     @staticmethod
     def _custom_state(conn, *, name: str, lock: bool) -> CustomSkillState | None:
         row = conn.execute(
-            "SELECT id, latest_internal_version FROM platform_skill WHERE source='custom' AND external_owner=%s AND external_slug=%s"
+            "SELECT id, latest_internal_version, provenance FROM platform_skill WHERE source='custom' AND external_owner=%s AND external_slug=%s"
             + (" FOR UPDATE" if lock else ""),
             (CUSTOM_OWNER, name),
         ).fetchone()
@@ -307,11 +320,14 @@ class PlatformSkillRepository:
         versions = dict(conn.execute(
             "SELECT version, content_hash FROM platform_skill_version WHERE platform_skill_id=%s", (row[0],),
         ).fetchall())
-        return CustomSkillState(str(row[0]), row[1], versions.get(row[1]) if row[1] else None, versions)
+        return CustomSkillState(str(row[0]), row[1], versions.get(row[1]) if row[1] else None, versions, normalize_provenance(row[2]))
 
     def save_custom(self, *, name: str, description: str, files: list[dict[str, str]], content_hash: str,
-                    declared_version: str, auto_publish: bool, source_url: str) -> dict:
-        """Store a custom skill's files as a new immutable version (or report it unchanged)."""
+                    declared_version: str, auto_publish: bool, source_url: str, provenance: dict | None = None) -> dict:
+        """Store a custom skill's files as a new immutable version (or report it unchanged).
+
+        `provenance` replaces the skill's recorded origin (None: the platform wrote it).
+        """
         import psycopg
         from psycopg.types.json import Json
         with psycopg.connect(self._dsn, autocommit=False) as conn:
@@ -321,9 +337,9 @@ class PlatformSkillRepository:
                 conn.rollback()
                 return {"skill_id": existing.skill_id, "name": name, "version": version, "status": "duplicate"}
             skill_id = existing.skill_id if existing else str(conn.execute(
-                "INSERT INTO platform_skill (source, external_owner, external_slug, display_name, summary, status) "
-                "VALUES ('custom', %s, %s, %s, %s, 'draft') RETURNING id",
-                (CUSTOM_OWNER, name, name, description),
+                "INSERT INTO platform_skill (source, external_owner, external_slug, display_name, summary, status, provenance) "
+                "VALUES ('custom', %s, %s, %s, %s, 'draft', %s) RETURNING id",
+                (CUSTOM_OWNER, name, name, description, Json(provenance) if provenance else None),
             ).fetchone()[0])
             if existing is None or version not in existing.versions:
                 conn.execute(
@@ -335,12 +351,12 @@ class PlatformSkillRepository:
                 conn.execute("UPDATE platform_skill_version SET status='published' WHERE platform_skill_id=%s AND version=%s", (skill_id, version))
             if auto_publish:
                 conn.execute(
-                    "UPDATE platform_skill SET display_name=%s, summary=%s, latest_internal_version=%s, published_version=%s, status='published' WHERE id=%s",
-                    (name, description, version, version, skill_id),
+                    "UPDATE platform_skill SET display_name=%s, summary=%s, latest_internal_version=%s, published_version=%s, status='published', provenance=%s WHERE id=%s",
+                    (name, description, version, version, Json(provenance) if provenance else None, skill_id),
                 )
             else:
-                conn.execute("UPDATE platform_skill SET display_name=%s, summary=%s, latest_internal_version=%s WHERE id=%s",
-                             (name, description, version, skill_id))
+                conn.execute("UPDATE platform_skill SET display_name=%s, summary=%s, latest_internal_version=%s, provenance=%s WHERE id=%s",
+                             (name, description, version, Json(provenance) if provenance else None, skill_id))
             conn.commit()
         return {"skill_id": skill_id, "name": name, "version": version,
                 "status": "installed" if existing is None else "updated", "published": auto_publish}

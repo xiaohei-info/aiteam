@@ -9,6 +9,7 @@ import { useNetworkStatus } from './hooks/useNetwork'
 import { useGlobalActivity } from './hooks/useGlobalActivity'
 import OfflineOverlay from './components/OfflineOverlay'
 import GrantsSyncNotice from './components/GrantsSyncNotice'
+import CapabilityUpdateWatcher from './components/CapabilityUpdateWatcher'
 import RechargePromptDialog from './components/Billing/RechargePromptDialog'
 import ApprovalDialog from './components/Approvals/ApprovalDialog'
 import BackendStartupScreen from './components/AppRecovery/BackendStartupScreen'
@@ -283,6 +284,7 @@ export default function App() {
       {!isOnline && <OfflineOverlay />}
       {isAuthenticated && <CommandPalette />}
       {isAuthenticated && <GrantsSyncNotice key={sessionGeneration} />}
+      {isAuthenticated && <CapabilityUpdateWatcher key={sessionGeneration} />}
       {isAuthenticated && <ConversationHistorySearch />}
       {isAuthenticated && (
         <Suspense fallback={null}>

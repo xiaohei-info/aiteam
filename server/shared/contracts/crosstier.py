@@ -201,6 +201,18 @@ class SolutionPackage(BaseModel):
 
 # ---- Agent → Manager（用户端主动访问）----
 
+class CapabilityProvenance(BaseModel):
+    """来自其他平台的技能 / MCP 的出处（设计 2026-11-20「技能MCP命名空间出处与更新提示」§4.1）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["clawhub", "url", "platform"]
+    label: str = Field(description="展示用出处，如「ClawHub steipete/weather」「github.com/acme/skills」「taiyim/weather」")
+    url: str = Field(default="", description="出处链接（https）；没有时为空")
+    version: str = Field(default="", description="改编时的上游版本")
+    edited: bool = Field(default=False, description="false：原样取自该处（「来自」）；true：我们改过（「改自」）")
+
+
 class InstallableSkill(BaseModel):
     """成员可在对话中自行安装的企业技能（只读摘要，不含文件内容）。"""
 
@@ -215,6 +227,9 @@ class InstallableSkill(BaseModel):
         default="enterprise",
         description="platform：从平台技能市场安装到企业目录；enterprise：企业自建。只有 platform 可使用「以后自动安装」",
     )
+    name: str = Field(default="", description="SKILL.md 里的 name；成员本机同名技能只能装一个（员工只会用到第一个）")
+    namespace: str = Field(default="", description="展示前缀：平台为 taiyim，企业为企业名称（未设置时企业代码）；原样取自其他平台的为空")
+    provenance: CapabilityProvenance | None = Field(default=None, description="来自其他平台时的出处")
 
 
 class InstallableMcpServer(BaseModel):
@@ -238,6 +253,7 @@ class InstallableMcpServer(BaseModel):
         default="platform",
         description="platform：企业从平台 MCP 目录启用；enterprise：企业自建。只有 platform 可使用「以后自动安装」",
     )
+    namespace: str = Field(default="", description="展示前缀：平台为 taiyim，企业自建为企业名称（未设置时企业代码）")
 
 
 class InstallableSkillPackage(BaseModel):

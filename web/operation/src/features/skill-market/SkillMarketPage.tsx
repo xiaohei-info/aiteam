@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import type { SkillFile } from "@aiteam/shared";
+import { CapabilityOrigin, capabilityTitle, type SkillFile } from "@aiteam/shared";
 import { Badge } from "@astryxdesign/core/Badge";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
@@ -132,14 +132,15 @@ export function SkillMarketPage(): ReactNode {
                   <Card key={skill.skill_id} padding={4}>
                     <HStack justify="between" align="start" wrap="wrap" gap={3}>
                       <VStack gap={1} style={TEXT_COLUMN}>
-                        <Heading level={3}>{skill.display_name || skill.slug}</Heading>
+                        <Heading level={3}>{capabilityTitle(skill.namespace, skill.display_name || skill.slug)}</Heading>
                         <Text color="secondary">{skill.summary || "暂无描述"}</Text>
-                        <Text color="secondary">{skill.source === "custom" ? `平台自建 · ${skill.slug}` : `${skill.owner}/${skill.slug}`} · v{skill.latest_internal_version}</Text>
+                        <CapabilityOrigin provenance={skill.provenance} />
+                        <Text color="secondary">{skill.source === "custom" ? "平台自建" : "ClawHub 导入"} · v{skill.latest_internal_version}</Text>
                         {skill.source !== "custom" && <HStack gap={2} wrap="wrap"><SecurityBadges security={skill.security} /></HStack>}
                       </VStack>
                       <HStack gap={2} style={ACTIONS}>
                         <Button
-                          label={skill.source === "custom" ? "编辑" : "查看"}
+                          label="编辑"
                           size="sm"
                           variant="ghost"
                           isLoading={busy === `files:${skill.skill_id}`}

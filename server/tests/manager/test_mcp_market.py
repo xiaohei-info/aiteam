@@ -195,7 +195,7 @@ def test_routes_roundtrip():
         "server_id": "s1", "ref": "mes-lookup", "display_name": "MCP mes-lookup", "summary": "用途",
         "url": "https://mcp.example.com/mes-lookup", "tools": ["a", "b"], "revision": 1,
         "auth": "none", "auth_header": "", "oauth_scopes": "", "timeout_ms": 30000, "oauth_client": "dynamic",
-        "origin": "platform",
+        "origin": "platform", "namespace": "taiyim",  # 平台 MCP 一律 taiyim/（设计「技能MCP命名空间出处与更新提示」§4.1）
     }]
     assert client.delete("/api/manager/mcp-market/s1", headers=owner).status_code == 204
 

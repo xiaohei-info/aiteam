@@ -123,9 +123,8 @@ class CapabilityCatalogService:
 
     def delete_skill(self, ctx: TenantContext, *, catalog_id: str) -> None:
         _ensure_can_write(ctx)
-        current = self._require_skill(ctx, catalog_id)
-        if current.config.get("source") == "operator":
-            raise Conflict("Operator-managed skills are immutable; uninstall through the platform skill market")
+        # 平台技能的内容不可改，但企业可以把它移出自己的列表（之后可从平台技能重新添加）。
+        self._require_skill(ctx, catalog_id)
         if not self._repo.delete(ctx, resource_kind="skill", catalog_id=catalog_id):
             raise NotFound("skill not found in this tenant")
 

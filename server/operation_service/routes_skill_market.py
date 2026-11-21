@@ -22,6 +22,7 @@ from starlette.datastructures import UploadFile
 
 from shared.auth import authorize, require_claims
 from shared.contracts.auth import TokenClaims
+from shared.contracts.crosstier import CapabilityProvenance
 from shared.contracts.enums import PlatformRole
 from shared.contracts.envelope import Envelope, ListEnvelope, Page
 from shared.contracts.platform_skill import PlatformSkillPackage
@@ -154,6 +155,8 @@ class PlatformSkillOut(BaseModel):
     version_id: str | None = Field(default=None, description="导入版本 ID。")
     version: str | None = Field(default=None, description="导入版本号。")
     security: SkillSecurityOut | None = Field(default=None, description="最新版本导入时的 ClawHub 安全扫描结论。")
+    namespace: str = Field(default="", description="展示前缀：平台自建与改编的为 taiyim；原样取自 ClawHub / 网址的为空。")
+    provenance: CapabilityProvenance | None = Field(default=None, description="来自其他平台时的出处（ClawHub / 网址）；改编副本 edited=true。")
 
 
 class PlatformSkillImportOut(BaseModel):
@@ -259,6 +262,7 @@ _CUSTOM_BODY = {
                     "files": {"type": "array", "items": {"type": "string", "format": "binary"}},
                     "paths": {"type": "array", "items": {"type": "string"}},
                     "roots": {"type": "array", "items": {"type": "string"}},
+                    "fork_of": {"type": "string", "description": "editor：编辑 ClawHub 技能另存为平台副本时，原 ClawHub 技能的 skill_id；副本标「改自 ClawHub …」，原件保留。"},
                 },
             }},
         },
@@ -352,7 +356,10 @@ async def _read_custom(request: Request) -> CustomSkillRequest:
                 raise ValidationProblem("paths 必须与 files 一一对应")
             roots = [str(item) for item in form.getlist("roots")]
             entries = [(paths[i] if paths else (upload.filename or ""), await upload.read()) for i, upload in enumerate(uploads)]
-            return CustomSkillRequest(source=source, entries=entries, roots=roots or None)
+            fork_of = str(form.get("fork_of") or "")
+            if fork_of and source != "editor":
+                raise ValidationProblem("fork_of 只用于在线编辑")
+            return CustomSkillRequest(source=source, entries=entries, roots=roots or None, fork_of=fork_of)
         body = CustomSkillJsonIn.model_validate(await request.json())
     except ValidationError as exc:
         raise ValidationProblem("请求格式不对：" + "; ".join(err["msg"] for err in exc.errors()[:3])) from exc

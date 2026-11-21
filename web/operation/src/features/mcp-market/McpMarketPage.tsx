@@ -1,3 +1,4 @@
+import { capabilityTitle } from "@aiteam/shared";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { ApiError } from "@aiteam/shared";
 import { Badge } from "@astryxdesign/core/Badge";
@@ -86,7 +87,7 @@ export function McpMarketPage(): ReactNode {
                     </HStack>
                     <Text color="secondary">{item.summary || "暂无用途说明"}</Text>
                     <Text color="secondary" style={{ wordBreak: "break-all" }}>{item.url}</Text>
-                    <Text color="secondary">标识 {item.ref} · 修订 {item.revision} · 超时 {Math.round(item.timeout_ms / 1000)} 秒 · 工具：{item.tools.length ? item.tools.join("、") : "以成员登录后实际工具为准"}</Text>
+                    <Text color="secondary">标识 {capabilityTitle(item.namespace ?? "taiyim", item.ref)} · 修订 {item.revision} · 超时 {Math.round(item.timeout_ms / 1000)} 秒 · 工具：{item.tools.length ? item.tools.join("、") : "以成员登录后实际工具为准"}</Text>
                   </VStack>
                   <HStack gap={2}>
                     <Button label="编辑" size="sm" variant="ghost" onClick={() => setEditing(item)} isDisabled={busy !== null} />

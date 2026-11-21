@@ -11,10 +11,12 @@ from operation_service.platform_custom_skill import (
 from operation_service.platform_skill_market import (
     CustomSkillState,
     plan_custom_version,
+    skill_origin,
 )
 from shared.contracts.enums import PlatformRole
-from shared.errors import NotFound
+from shared.errors import NotFound, ValidationProblem
 from shared.skill_package import catalog_package
+from shared.skill_sources import Gathered, Origin
 from tests.operation.auth_helpers import operation_test_token
 
 
@@ -33,6 +35,7 @@ class _Store:
     def __init__(self, auto_publish=True):
         self.auto_publish = auto_publish
         self.skills: dict[str, dict] = {}
+        self.hub: dict[str, dict] = {}  # ClawHub rows by skill_id
 
     def get_setting(self):
         return self.auto_publish
@@ -42,16 +45,21 @@ class _Store:
         if skill is None:
             return None
         versions = {v: data["hash"] for v, data in skill["versions"].items()}
-        return CustomSkillState(skill["id"], skill["latest"], versions.get(skill["latest"]), versions)
+        return CustomSkillState(skill["id"], skill["latest"], versions.get(skill["latest"]), versions, skill.get("provenance"))
 
-    def save_custom(self, *, name, description, files, content_hash, declared_version, auto_publish, source_url):
+    def get_internal(self, *, skill_id):
+        if skill_id in self.hub:
+            return self.hub[skill_id]
+        raise NotFound("platform skill not found")
+
+    def save_custom(self, *, name, description, files, content_hash, declared_version, auto_publish, source_url, provenance=None):
         existing = self.find_custom(name=name)
         state, version = plan_custom_version(existing, content_hash=content_hash, declared=declared_version)
         if state == "same":
             return {"skill_id": existing.skill_id, "name": name, "version": version, "status": "duplicate"}
         skill = self.skills.setdefault(name, {"id": f"id-{name}", "versions": {}, "latest": None, "published": None, "summary": ""})
         skill["versions"].setdefault(version, {"hash": content_hash, "files": files})
-        skill["latest"], skill["summary"] = version, description
+        skill["latest"], skill["summary"], skill["provenance"] = version, description, provenance
         if auto_publish:
             skill["published"] = version
         return {"skill_id": skill["id"], "name": name, "version": version, "status": "installed" if existing is None else "updated"}
@@ -181,6 +189,57 @@ def test_routes_reject_unauthenticated_and_wrong_transport(client):
     response = client.post("/api/operation/skill-market/custom/preview", headers=_auth(), files=files, data={"source": "text"})
     assert response.status_code == 422 and "multipart" in response.text
     assert client.get("/api/operation/skill-market/internal/nope/files", headers=_auth()).status_code == 404
+
+
+# ---- namespace / provenance (design「技能MCP命名空间出处与更新提示」§4.1–4.2) ----
+
+def test_origin_of_clawhub_custom_and_edited_rows():
+    hub = skill_origin("clawhub", "steipete", "weather", None)
+    assert hub["namespace"] == "" and hub["provenance"]["label"] == "ClawHub steipete/weather" and not hub["provenance"]["edited"]
+    assert skill_origin("custom", "platform", "weekly-report", None) == {"namespace": "taiyim", "provenance": None}
+    copy = skill_origin("custom", "platform", "weather", {"kind": "clawhub", "label": "ClawHub steipete/weather", "edited": True, "version": "1.0.0"})
+    assert copy["namespace"] == "taiyim" and copy["provenance"]["version"] == "1.0.0"
+
+
+def test_editing_a_clawhub_skill_saves_our_copy_that_cites_it_and_keeps_citing_after_more_edits():
+    store = _Store()
+    store.hub["hub-1"] = {"skill_id": "hub-1", "source": "clawhub", "owner": "steipete", "slug": "weather", "latest_internal_version": "1.0.0"}
+    svc = CustomSkillService(store)
+    svc.save(CustomSkillRequest(source="editor", entries=[("SKILL.md", _skill("weather", body="# 改过\n").encode())], fork_of="hub-1"))
+    prov = store.skills["weather"]["provenance"]
+    assert prov["kind"] == "clawhub" and prov["edited"] is True and prov["version"] == "1.0.0"
+    svc.save(CustomSkillRequest(source="editor", entries=[("SKILL.md", _skill("weather", body="# 再改\n").encode())]))
+    assert store.skills["weather"]["provenance"] == prov
+    assert "hub-1" in store.hub  # the ClawHub original stays
+
+
+def test_fork_of_must_name_a_clawhub_skill():
+    store = _Store()
+    store.hub["own"] = {"skill_id": "own", "source": "custom", "owner": "platform", "slug": "x"}
+    with pytest.raises(ValidationProblem, match="ClawHub"):
+        CustomSkillService(store).save(CustomSkillRequest(source="editor", entries=[("SKILL.md", _skill("x").encode())], fork_of="own"))
+
+
+def test_address_import_cites_the_address_until_we_edit_it():
+    store = _Store()
+    svc = CustomSkillService(store)
+    gathered_url = "https://github.com/acme/skills/tree/main/weekly-report"
+    svc._gather = lambda request: Gathered([("SKILL.md", _skill().encode())], Origin("url", "网址", gathered_url), None)  # type: ignore[method-assign]
+    svc.save(CustomSkillRequest(source="url", url=gathered_url))
+    assert store.skills["weekly-report"]["provenance"] == {"kind": "url", "label": "github.com/acme/skills", "url": gathered_url, "version": "", "edited": False}
+    del svc._gather
+    svc.save(CustomSkillRequest(source="editor", entries=[("SKILL.md", _skill(body="# 我们改的\n").encode())]))
+    assert store.skills["weekly-report"]["provenance"]["edited"] is True
+
+
+def test_route_passes_fork_of_only_for_the_editor(client):
+    client.store.hub["hub-1"] = {"skill_id": "hub-1", "source": "clawhub", "owner": "steipete", "slug": "weather", "latest_internal_version": "1.0.0"}
+    files = [("files", ("SKILL.md", _skill("weather").encode()))]
+    response = client.post("/api/operation/skill-market/custom", headers=_auth(), files=files, data={"source": "editor", "paths": ["SKILL.md"], "fork_of": "hub-1"})
+    assert response.status_code == 200, response.text
+    assert client.store.skills["weather"]["provenance"]["edited"] is True
+    response = client.post("/api/operation/skill-market/custom", headers=_auth(), files=files, data={"source": "folder", "paths": ["SKILL.md"], "fork_of": "hub-1"})
+    assert response.status_code == 422
 
 
 def test_routes_refuse_oversized_bodies_before_reading_them(client):

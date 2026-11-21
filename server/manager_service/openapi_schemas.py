@@ -12,6 +12,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from shared.contracts.crosstier import CapabilityProvenance
 from shared.contracts.platform_provider import (
     PlatformModel,
     PlatformModelRate,
@@ -53,6 +54,8 @@ class PlatformSkillMarketOut(BaseModel):
     installed_content_hash: str | None = Field(default=None, description="企业已安装内容哈希。")
     installed_versions: list[str] = Field(default_factory=list, description="企业已安装版本列表。")
     update_available: bool = Field(default=False, description="是否有可用更新。")
+    namespace: str = Field(default="", description="展示前缀：平台自建与改编的为 taiyim；原样取自 ClawHub / 网址的为空。")
+    provenance: CapabilityProvenance | None = Field(default=None, description="来自其他平台时的出处。")
 
 
 class InstalledPlatformSkillOut(BaseModel):
@@ -109,6 +112,8 @@ class McpMarketOut(BaseModel):
     platform_available: bool = Field(description="平台 MCP 目录是否可读；不可读时只列出已启用项。")
     servers: list[McpMarketServerOut] = Field(default_factory=list, description="平台 MCP 列表。")
     enterprise: list[McpEnterpriseServerOut] = Field(default_factory=list, description="企业自建 MCP 列表。")
+    platform_namespace: str = Field(default="taiyim", description="平台 MCP 的展示前缀。")
+    enterprise_namespace: str = Field(default="", description="企业自建 MCP 的展示前缀：企业名称，未设置时企业代码。")
 
 
 class McpOAuthClientOut(BaseModel):

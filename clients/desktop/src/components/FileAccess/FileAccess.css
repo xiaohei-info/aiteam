@@ -151,6 +151,10 @@
   color: var(--text-muted); font-size: 10.5px; line-height: 1.5;
 }
 .cap-pill.attention { border-color: var(--danger-border-soft); background: var(--danger-bg); color: var(--danger); }
+/* 企业目录有新版本：用品牌色提示，不是错误。 */
+.cap-pill.update { border-color: var(--border-active); background: var(--brand-ghost); color: var(--brand); }
+.cap-origin-link { text-decoration: none; }
+.cap-origin-link:hover { color: var(--brand); text-decoration: underline; text-underline-offset: 3px; }
 
 /* 行内操作：次要动作用描边小按钮，撤销用危险色；图标 + 文字对齐。 */
 .cap-action {
@@ -162,6 +166,8 @@
   transition: background var(--duration-fast), color var(--duration-fast), border-color var(--duration-fast), transform var(--duration-fast);
 }
 .cap-action:hover:not(:disabled) { border-color: var(--border-active); color: var(--text-primary); background: var(--surface-glass); }
+.cap-action.primary { border-color: var(--border-active); background: var(--brand-ghost); color: var(--brand); }
+.cap-action.primary:hover:not(:disabled) { background: var(--brand-soft); color: var(--brand); }
 .cap-action.danger { border-color: var(--danger-border-soft); background: var(--danger-bg); color: var(--danger); }
 .cap-action.danger:hover:not(:disabled) { border-color: var(--danger-border-strong); background: var(--danger-bg); color: var(--danger); }
 .cap-action:active:not(:disabled) { transform: scale(.98); }

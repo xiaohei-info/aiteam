@@ -18,6 +18,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from shared.contracts.crosstier import CapabilityProvenance
 from shared.contracts.enums import EnterpriseRole
 from shared.contracts.skill import MAX_SKILL_FILES
 from shared.contracts.snapshot import ExecutionPolicy, ModelPolicy
@@ -533,6 +534,8 @@ class SkillCatalogOut(SkillCatalogIn):
     files: Any = Field(default_factory=list, description="已存文件原值；旧非法 scalar/object 保留供诊断，package_status=invalid")
     catalog_version: int = Field(description="目录条目版本；配置变更单调递增")
     package_status: Literal["draft", "ready", "invalid"] = Field(default="draft", description="实际包状态；draft/invalid 不可分发执行")
+    namespace: str = Field(default="", description="展示前缀：平台为 taiyim、企业为企业名称（未设置时企业代码）；原样取自其他平台的为空")
+    provenance: CapabilityProvenance | None = Field(default=None, description="来自其他平台时的出处；edited=true 为我们改过")
 
 
 SkillImportSource = Literal["folder", "zip", "file", "text", "editor", "url", "clawhub"]
@@ -550,6 +553,7 @@ class SkillImportJsonIn(BaseModel):
     visibility: CatalogVisibility = Field(default="tenant", description="新建条目的可见范围；已存在的同名技能升版本时保留原值。")
     binding_policy: SkillBindingPolicy = Field(default="opt_in", description="新建条目的绑定策略。")
     install_policy: SkillInstallPolicy = Field(default="on_demand", description="新建条目的安装策略。")
+    fork_of: str | None = Field(default=None, max_length=64, description="editor：编辑平台市场技能另存为企业副本时，原条目的 catalog_id；副本标「改自 …」，原条目保留。")
 
 
 class SkillImportFileOut(BaseModel):

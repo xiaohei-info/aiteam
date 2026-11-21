@@ -27,6 +27,7 @@ describe("McpMarketPage", () => {
     expect(screen.getByText("草稿")).toBeInTheDocument();
     expect(screen.getByText("已发布")).toBeInTheDocument();
     expect(screen.getByText("成员浏览器登录")).toBeInTheDocument();
+    expect(screen.getByText(/标识 taiyim\/mes ·/)).toBeInTheDocument();  // 平台 MCP 一律带 taiyim 前缀
   });
 
   it("空目录给空态", async () => {

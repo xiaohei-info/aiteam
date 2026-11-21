@@ -498,6 +498,17 @@ def test_members_can_only_self_install_tenant_visible_enabled_executable_skills(
     assert all(item.content_hash for item in items)
 
 
+def test_installable_skills_carry_skill_md_name_namespace_and_provenance():
+    """Design「技能MCP命名空间出处与更新提示」§4.4: the desktop shows taiyim/x or 企业名/x and checks same-name skills."""
+    platform = _skill_row("platform-p1", source="p1")
+    platform.config.update({"namespace": "taiyim", "provenance": None, "skill_name": "weather", "slug": "weather"})
+    hub = _skill_row("self-improving")
+    hub.config.update({"source": "clawhub", "provenance": {"kind": "clawhub", "label": "ClawHub o/self-improving", "edited": False}})
+    items = _installer([platform, _skill_row("notes"), hub]).installable_skills(_ctx("t-a", user_id="m-1"), enterprise_namespace="太一科技")
+    assert [(item.name, item.namespace) for item in items] == [("weather", "taiyim"), ("notes", "太一科技"), ("self-improving", "")]
+    assert items[2].provenance.label == "ClawHub o/self-improving" and items[0].provenance is None
+
+
 def test_installable_package_is_signed_for_the_calling_member_and_out_of_scope_skills_are_404():
     service = _installer([_skill_row("sheet"), _skill_row("secret", visibility="private")])
     result = service.installable_skill_package(_ctx("t-a", user_id="m-1"), "sheet")

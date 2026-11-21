@@ -18,6 +18,8 @@ import {
 import type { LucideIcon } from 'lucide-react'
 import { formatUnreadCount, sumConversationUnreadCounts } from '../../lib/conversationUnread'
 import { useAgentAuthStore } from '../../stores/agentAuth'
+import { useCapabilityUpdatesStore } from '../../stores/capabilityUpdates'
+import { capabilityUpdateLabel } from '../../lib/capabilityUpdates'
 import { useChatStore } from '../../stores/chat'
 import { useThemeStore } from '../../stores/theme'
 
@@ -49,6 +51,9 @@ export default function Sidebar() {
   const chatUnread = sumConversationUnreadCounts(conversations)
   const groupUnread = sumConversationUnreadCounts(groups)
   const unreadMap: Record<string, number> = { '/chat': chatUnread, '/group-chat': groupUnread }
+  const capabilityUpdates = useCapabilityUpdatesStore((state) => state.skillUpdates + state.mcpUpdates)
+  // 有更新只显示红点，不显示数字：数字在能力页顶部的「N 项有更新」里。
+  const dotMap: Record<string, number> = { '/capabilities': capabilityUpdates }
   const isSettingsActive = location.pathname.startsWith('/settings')
 
   useEffect(() => {
@@ -154,6 +159,11 @@ export default function Sidebar() {
                     {unreadMap[item.path] > 0 && (
                       <span className="absolute -right-2 -top-2 h-[16px] min-w-[16px] rounded-full bg-danger px-[3px] text-center text-[9px] font-bold leading-[16px] text-txt-inverse">
                         {formatUnreadCount(unreadMap[item.path])}
+                      </span>
+                    )}
+                    {dotMap[item.path] > 0 && (
+                      <span className="absolute -right-1 -top-1 h-2 w-2 rounded-full bg-danger ring-2 ring-[var(--navigation-glass-bg-strong)]" data-testid="sidebar-update-dot" title={capabilityUpdateLabel(dotMap[item.path])}>
+                        <span className="sr-only">{capabilityUpdateLabel(dotMap[item.path])}</span>
                       </span>
                     )}
                   </span>

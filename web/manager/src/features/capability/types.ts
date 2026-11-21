@@ -1,4 +1,8 @@
-export interface SkillCatalog { catalog_id: string; skill_id: string; display_name: string; version: string; install_policy: string; binding_policy: string; visibility: string; config: Record<string,unknown>; catalog_version: number; package_status?: "draft" | "ready" | "invalid"; files?: Array<{path: string; content: string}>; content_hash?: string; }
+export interface SkillCatalog { catalog_id: string; skill_id: string; display_name: string; version: string; install_policy: string; binding_policy: string; visibility: string; config: Record<string,unknown>; catalog_version: number; package_status?: "draft" | "ready" | "invalid"; files?: Array<{path: string; content: string}>; content_hash?: string;
+  /** 展示前缀：taiyim（平台）/ 企业名；原样取自其他平台的为空。 */
+  namespace?: string;
+  /** 来自其他平台时的出处；edited 为我们改过。 */
+  provenance?: CapabilityProvenance | null; }
 export interface ConnectorCatalog { catalog_id: string; connector_id: string; display_name: string; visibility: string; grant_scope: string; config: Record<string,unknown>; catalog_version: number; }
 export interface MemoryPolicyCatalog { catalog_id: string; policy_id: string; display_name: string; visibility: string; policy: Record<string,unknown>; seed_memories: unknown[]; retention_days?: number|null; config: Record<string,unknown>; catalog_version: number; }
 
@@ -54,10 +58,12 @@ export type {
   SkillSecurity,
   SkillSecurityScanner,
 } from "@aiteam/shared";
-import type { SkillImportInput as SharedSkillImportInput } from "@aiteam/shared";
+import type { CapabilityProvenance, SkillImportInput as SharedSkillImportInput } from "@aiteam/shared";
 
 /** 企业端导入时附带新建条目的设置：可见范围决定成员能否自己安装；停用对应 binding_policy=disabled。 */
 export interface SkillImportInput extends SharedSkillImportInput {
   visibility?: CatalogVisibility;
   binding_policy?: SkillBindingPolicy;
+  /** 编辑平台技能市场的技能另存为企业副本时，原条目的 catalog_id。 */
+  fork_of?: string;
 }

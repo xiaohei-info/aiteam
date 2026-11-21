@@ -40,6 +40,10 @@
 .skill-list-copy strong { color: var(--text-primary); font-size: 13px; overflow-wrap: anywhere; }
 .skill-list-copy span { color: var(--text-muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
 .skill-list li > button { flex-shrink: 0; }
+/* 「替换安装」行内确认：写清会删掉哪一个。 */
+.skill-list-copy .skill-replace-confirm { display: grid; gap: 8px; margin-top: 6px; padding: 8px 10px; border: 1px solid var(--danger-border-strong); border-radius: var(--radius-md, 8px); background: var(--danger-bg); color: var(--text-primary); font-size: 12px; }
+.skill-list-copy .skill-replace-actions { display: flex; gap: 8px; }
+.skill-replace-actions button.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
 .skill-search { display: flex !important; align-items: center; gap: 8px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-1); }
 .mcp-form .skill-search input { border: 0; padding: 7px 0; background: transparent; }
 /* 「能力」页 */
@@ -114,3 +118,14 @@
 .catalog-mcp-expand-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .catalog-mcp-expand-actions .primary { background: var(--brand); color: var(--text-on-brand); border-color: var(--brand); }
 .catalog-mcp-expand-actions .primary:disabled { opacity: 0.5; }
+
+/* 「N 项有更新 · 全部更新」：只有一行，放在能力列表上方。 */
+.cap-update-bar { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border: 1px solid var(--border-active); border-radius: var(--radius-md); background: var(--brand-ghost); color: var(--text-primary); font-size: 12.5px; }
+.cap-update-bar > svg { color: var(--brand); flex-shrink: 0; }
+.cap-update-bar > span { flex: 1; min-width: 0; }
+.cap-update-bar .capabilities-add { flex-shrink: 0; }
+
+/* 分栏标题上的更新红点（§4.5b）：只是提示有更新，数字在顶部更新横条里。 */
+.cap-section-title { display: inline-flex; align-items: center; gap: 6px; }
+.cap-heading-dot { position: relative; display: inline-block; width: 7px; height: 7px; border-radius: 999px; background: var(--danger); box-shadow: 0 0 0 2px var(--danger-bg); flex-shrink: 0; }
+.cap-heading-dot > .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }

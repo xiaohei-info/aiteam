@@ -456,7 +456,7 @@ export function EmployeeConfigDrawer({
                       <Heading level={3}>技能</Heading>
                       <MultiSelector
                         label="企业已安装技能"
-                        description={skills.length ? "选择此专家可使用的技能" : "暂无已安装技能，请先前往技能市场安装"}
+                        description={skills.length ? "选择此专家可使用的技能" : "暂无企业技能，请先在「技能管理」里新增技能"}
                         options={skills.map((skill) => ({ value: skill.skill_id, label: `${skill.display_name || "未命名技能"} · v${skill.version}` }))}
                         value={draft.skills}
                         onChange={(value) => update("skills", value)}

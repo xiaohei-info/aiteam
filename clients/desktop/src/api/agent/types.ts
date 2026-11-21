@@ -559,6 +559,27 @@ export interface InstallableSkill {
   source_skill_id: string
   /** platform：来自平台技能市场；enterprise：企业自建。旧版 Agent 不返回。 */
   origin?: 'platform' | 'enterprise'
+  /** SKILL.md 的 name：本机同名只能装一个。 */
+  name?: string
+  /** 展示前缀：taiyim（平台）/ 企业名；原样取自其他平台的为空。 */
+  namespace?: string
+  /** 来自其他平台时的出处，仅供展示。 */
+  provenance?: CapabilityProvenance | null
+  /** 本机状态：install 未装；installed 已装当前版本；update 装的是旧版本；conflict 本机已有同名的其他技能（安装需替换）。旧版 Agent 不返回。 */
+  state?: 'install' | 'installed' | 'update' | 'conflict'
+  /** installed / update：本机对应的记录；conflict：本机同名的另一个技能。 */
+  local_ref?: string
+  local_display_name?: string
+  local_version?: string
+}
+
+/** 技能 / MCP 的出处（设计「技能MCP命名空间出处与更新提示」§4.1）：edited=false 原样取来（来自），true 我们改过（改自）。 */
+export interface CapabilityProvenance {
+  kind: 'clawhub' | 'url' | 'platform'
+  label: string
+  url: string
+  version: string
+  edited: boolean
 }
 
 /** 成员授权：以后从平台目录安装该种能力时直接安装，不再弹审批。 */
@@ -659,6 +680,8 @@ export interface CatalogMcp {
   auth: 'none' | 'oauth' | 'bearer'
   origin: 'platform' | 'enterprise'
   revision: number
+  /** 展示前缀：taiyim（平台）/ 企业名。旧版 Agent 不返回。 */
+  namespace?: string
   state: 'install' | 'installed' | 'update' | 'conflict'
 }
 

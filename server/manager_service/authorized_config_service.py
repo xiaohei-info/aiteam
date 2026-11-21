@@ -20,6 +20,7 @@ from shared.contracts.skill import SignedSkillPackage
 from shared.contracts.tenancy import TenantContext
 from shared.errors import NotFound, ServiceUnavailable
 
+from .capability_origin import skill_origin
 from .active_principal import require_active
 from .knowledge_access_policy import KnowledgeAccessPolicy
 from .capability_catalog_service import CapabilityCatalogService
@@ -262,21 +263,28 @@ class AuthorizedConfigService:
         """
         return item.visibility in ("tenant", "public") and item.binding_policy != "disabled" and bool(item.content_hash)
 
-    def installable_skills(self, ctx: TenantContext) -> list[InstallableSkill]:
-        """企业目录里成员可自行安装的技能（只读摘要，不读出技能文件内容）。"""
+    def installable_skills(self, ctx: TenantContext, *, enterprise_namespace: str = "") -> list[InstallableSkill]:
+        """企业目录里成员可自行安装的技能（只读摘要，不读出技能文件内容）。
+
+        带 SKILL.md name（本机同名只能装一个）与展示用命名空间 / 出处（设计「技能MCP命名空间出处与更新提示」§4.4）。
+        """
         repo = self._self_install_repo(ctx)
         if repo is None or not hasattr(repo, "list_skill_summaries"):
             return []
-        return [
-            InstallableSkill(
+        out = []
+        for row in repo.list_skill_summaries(ctx):
+            if not (row.package_shaped and self._member_may_self_install(row)):
+                continue
+            config = row.config if isinstance(row.config, dict) else {}
+            origin = skill_origin(config, skill_id=row.skill_id, enterprise=enterprise_namespace)
+            out.append(InstallableSkill(
                 skill_id=row.skill_id, display_name=row.display_name, version=row.version,
                 content_hash=row.content_hash,
-                source_skill_id=str((row.config if isinstance(row.config, dict) else {}).get("source_skill_id") or ""),
-                origin="platform" if (row.config if isinstance(row.config, dict) else {}).get("source") == "operator" else "enterprise",
-            )
-            for row in repo.list_skill_summaries(ctx)
-            if row.package_shaped and self._member_may_self_install(row)
-        ]
+                source_skill_id=str(config.get("source_skill_id") or ""),
+                origin="platform" if config.get("source") == "operator" else "enterprise",
+                name=origin["name"], namespace=origin["namespace"], provenance=origin["provenance"],
+            ))
+        return out
 
     def installable_skill_package(self, ctx: TenantContext, skill_id: str) -> InstallableSkillPackage:
         """按 skill_id 单查一条，完整校验后为当前成员签名；不可自装或包不可执行一律 404。"""
