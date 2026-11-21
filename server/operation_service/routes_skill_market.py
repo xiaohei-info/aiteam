@@ -327,6 +327,10 @@ def _client(request: Request) -> ClawHubClient:
     return client
 
 
+# 自建技能上传 / 粘贴的请求体上限：技能包 10 MiB + multipart 开销，与企业端导入一致（app 以 BodyLimit 在读体前拦截）。
+CUSTOM_SKILL_MAX_BODY_BYTES = 12 * 1024 * 1024
+
+
 def _custom_service(request: Request) -> CustomSkillService:
     service = getattr(request.app.state, "_custom_skill_service", None)
     return service if service is not None else CustomSkillService(_repo(request))

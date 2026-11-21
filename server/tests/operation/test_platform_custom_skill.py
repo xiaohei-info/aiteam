@@ -181,3 +181,25 @@ def test_routes_reject_unauthenticated_and_wrong_transport(client):
     response = client.post("/api/operation/skill-market/custom/preview", headers=_auth(), files=files, data={"source": "text"})
     assert response.status_code == 422 and "multipart" in response.text
     assert client.get("/api/operation/skill-market/internal/nope/files", headers=_auth()).status_code == 404
+
+
+def test_routes_refuse_oversized_bodies_before_reading_them(client):
+    import operation_service.app as operation_app
+    from operation_service.routes_skill_market import CUSTOM_SKILL_MAX_BODY_BYTES
+
+    assert any(limit.path_prefix == "/api/operation/skill-market/custom" and limit.max_bytes == CUSTOM_SKILL_MAX_BODY_BYTES
+               for limit in _body_limits(operation_app.app))
+    big = b"x" * (CUSTOM_SKILL_MAX_BODY_BYTES + 1)
+    for path in ("/api/operation/skill-market/custom", "/api/operation/skill-market/custom/preview"):
+        response = client.post(path, headers=_auth(), files=[("files", ("SKILL.md", big))], data={"source": "file"})
+        assert response.status_code == 413, (path, response.status_code)
+    assert client.store.skills == {}
+
+
+def _body_limits(app):
+    from shared.body_limit import BodySizeLimitMiddleware
+
+    for middleware in app.user_middleware:
+        if middleware.cls is BodySizeLimitMiddleware:
+            return middleware.kwargs["limits"]
+    return ()
