@@ -99,3 +99,18 @@ export function installableSkillState(skill: Pick<InstallableSkill, 'skill_id' |
   if (!current) return { action: 'install' }
   return current.version === skill.version ? { action: 'installed' } : { action: 'upgrade', from: current.version ?? '' }
 }
+
+/**
+ * 「替换安装」前的确认文案：写清被移除的是本机哪一个、从哪来的。
+ * 自己导入（含 ClawHub 下到本机）的技能可能改过，替换会连文件一起删掉，单独提醒。
+ */
+export function replaceConfirmText(
+  skill: Pick<InstallableSkill, 'display_name' | 'skill_id' | 'namespace' | 'local_ref' | 'local_display_name'>,
+  installed: Pick<LocalCapability, 'kind' | 'ref' | 'display_name' | 'source'>[],
+): string {
+  const local = installed.find((item) => item.kind === 'skill' && item.ref === skill.local_ref)
+  const name = skill.local_display_name || local?.display_name || skill.local_ref || '同名技能'
+  const from = local ? `（来源：${capabilitySourceLabel(local)}）` : ''
+  const own = local && hasLocalDirectory(local) ? '这是你自己导入的技能，你改过的内容也会一起删掉，无法恢复。' : ''
+  return `将移除本机的「${name}」${from}及它的全部文件，改装「${capabilityTitle(skill.namespace, skill.display_name || skill.skill_id)}」。${own}`
+}

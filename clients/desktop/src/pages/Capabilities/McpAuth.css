@@ -40,6 +40,10 @@
 .skill-list-copy strong { color: var(--text-primary); font-size: 13px; overflow-wrap: anywhere; }
 .skill-list-copy span { color: var(--text-muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
 .skill-list li > button { flex-shrink: 0; }
+/* 「替换安装」行内确认：写清会删掉哪一个。 */
+.skill-list-copy .skill-replace-confirm { display: grid; gap: 8px; margin-top: 6px; padding: 8px 10px; border: 1px solid var(--danger-border-strong); border-radius: var(--radius-md, 8px); background: var(--danger-bg); color: var(--text-primary); font-size: 12px; }
+.skill-list-copy .skill-replace-actions { display: flex; gap: 8px; }
+.skill-replace-actions button.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
 .skill-search { display: flex !important; align-items: center; gap: 8px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-1); }
 .mcp-form .skill-search input { border: 0; padding: 7px 0; background: transparent; }
 /* 「能力」页 */

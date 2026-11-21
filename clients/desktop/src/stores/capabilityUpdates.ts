@@ -6,7 +6,7 @@
 import { create } from 'zustand'
 import { agentApi } from '../api/agent'
 import type { CatalogMcp, InstallableSkill } from '../api/agent/types'
-import { countCapabilityUpdates } from '../lib/capabilityUpdates'
+import { countCapabilityUpdates, createCapabilityChecker } from '../lib/capabilityUpdates'
 import { useAgentAuthStore } from './agentAuth'
 import { useChatStore } from './chat'
 
@@ -18,31 +18,22 @@ type CapabilityUpdatesState = {
   setCatalog: (skills: readonly InstallableSkill[], mcps: readonly CatalogMcp[]) => void
   /** syncGrants：顺带同步专家配置。启动时登录刚同步过，不必再做。 */
   check: (options?: { syncGrants?: boolean }) => Promise<void>
+  /** 因为正在回复推迟了同步：回复结束后补一次。 */
+  hasDeferredSync: () => boolean
   reset: () => void
 }
 
-let inFlight: Promise<void> | null = null
-
-export const useCapabilityUpdatesStore = create<CapabilityUpdatesState>((set) => ({
-  skillUpdates: 0,
-  mcpUpdates: 0,
-  lastCheckedAt: null,
-  setCatalog: (skills, mcps) => {
-    const counts = countCapabilityUpdates(skills, mcps)
-    set({ skillUpdates: counts.skills, mcpUpdates: counts.mcps, lastCheckedAt: Date.now() })
-  },
-  check: (options) => {
-    if (inFlight) return inFlight
-    const run = async () => {
+export const useCapabilityUpdatesStore = create<CapabilityUpdatesState>((set) => {
+  const checker = createCapabilityChecker({
+    syncGrants: async () => {
       const auth = useAgentAuthStore.getState()
-      const generation = auth.sessionGeneration
-      const tenantId = auth.tenantId
       const memberId = auth.claims?.user_id
-      // 有回复正在生成时不同步专家配置：同步会清掉旧版本技能文件，留给下一次检查。
-      const replying = useChatStore.getState().generatingConvIds.size > 0
-      if (options?.syncGrants && tenantId && memberId && !replying) {
-        await agentApi.syncGrants({ tenant_id: tenantId, member_id: memberId }).catch(() => undefined)
-      }
+      if (!auth.tenantId || !memberId) return
+      await agentApi.syncGrants({ tenant_id: auth.tenantId, member_id: memberId }).catch(() => undefined)
+    },
+    isReplying: () => useChatStore.getState().generatingConvIds.size > 0,
+    readCatalogs: async () => {
+      const generation = useAgentAuthStore.getState().sessionGeneration
       const [skills, mcps] = await Promise.allSettled([agentApi.listInstallableSkills(), agentApi.listInstallableMcpServers()])
       if (useAgentAuthStore.getState().sessionGeneration !== generation) return
       // 读不到的一侧保留上次的数字：企业端暂时不可达不该让红点忽闪。
@@ -51,9 +42,21 @@ export const useCapabilityUpdatesStore = create<CapabilityUpdatesState>((set) =>
         mcpUpdates: mcps.status === 'fulfilled' ? countCapabilityUpdates([], mcps.value).mcps : state.mcpUpdates,
         lastCheckedAt: Date.now(),
       }))
-    }
-    inFlight = run().finally(() => { inFlight = null })
-    return inFlight
-  },
-  reset: () => set({ skillUpdates: 0, mcpUpdates: 0, lastCheckedAt: null }),
-}))
+    },
+  })
+  return {
+    skillUpdates: 0,
+    mcpUpdates: 0,
+    lastCheckedAt: null,
+    setCatalog: (skills, mcps) => {
+      const counts = countCapabilityUpdates(skills, mcps)
+      set({ skillUpdates: counts.skills, mcpUpdates: counts.mcps, lastCheckedAt: Date.now() })
+    },
+    check: (options) => checker.check(options),
+    hasDeferredSync: () => checker.hasDeferredSync(),
+    reset: () => {
+      checker.reset()
+      set({ skillUpdates: 0, mcpUpdates: 0, lastCheckedAt: null })
+    },
+  }
+})

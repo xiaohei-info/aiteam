@@ -74,18 +74,24 @@ export default function Capabilities() {
   // 挂载时置回 true：开发版 StrictMode 会先卸载再挂载一次，只在卸载时置 false 会让请求结果永远写不回页面。
   useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
 
-  const load = useCallback(async () => {
-    const [rows, autoInstall, skillCatalog, mcpCatalog] = await Promise.allSettled([
-      agentApi.listLocalCapabilities(), agentApi.listCapabilityAutoInstall(), agentApi.listInstallableSkills(), agentApi.listInstallableMcpServers(),
-    ])
-    if (!alive.current) return
+  // 企业目录要经过企业端，可能慢或不可达：单独异步补上，不拖住本机已装列表（失败只是不显示前缀和更新）。
+  const catalogRequest = useRef(0)
+  const loadCatalog = useCallback(async () => {
+    const request = ++catalogRequest.current
+    const [skillCatalog, mcpCatalog] = await Promise.allSettled([agentApi.listInstallableSkills(), agentApi.listInstallableMcpServers()])
+    if (!alive.current || request !== catalogRequest.current) return
     setCatalogSkills(skillCatalog.status === 'fulfilled' ? skillCatalog.value : [])
     setCatalogMcps(mcpCatalog.status === 'fulfilled' ? mcpCatalog.value : [])
     if (skillCatalog.status === 'fulfilled' && mcpCatalog.status === 'fulfilled') useCapabilityUpdatesStore.getState().setCatalog(skillCatalog.value, mcpCatalog.value)
+  }, [])
+  const load = useCallback(async () => {
+    void loadCatalog()
+    const [rows, autoInstall] = await Promise.allSettled([agentApi.listLocalCapabilities(), agentApi.listCapabilityAutoInstall()])
+    if (!alive.current) return
     if (rows.status === 'fulfilled') { setItems(rows.value); setError('') }
     else setError(rows.reason instanceof Error ? rows.reason.message : '个人能力读取失败')
     setGrants(autoInstall.status === 'fulfilled' ? autoInstall.value : [])
-  }, [])
+  }, [loadCatalog])
   useEffect(() => { void load() }, [load])
 
   const run = async (key: string, action: () => Promise<void>, failure: string) => {
@@ -121,7 +127,12 @@ export default function Capabilities() {
     let done = 0
     for (const item of updates) {
       try {
-        if (!(await applyUpdate(item))) { setNotice(done ? `已更新 ${done} 项；「${item.display_name}」需要重新登录，登录完成后即更新好。` : ''); return }
+        if (!(await applyUpdate(item))) {
+          // 停在要登录的这一项：说清楚哪些好了、哪些还没动，免得以为全部更新了。
+          const left = updates.length - done - 1
+          setNotice(`${done ? `已更新 ${done} 项；` : ''}「${item.display_name}」需要重新登录，登录完成后即更新好${left ? `；其余 ${left} 项还没更新，登录后再点「全部更新」` : ''}。`)
+          return
+        }
       } catch (err) {
         throw new Error(`${done ? `已更新 ${done} 项；` : ''}「${item.display_name}」更新失败：${err instanceof Error && err.message ? err.message : '请重试'}`)
       }
@@ -292,7 +303,7 @@ export default function Capabilities() {
           </span>
         </div>
       </section>
-      <p className="file-access-note"><ShieldCheck size={13} aria-hidden="true" /><span>MCP 每次调用仍需你审批；技能可能附带脚本和资料，不会自动执行，员工运行命令仍按审批策略。撤销后下一条消息起失效，不影响企业配置。</span></p>
+      <p className="file-access-note"><ShieldCheck size={13} aria-hidden="true" /><span>自己添加的 MCP 在添加时已授权，调用时不再逐次询问（只读会话里仍会先问你）；技能可能附带脚本和资料，不会自动执行，员工运行命令仍按审批策略。撤销后下一条消息起失效，不影响企业配置。</span></p>
     </div>
     {dialog?.type === 'add-mcp' && <AddMcpDialog onInstalled={() => void load()} onClose={() => setDialog(null)} />}
     {dialog?.type === 'add-skill' && <AddSkillDialog installed={items ?? []} onInstalled={load} onClose={() => setDialog(null)} />}

@@ -12,9 +12,16 @@ export type CapabilityUpdateCounts = { skills: number; mcps: number };
 let counts: CapabilityUpdateCounts = { skills: 0, mcps: 0 };
 const listeners = new Set<() => void>();
 
+type SkillUpdateFields = Pick<PlatformSkillMarketItem, "installed" | "update_available" | "published_version">;
+
+/** 已安装、平台有新版本、且新版本可装：红点计数与技能列表行上的「更新」按钮共用这一条判断，两处数字一致。 */
+export function hasSkillUpdate(item: SkillUpdateFields | null | undefined): boolean {
+  return Boolean(item?.installed && item.update_available && item.published_version);
+}
+
 /** 已安装且平台有新版本的平台技能。 */
-export function countSkillUpdates(items: readonly Pick<PlatformSkillMarketItem, "installed" | "update_available">[]): number {
-  return items.filter((item) => item.installed && item.update_available).length;
+export function countSkillUpdates(items: readonly SkillUpdateFields[]): number {
+  return items.filter(hasSkillUpdate).length;
 }
 
 /** 已启用且平台有新修订的平台 MCP。 */

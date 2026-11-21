@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { capabilitySourceLabel, capabilitySourceTone, capabilityTitle, customSkillIntegrityLabel, hasLocalDirectory, installableSkillState, provenanceText } from '../src/pages/Capabilities/capabilityLabels.ts'
+import { capabilitySourceLabel, capabilitySourceTone, capabilityTitle, customSkillIntegrityLabel, hasLocalDirectory, installableSkillState, provenanceText, replaceConfirmText } from '../src/pages/Capabilities/capabilityLabels.ts'
 
 /** 来源文案：本地导入显示「自定义」，有明确平台的 URL 来源显示平台名。 */
 test('来源显示：本地导入=自定义，ClawHub=平台名', () => {
@@ -54,4 +54,14 @@ test('企业可装技能的本机状态：新版 Agent 给的 state 为准（含
   assert.deepEqual(installableSkillState({ ...skill, state: 'installed' }, []), { action: 'installed' })
   assert.deepEqual(installableSkillState(skill, [{ kind: 'skill', ref: 'platform-p2', version: '1' }]), { action: 'upgrade', from: '1' })
   assert.deepEqual(installableSkillState(skill, []), { action: 'install' })
+})
+
+
+test('替换安装确认：写清移除的是哪一个、来源；自己导入的额外提醒改过的内容会删掉', () => {
+  const skill = { display_name: '周报', skill_id: 'weekly-report', namespace: '太一科技', local_ref: 'weekly-report', local_display_name: '' }
+  const mine = [{ kind: 'skill' as const, ref: 'weekly-report', display_name: '我的周报', source: 'user_import' as const }]
+  assert.equal(replaceConfirmText(skill, mine), '将移除本机的「我的周报」（来源：自定义）及它的全部文件，改装「太一科技/周报」。这是你自己导入的技能，你改过的内容也会一起删掉，无法恢复。')
+  const fromCatalog = [{ kind: 'skill' as const, ref: 'weekly-report', display_name: '周报', source: 'platform_catalog' as const }]
+  assert.equal(replaceConfirmText(skill, fromCatalog), '将移除本机的「周报」（来源：平台技能市场）及它的全部文件，改装「太一科技/周报」。')
+  assert.equal(replaceConfirmText({ ...skill, local_display_name: '旧周报' }, []), '将移除本机的「旧周报」及它的全部文件，改装「太一科技/周报」。')
 })

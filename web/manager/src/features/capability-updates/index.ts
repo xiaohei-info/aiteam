@@ -1,2 +1,2 @@
-export { capabilityUpdateLabel, countMcpUpdates, countSkillUpdates, reportCapabilityUpdates, resetCapabilityUpdates, useCapabilityUpdateCounts } from "./store";
+export { capabilityUpdateLabel, countMcpUpdates, countSkillUpdates, hasSkillUpdate, reportCapabilityUpdates, resetCapabilityUpdates, useCapabilityUpdateCounts } from "./store";
 export { useCapabilityUpdatePolling } from "./useCapabilityUpdatePolling";

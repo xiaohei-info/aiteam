@@ -2,7 +2,7 @@
  * 能力目录页：技能、连接器和记忆策略的租户内 CRUD。
  * 技能按技能本身编辑（SKILL.md + 附带文件，见 EnterpriseSkillDialogs）；连接器与记忆策略仍用通用表单。
  */
-import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { ApiError, CapabilityOrigin, EnterpriseRole, hasRole, skillSummary } from "@aiteam/shared";
 import { AlertDialog } from "@astryxdesign/core/AlertDialog";
 import { Badge } from "@astryxdesign/core/Badge";
@@ -45,7 +45,7 @@ import type {
   SkillCatalog,
 } from "./types";
 import { CATALOG_VISIBILITIES, CONNECTOR_GRANT_SCOPES } from "./types";
-import { countSkillUpdates, reportCapabilityUpdates } from "../capability-updates";
+import { countSkillUpdates, hasSkillUpdate, reportCapabilityUpdates } from "../capability-updates";
 import { PlatformSkillPickerDialog } from "../skill-market/PlatformSkillPickerDialog";
 
 type Kind = "skill" | "connector" | "memory";
@@ -198,6 +198,21 @@ export function CapabilityPage({ skillsOnly = false }: CapabilityPageProps = {})
     else navigate(MCP_PAGE, { state: handoffState(candidate) });
   };
 
+  // 平台技能市场要经过运营端，可能慢：列表先显示，「更新」按钮和红点随后补上；只认最后一次请求的结果。
+  const marketRequest = useRef(0);
+  const loadMarket = useCallback(async (skillItems: SkillCatalog[]) => {
+    const request = ++marketRequest.current;
+    if (!skillItems.some(isPlatformSkill)) {
+      setMarket([]);
+      reportCapabilityUpdates({ skills: 0 });
+      return;
+    }
+    const list = await marketApi.list().catch(() => null);
+    if (request !== marketRequest.current) return;
+    setMarket(list ?? []);
+    if (list) reportCapabilityUpdates({ skills: countSkillUpdates(list) });
+  }, [marketApi]);
+
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -208,11 +223,7 @@ export function CapabilityPage({ skillsOnly = false }: CapabilityPageProps = {})
         api.listMemoryPolicies(),
       ]);
       setSkills(skillItems);
-      if (skillItems.some(isPlatformSkill)) {
-        const list = await marketApi.list().catch(() => null);
-        setMarket(list ?? []);
-        if (list) reportCapabilityUpdates({ skills: countSkillUpdates(list) });
-      } else reportCapabilityUpdates({ skills: 0 });
+      void loadMarket(skillItems);
       setConnectors(connectorItems);
       setMemories(memoryItems);
     } catch (err) {
@@ -220,7 +231,7 @@ export function CapabilityPage({ skillsOnly = false }: CapabilityPageProps = {})
     } finally {
       setLoading(false);
     }
-  }, [api, marketApi, i18n]);
+  }, [api, loadMarket, i18n]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -228,7 +239,7 @@ export function CapabilityPage({ skillsOnly = false }: CapabilityPageProps = {})
   const updateFor = useCallback((row: SkillCatalog): PlatformSkillMarketItem | null => {
     if (!isPlatformSkill(row)) return null;
     const item = market.find((entry) => entry.skill_id === row.config?.source_skill_id);
-    return item?.update_available && item.published_version && item.published_version !== row.version ? item : null;
+    return item && hasSkillUpdate(item) ? item : null;
   }, [market]);
 
   const [updating, setUpdating] = useState<string | null>(null);
