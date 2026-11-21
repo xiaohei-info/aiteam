@@ -501,3 +501,41 @@ def test_assist_service_wiring_reuses_router_bills_usage_and_needs_db_and_catalo
                     SimpleNamespace(settings=SimpleNamespace(db_url="postgresql://db"))):
         with pytest.raises(ServiceUnavailable):
             routes._assist_service(SimpleNamespace(app=SimpleNamespace(state=missing)))
+
+
+def test_each_enterprise_runs_at_most_three_lookups_at_once():
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from manager_service.routes_capability_assist import TenantSlots
+    from shared.errors import TooManyRequests
+
+    release, started = threading.Event(), threading.Semaphore(0)
+    service, _, _ = _service(_Relay([chat([PROPOSAL])] * 4))
+    real_run = service.run
+
+    def blocking_run(ctx, req):
+        started.release()
+        release.wait(5)
+        return real_run(ctx, req)
+
+    service.run = blocking_run
+    client = _client(service)
+    body = {"requirement": "周报", "model": {"provider_id": "p1", "model_id": "gpt-x"}}
+    with ThreadPoolExecutor(3) as pool:
+        running = [pool.submit(client.post, "/api/manager/capability-assist", json=body, headers=_hdr()) for _ in range(3)]
+        for _ in range(3):
+            assert started.acquire(timeout=5)
+        fourth = client.post("/api/manager/capability-assist", json=body, headers=_hdr())
+        assert fourth.status_code == 429 and "3 个查找" in fourth.json()["detail"]
+        release.set()
+        assert [f.result().status_code for f in running] == [200, 200, 200]
+    # 名额释放后可以再查；另一个企业的计数互不影响。
+    assert client.post("/api/manager/capability-assist", json=body, headers=_hdr()).status_code == 200
+    slots = TenantSlots(1)
+    with slots.hold("a"), slots.hold("b"):
+        with pytest.raises(TooManyRequests):
+            with slots.hold("a"):
+                pass
+    with slots.hold("a"):
+        pass
