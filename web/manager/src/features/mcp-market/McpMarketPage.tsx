@@ -18,6 +18,7 @@ import { useCapabilityAssistApi } from "../capability-assist/useCapabilityAssist
 import { EnterpriseMcpDialog } from "./EnterpriseMcpDialog";
 import { useMcpMarketApi } from "./useMcpMarketApi";
 import type { EnterpriseMcpServer, EnterpriseMcpServerInput, McpMarket, McpMarketServer } from "./types";
+import { countMcpUpdates, reportCapabilityUpdates } from "../capability-updates";
 
 function statusBadge(item: McpMarketServer): { label: string; variant: "success" | "warning" | "neutral" } | null {
   if (!item.enabled) return null;
@@ -70,7 +71,11 @@ export function McpMarketPage(): ReactNode {
 
   const load = useCallback(async () => {
     setError(null);
-    try { setMarket(await api.list()); }
+    try {
+      const next = await api.list();
+      setMarket(next);
+      reportCapabilityUpdates({ mcps: countMcpUpdates(next) });
+    }
     catch (err) { setError(err instanceof ApiError ? err.message : "MCP 市场加载失败"); }
   }, [api]);
   useEffect(() => { void load(); }, [load]);

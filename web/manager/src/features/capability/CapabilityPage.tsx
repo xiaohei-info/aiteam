@@ -45,6 +45,7 @@ import type {
   SkillCatalog,
 } from "./types";
 import { CATALOG_VISIBILITIES, CONNECTOR_GRANT_SCOPES } from "./types";
+import { countSkillUpdates, reportCapabilityUpdates } from "../capability-updates";
 
 type Kind = "skill" | "connector" | "memory";
 /** 通用表单只剩连接器与记忆策略；技能用技能编辑器。 */
@@ -202,7 +203,11 @@ export function CapabilityPage({ skillsOnly = false }: CapabilityPageProps = {})
         api.listMemoryPolicies(),
       ]);
       setSkills(skillItems);
-      if (skillItems.some(isPlatformSkill)) setMarket(await marketApi.list().catch(() => []));
+      if (skillItems.some(isPlatformSkill)) {
+        const list = await marketApi.list().catch(() => null);
+        setMarket(list ?? []);
+        if (list) reportCapabilityUpdates({ skills: countSkillUpdates(list) });
+      } else reportCapabilityUpdates({ skills: 0 });
       setConnectors(connectorItems);
       setMemories(memoryItems);
     } catch (err) {
@@ -228,7 +233,7 @@ export function CapabilityPage({ skillsOnly = false }: CapabilityPageProps = {})
     setNotice(null);
     try {
       await marketApi.install(item);
-      setNotice(`已把 ${skillTitle(row)} 更新到 v${item.published_version}，专家和成员下次对话起用新版本`);
+      setNotice(`已把 ${skillTitle(row)} 更新到 v${item.published_version}，成员桌面端同步后（10 分钟内，或切回窗口时）下一条消息起用新版本`);
       await load();
     } catch (err) {
       setActionError(err instanceof ApiError || err instanceof Error ? err.message : "更新失败，请重试");

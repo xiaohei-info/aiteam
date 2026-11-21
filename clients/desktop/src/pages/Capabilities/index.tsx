@@ -3,7 +3,7 @@
  * - MCP：添加 MCP（从企业拿一键安装 / 粘贴配置、检查鉴权、登录或填令牌）、鉴权状态、重新登录 / 更新令牌 / 退出登录、撤销
  * - 技能：添加技能（企业开放给本人的技能目录）、升级、撤销
  * - 企业目录里有新版本的：行内「有更新」+「更新」，顶部「N 项有更新 · 全部更新」（设计「技能MCP命名空间出处与更新提示」§4.5）；
- *   新版本下一轮对话起生效，不推送、不弹窗
+ *   新版本下一条消息起生效，不推送、不弹窗；侧栏「能力」与「MCP」「技能」标题的红点见 stores/capabilityUpdates（§4.5b）
  * - 自动安装授权（设计 §11.3）的查看与撤销
  * 原先在「设置」页里，现在单独成页；设置页只留一行链接。
  */
@@ -21,6 +21,8 @@ import { AddMcpDialog, McpSignInDialog, McpTokenDialog } from './McpAuthDialogs'
 import { AddSkillDialog } from './AddSkillDialog'
 import { AskEmployeeDialog } from './AskEmployeeDialog'
 import { useChatStore } from '../../stores/chat'
+import { useCapabilityUpdatesStore } from '../../stores/capabilityUpdates'
+import { capabilityUpdateLabel } from '../../lib/capabilityUpdates'
 import { useNavigate } from 'react-router-dom'
 
 /** 一个已装能力在企业目录里的对应条目：用来显示前缀 / 出处，以及有没有新版本。 */
@@ -79,6 +81,7 @@ export default function Capabilities() {
     if (!alive.current) return
     setCatalogSkills(skillCatalog.status === 'fulfilled' ? skillCatalog.value : [])
     setCatalogMcps(mcpCatalog.status === 'fulfilled' ? mcpCatalog.value : [])
+    if (skillCatalog.status === 'fulfilled' && mcpCatalog.status === 'fulfilled') useCapabilityUpdatesStore.getState().setCatalog(skillCatalog.value, mcpCatalog.value)
     if (rows.status === 'fulfilled') { setItems(rows.value); setError('') }
     else setError(rows.reason instanceof Error ? rows.reason.message : '个人能力读取失败')
     setGrants(autoInstall.status === 'fulfilled' ? autoInstall.value : [])
@@ -111,7 +114,7 @@ export default function Capabilities() {
     return true
   }
   const updateOne = (item: LocalCapability) => run(keyOf(item), async () => {
-    if (await applyUpdate(item)) setNotice(`已更新「${item.display_name}」，下一轮对话起用新版本。`)
+    if (await applyUpdate(item)) setNotice(`已更新「${item.display_name}」，下一条消息起用新版本。`)
   }, '更新失败')
   /** 逐个更新；遇到要登录的停下打开登录窗口，失败的停下说明是哪一个。 */
   const updateAll = () => run('update:all', async () => {
@@ -124,7 +127,7 @@ export default function Capabilities() {
       }
       done += 1
     }
-    setNotice(`已更新 ${done} 项，下一轮对话起用新版本。`)
+    setNotice(`已更新 ${done} 项，下一条消息起用新版本。`)
   }, '更新失败')
   const revoke = (item: LocalCapability) => run(keyOf(item), () => agentApi.deleteLocalCapability(item.kind, item.ref), '撤销失败')
   const relogin = (item: LocalCapability) => run(keyOf(item), async () => {
@@ -219,14 +222,19 @@ export default function Capabilities() {
   const section = (kind: LocalCapabilityKind, list: LocalCapability[]) => {
     const mcp = kind === 'mcp'
     const Icon = mcp ? Plug : BookOpen
+    const sectionUpdates = list.filter((item) => hasUpdate(matches.get(keyOf(item)))).length
     return <section className="settings-card glass-panel" aria-labelledby={`capabilities-${kind}-title`}>
       <div className="settings-section-heading">
         <Icon size={16} strokeWidth={1.7} aria-hidden="true" />
         <div>
-          <h2 id={`capabilities-${kind}-title`}>{mcp ? 'MCP' : '技能'}</h2>
+          <h2 id={`capabilities-${kind}-title`} className="cap-section-title">{mcp ? 'MCP' : '技能'}
+            {sectionUpdates > 0 && <span className="cap-heading-dot" data-testid={`capabilities-${kind}-update-dot`} title={capabilityUpdateLabel(sectionUpdates)}>
+              <span className="sr-only">{capabilityUpdateLabel(sectionUpdates)}</span>
+            </span>}
+          </h2>
           <p>{mcp
             ? '连接外部服务的工具。可以自己添加，或在对话中员工请求时由你批准安装；需要登录的服务，令牌只加密保存在本机。'
-            : '企业开放给你的技能，也可以导入自己的技能（文件夹 / zip / 粘贴 / 网址）。安装后下一轮对话起可用。'}</p>
+            : '企业开放给你的技能，也可以导入自己的技能（文件夹 / zip / 粘贴 / 网址）。安装后下一条消息起可用。'}</p>
         </div>
         <span className="capabilities-heading-action">
           {items && <span className={`file-access-status ${list.length ? 'granted' : ''}`} style={{ marginLeft: 0 }}>{list.length ? `已安装 ${list.length} 个` : '未安装'}</span>}
@@ -250,7 +258,7 @@ export default function Capabilities() {
       {notice && <p role="status" className="file-access-note"><ShieldCheck size={13} aria-hidden="true" /><span>{notice}</span></p>}
       {updates.length > 0 && <div className="cap-update-bar" role="region" aria-label="能力更新">
         <RefreshCw size={14} aria-hidden="true" />
-        <span>{updates.length} 项有更新，企业已发布新版本；更新后下一轮对话起生效。</span>
+        <span>{updates.length} 项有更新，企业已发布新版本；更新后下一条消息起生效。</span>
         <button type="button" className="capabilities-add" disabled={busyKey !== null} onClick={() => void updateAll()}>
           {busyKey === 'update:all' ? '正在更新…' : '全部更新'}
         </button>
@@ -284,7 +292,7 @@ export default function Capabilities() {
           </span>
         </div>
       </section>
-      <p className="file-access-note"><ShieldCheck size={13} aria-hidden="true" /><span>MCP 每次调用仍需你审批；技能可能附带脚本和资料，不会自动执行，员工运行命令仍按审批策略。撤销后下一轮对话起失效，不影响企业配置。</span></p>
+      <p className="file-access-note"><ShieldCheck size={13} aria-hidden="true" /><span>MCP 每次调用仍需你审批；技能可能附带脚本和资料，不会自动执行，员工运行命令仍按审批策略。撤销后下一条消息起失效，不影响企业配置。</span></p>
     </div>
     {dialog?.type === 'add-mcp' && <AddMcpDialog onInstalled={() => void load()} onClose={() => setDialog(null)} />}
     {dialog?.type === 'add-skill' && <AddSkillDialog installed={items ?? []} onInstalled={load} onClose={() => setDialog(null)} />}

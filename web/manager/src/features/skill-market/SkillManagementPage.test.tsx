@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { createI18n, sharedMessages, type AuthSession } from "@aiteam/shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -6,6 +6,7 @@ import { SessionContext, type SessionContextValue } from "../../auth/session";
 import { I18nContext } from "../../i18n/context";
 import { managerMessages } from "../../i18n/messages";
 import { SkillManagementPage } from "./SkillManagementPage";
+import { resetCapabilityUpdates } from "../capability-updates";
 
 const skill = { catalog_id: "c1", skill_id: "weekly-report", display_name: "weekly-report", version: "1.0.0", install_policy: "on_demand", binding_policy: "opt_in", visibility: "tenant", config: { source: "url" }, catalog_version: 1 };
 const capabilityApi = {
@@ -40,6 +41,7 @@ function renderPage(state?: unknown) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  resetCapabilityUpdates();
   capabilityApi.listSkills.mockResolvedValue([skill]);
   capabilityApi.listConnectors.mockResolvedValue([]);
   capabilityApi.listMemoryPolicies.mockResolvedValue([]);
@@ -73,5 +75,24 @@ describe("技能管理（侧栏入口）", () => {
     renderPage({ assistCandidate: { kind: "skill", source: "clawhub", url: "https://clawhub.ai/steipete/skills/weather", title: "weather", summary: "", reason: "", verified: true } });
     const dialog = await screen.findByRole("dialog", { name: "导入技能" });
     expect(within(dialog).getByDisplayValue("https://clawhub.ai/steipete/skills/weather")).toBeInTheDocument();
+  });
+
+  it("平台技能有新版本：「企业技能」标签带红点；没有更新时不显示", async () => {
+    const platformSkill = { ...skill, catalog_id: "platform-p1", skill_id: "weather", config: { source: "operator", source_skill_id: "p1" } };
+    capabilityApi.listSkills.mockResolvedValue([platformSkill]);
+    marketApi.list.mockResolvedValue([{ skill_id: "p1", owner: "platform", slug: "weather", display_name: "weather", summary: "", published_version: "2.0.0", content_hash: "h2", status: "published", installed: true, update_available: true }]);
+    const view = renderPage();
+    const enterpriseTab = () => document.querySelector<HTMLElement>('[data-tab-value="enterprise"]')!;
+    await screen.findByRole("table", { name: "技能目录" });
+    expect(await within(enterpriseTab()).findByLabelText("1 项有更新")).toBeInTheDocument();
+    view.unmount();
+    resetCapabilityUpdates();
+    marketApi.list.mockClear();
+    marketApi.list.mockResolvedValue([{ skill_id: "p1", owner: "platform", slug: "weather", display_name: "weather", summary: "", published_version: "2.0.0", content_hash: "h2", status: "published", installed: true, update_available: false }]);
+    renderPage();
+    await screen.findByRole("table", { name: "技能目录" });
+    await waitFor(() => expect(marketApi.list).toHaveBeenCalledTimes(1));
+    await act(async () => { await Promise.resolve(); });
+    expect(within(enterpriseTab()).queryByLabelText(/项有更新/)).toBeNull();
   });
 });

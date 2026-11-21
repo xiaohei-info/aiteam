@@ -120,3 +120,8 @@
 .cap-update-bar > svg { color: var(--brand); flex-shrink: 0; }
 .cap-update-bar > span { flex: 1; min-width: 0; }
 .cap-update-bar .capabilities-add { flex-shrink: 0; }
+
+/* 分栏标题上的更新红点（§4.5b）：只是提示有更新，数字在顶部更新横条里。 */
+.cap-section-title { display: inline-flex; align-items: center; gap: 6px; }
+.cap-heading-dot { position: relative; display: inline-block; width: 7px; height: 7px; border-radius: 999px; background: var(--danger); box-shadow: 0 0 0 2px var(--danger-bg); flex-shrink: 0; }
+.cap-heading-dot > .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }

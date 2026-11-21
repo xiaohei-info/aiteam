@@ -89,7 +89,7 @@ export function AddSkillDialog({ installed, onInstalled, onClose }: { installed:
                 {shown.length === 0 && <li><span className="mcp-note">没有匹配的技能。</span></li>}
               </ul>
             </>}
-      <p className="mcp-note">技能可能附带脚本和资料，不会自动执行；员工运行命令仍按审批策略。安装后下一轮对话起可用。</p>
+      <p className="mcp-note">技能可能附带脚本和资料，不会自动执行；员工运行命令仍按审批策略。安装后下一条消息起可用。</p>
       <footer><button type="button" onClick={onClose}>关闭</button></footer>
         </>}
     </div>

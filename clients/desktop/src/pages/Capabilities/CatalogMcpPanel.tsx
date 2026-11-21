@@ -67,7 +67,7 @@ export function CatalogMcpPanel({ onInstalled, onLogin, onClose }: {
       setToken('')
       setOpen(null)
       if (result.login) { onLogin(result.login, name); return }
-      setNotice(`已安装「${name}」，下一轮对话起可用。`)
+      setNotice(`已安装「${name}」，下一条消息起可用。`)
       // 行立即显示「已安装」，目录在后台刷新（企业目录可能较慢，不让整张表一直锁着）。
       setRows((current) => current?.map((row) => row.server_id === item.server_id ? { ...row, state: 'installed' } : row) ?? current)
       onInstalled()

@@ -16,7 +16,9 @@ import {
   SideNavItem,
   SideNavSection,
 } from "@astryxdesign/core/SideNav";
+import { StatusDot } from "@astryxdesign/core/StatusDot";
 import { buildShellViewModel } from "@aiteam/shared";
+import { capabilityUpdateLabel, useCapabilityUpdateCounts, useCapabilityUpdatePolling } from "../features/capability-updates";
 import { managerShellConfig } from "./config";
 import { useSession } from "../auth/session";
 import { useI18n } from "../i18n/context";
@@ -33,6 +35,10 @@ export function AppShell(): React.ReactNode {
   const [changingPw, setChangingPw] = useState(false);
   const isAdmin = Boolean(me?.roles.some((role) => role === "owner" || role === "enterprise_admin"));
   const vm = buildShellViewModel(managerShellConfig, session, pathname);
+  // 平台技能 / MCP 有新版本时侧栏红点（§4.5b）：只有能管理它们的角色才检查。
+  useCapabilityUpdatePolling(isAdmin && !vm.requiresLogin && !blocked);
+  const updates = useCapabilityUpdateCounts();
+  const updateCountFor: Record<string, number> = { skills: updates.skills, "mcp-market": updates.mcps };
 
   if (vm.requiresLogin) {
     // 未登录：壳退化为仅登录入口，由路由层 <RequireAuth> 把页面切到 /login。
@@ -63,6 +69,9 @@ export function AppShell(): React.ReactNode {
             label={i18n.t(item.labelKey)}
             href={item.path}
             isSelected={item.id === vm.activeItemId}
+            endContent={(updateCountFor[item.id] ?? 0) > 0
+              ? <StatusDot variant="error" label={capabilityUpdateLabel(updateCountFor[item.id] ?? 0)} tooltip={capabilityUpdateLabel(updateCountFor[item.id] ?? 0)} />
+              : undefined}
           />
         ))}
       </SideNavSection>

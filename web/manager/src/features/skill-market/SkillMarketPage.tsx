@@ -11,6 +11,7 @@ import { Text } from "@astryxdesign/core/Text";
 import { VStack } from "@astryxdesign/core/VStack";
 import { useSkillMarketApi } from "./useSkillMarketApi";
 import type { PlatformSkillMarketItem } from "./types";
+import { countSkillUpdates, reportCapabilityUpdates } from "../capability-updates";
 
 /** 平台技能市场：运营端审核开放的技能。`embedded` 时嵌在「技能管理」的标签页里，不显示页标题。 */
 export function SkillMarketPage({ embedded = false }: { embedded?: boolean } = {}): ReactNode {
@@ -22,7 +23,11 @@ export function SkillMarketPage({ embedded = false }: { embedded?: boolean } = {
 
   const load = useCallback(async () => {
     setError(null);
-    try { setItems(await api.list()); }
+    try {
+      const list = await api.list();
+      setItems(list);
+      reportCapabilityUpdates({ skills: countSkillUpdates(list) });
+    }
     catch (err) { setError(err instanceof ApiError ? err.message : "平台技能市场加载失败"); }
   }, [api]);
 

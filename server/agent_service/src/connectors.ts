@@ -483,7 +483,7 @@ async function planInstall(store: AgentSqliteStore, owner: TaskOwner, input: Cap
     const listing = skillListing(installed, list, skill);
     // The record this install replaces: an older install of the same entry, or another skill with the same SKILL.md name.
     const existing = listing.local_ref ? installed.find(item => item.kind === "skill" && item.ref === listing.local_ref) : undefined;
-    if (listing.state === "installed") return `技能「${skill.display_name || skill.skill_id}」${skill.version} 已安装，下一轮对话起可用，无需再装。`;
+    if (listing.state === "installed") return `技能「${skill.display_name || skill.skill_id}」${skill.version} 已安装，下一条消息起可用，无需再装。`;
     return {
       kind: "skill", ref: skill.skill_id, display_name: skill.display_name.slice(0, 120), url: "", declaredTools: [],
       source: skill.origin === "platform" ? "platform_catalog" : "enterprise_catalog", sourceRef: skill.source_skill_id, skill, existing, reason,
@@ -885,7 +885,7 @@ export function capabilityInstallTool(store: AgentSqliteStore, owner: TaskOwner,
           }
           try {
             const capability = installOneCustomSkill(store, custom, owner, plan.external.pkg, resolution?.action === "replace");
-            return { content: [{ type: "text" as const, text: `已安装技能「${capability.display_name}」${capability.version}，下一轮对话起可用。` }], details: undefined };
+            return { content: [{ type: "text" as const, text: `已安装技能「${capability.display_name}」${capability.version}，下一条消息起可用。` }], details: undefined };
           } catch (error) {
             return fail(error instanceof Error && error.message ? error.message : "安装未完成：技能包装不进本机目录。");
           }
@@ -895,7 +895,7 @@ export function capabilityInstallTool(store: AgentSqliteStore, owner: TaskOwner,
         if (plan.existing && resolution?.action !== "replace") return fail("已装有该技能的其他版本，用户没有选择覆盖，未安装。");
         const outcome = await installPlannedSkill(store, owner, plan, skills!, approvedBy, signal);
         if ("error" in outcome) return fail(outcome.text);
-        return { content: [{ type: "text" as const, text: `已安装技能「${found.display_name || found.skill_id}」${found.version}，下一轮对话起可用。` }], details: undefined };
+        return { content: [{ type: "text" as const, text: `已安装技能「${found.display_name || found.skill_id}」${found.version}，下一条消息起可用。` }], details: undefined };
       }
       const ref = resolution?.action === "rename" ? resolution.ref : plan.ref;
       if (!REF_RE.test(ref)) return fail("安装未完成：新标识无效。");
@@ -916,7 +916,7 @@ export function capabilityInstallTool(store: AgentSqliteStore, owner: TaskOwner,
       }
       const saved = storeMcp(store, owner, auth, plan, ref, connected, approvedBy);
       const signedIn = plan.auth === "oauth" ? "（已登录服务方账号）" : plan.auth === "bearer" ? "（已保存访问令牌）" : "";
-      return { content: [{ type: "text" as const, text: `已安装 ${saved.display_name}（标识 ${ref}）${signedIn}，可用工具：${connected.tools.join(", ")}。下一轮对话起可调用。` }], details: undefined };
+      return { content: [{ type: "text" as const, text: `已安装 ${saved.display_name}（标识 ${ref}）${signedIn}，可用工具：${connected.tools.join(", ")}。下一条消息起可调用。` }], details: undefined };
     },
   } as ToolDefinition;
 }
