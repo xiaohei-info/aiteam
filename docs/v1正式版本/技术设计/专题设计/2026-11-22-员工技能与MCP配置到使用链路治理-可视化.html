@@ -289,7 +289,7 @@ svg text{font-family:inherit}
 <tr><th style="width:15%">位置</th><th>要做什么</th><th style="width:9%">阶段</th><th style="width:7%">量级</th></tr>
 <tr><td><span class="tag mg">manager_service</span></td><td><b>能力引用服务（新）</b>：resolve / validate_additions / status / employees_using / remove_from_employees，技能与连接器共用</td><td>P1</td><td class="sz M">M</td></tr>
 <tr><td><span class="tag mg">manager_service</span></td><td>员工保存前校验新增项；读取响应带 <code>skill_status</code>（新）；保存返回 <code>warnings</code>（新）</td><td>P1 / P2</td><td class="sz M">M</td></tr>
-<tr><td><span class="tag mg">manager_service</span></td><td>删除、停用联动：反查 → 409 → <code>confirm</code> → 同事务清理 + 升版本 + 审计（技能、连接器、MCP 市场共用）</td><td>P2</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag mg">manager_service</span></td><td>删除、停用联动：反查 → 409 → 弹窗二选一（<code>remove_from_employees</code>）→ 选「去掉」时同事务清理 + 升版本 + 审计（技能、连接器、MCP 市场共用）</td><td>P2</td><td class="sz M">M</td></tr>
 <tr><td><span class="tag mg">manager_service</span></td><td>快照与授权同步改走统一入口；同步响应带 <code>skipped_refs</code>（新）</td><td>P3</td><td class="sz M">M</td></tr>
 <tr><td><span class="tag mg">manager_service</span></td><td>旁路接口标废弃（P2）；删路由、表、复制逻辑（P4）</td><td>P2 / P4</td><td class="sz S">S</td></tr>
 <tr><td><span class="tag ag">agent_service（Node）</span></td><td>提示词「Authorized skill references」只列已装载（P0，随 PR #223）；readiness 带跳过原因（P3）</td><td>P0 / P3</td><td class="sz M">M</td></tr>
