@@ -8,6 +8,7 @@ import { resolveConfig } from "@luxusai/pi-hindsight/extensions/config/config.js
 import { createAgentControlledReloadConfig, createControlledResourceLoader, hindsightConfigPath, hindsightStateDir, isMemoryPolicyEnabled, memoryToolNames, removeHindsightState, withAgentHindsightEnvironment } from "./resources.js";
 import { HINDSIGHT_CLIENT_PROTOCOL, type HindsightRuntimeConfig } from "../manager-client.js";
 import type { SessionAuthorization } from "./session-host.js";
+import { CustomSkillStore, normalizeSkillPackage } from "../custom-skills.js";
 
 function hindsightLease(bank = "a", token = "opaque-lease-secret"): HindsightRuntimeConfig {
   return {
@@ -228,4 +229,24 @@ test("memory defaults on, supports explicit disable, and only Manager leases sel
     rmSync(workspace, { recursive: true, force: true });
     rmSync(agentDir, { recursive: true, force: true });
   }
+});
+
+test("a member's own imported skill is listed by the controlled loader (it reaches <available_skills>)", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiteam-custom-loader-"));
+  try {
+    const scope = { tenantId: "tenant-a", memberId: "member-a" };
+    const store = new CustomSkillStore(root);
+    store.install(scope, normalizeSkillPackage(
+      [{ path: "SKILL.md", content: Buffer.from("---\nname: excel-report\ndescription: 按模板生成周报\n---\n\n# 周报\n") }],
+      { kind: "text", label: "粘贴 SKILL.md" },
+    ));
+    const authorization = {
+      caller: { callerId: "member-a", userId: "member-a", tenantId: "tenant-a", roles: [] },
+      employeeId: "e1",
+      snapshot: { employee_id: "e1", version: "1", snapshot_version: "s1", display_name: "E", skills: [] },
+    } as unknown as SessionAuthorization;
+    const loader = createControlledResourceLoader("system", undefined, authorization, root, join(root, "agent"), undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, { store, scope });
+    await loader.reload();
+    assert.deepEqual(loader.getSkills().skills.map((skill) => skill.name), ["excel-report"]);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
