@@ -289,6 +289,8 @@ def _derive_snapshot_version(
             "employee_id", "employee_slug", "version", "knowledge_refs",
             "source_template_id", "source_template_version", "status_reason",
             "origin", "copied_from_employee_id",
+            # 目录状态是管理端的只读视图，目录变化不能让员工配置指纹变动。
+            "skill_status", "connector_status",
         },
     )
     payload["knowledge_refs"] = sorted(knowledge_refs)

@@ -35,6 +35,7 @@ import { useCapabilityApi } from "../capability/useCapabilityApi";
 import type { Department, EmployeeConfig, EmployeeConfigIn } from "./types";
 import type { PlatformCatalog } from "../platform-models/usePlatformModelsApi";
 import type { SkillCatalog } from "../capability/types";
+import { buildSkillOptions, danglingSkillRefs } from "./skillOptions";
 
 /** 模型框占位：加载中先亮出当前模型，加载失败与确实没有模型分开说。 */
 function modelPlaceholder(state: { loading: boolean; failed: boolean; current: string; empty: boolean; pick: string }): string {
@@ -120,6 +121,8 @@ export function toEmployeeConfigIn(config: EmployeeConfig): EmployeeConfigIn {
     status_reason,
     origin,
     copied_from_employee_id,
+    skill_status,
+    connector_status,
     ...editable
   } = config;
   void employee_id;
@@ -138,6 +141,9 @@ export function toEmployeeConfigIn(config: EmployeeConfig): EmployeeConfigIn {
   // 来源（招募 / 方案 / 复制）与复制溯源只读。
   void origin;
   void copied_from_employee_id;
+  // 目录状态由服务端按当前目录算出，只读。
+  void skill_status;
+  void connector_status;
   return editable;
 }
 
@@ -156,6 +162,10 @@ export function EmployeeConfigDrawer({
   const [employee, setEmployee] = useState<EmployeeConfig | null>(null);
   const [catalog, setCatalog] = useState<PlatformCatalog>({ providers: [], models: [] });
   const [skills, setSkills] = useState<SkillCatalog[]>([]);
+  // 技能库加载失败要说清楚并能重试，不能冒充「暂无技能」。
+  const [skillsError, setSkillsError] = useState(false);
+  const [skillsLoaded, setSkillsLoaded] = useState(false);
+  const [skillsAttempt, setSkillsAttempt] = useState(0);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [loading, setLoading] = useState(false);
   const [providersLoading, setProvidersLoading] = useState(true);
@@ -221,9 +231,19 @@ export function EmployeeConfigDrawer({
 
   useEffect(() => {
     let alive = true;
-    capabilityApi.listSkills().then((items) => { if (alive) setSkills(items); }).catch(() => undefined);
+    setSkillsError(false);
+    capabilityApi.listSkills()
+      .then((items) => { if (alive) { setSkills(items); setSkillsLoaded(true); } })
+      .catch(() => { if (alive) setSkillsError(true); });
     return () => { alive = false; };
-  }, [capabilityApi]);
+  }, [capabilityApi, skillsAttempt]);
+
+  const skillOptions = useMemo(() => buildSkillOptions(skills, draft?.skills ?? []), [skills, draft?.skills]);
+  // 库还没加载出来（或加载失败）时不能判断「已失效」，否则会把全部技能误标。
+  const dangling = useMemo(
+    () => (skillsLoaded && !skillsError ? danglingSkillRefs(skills, draft?.skills ?? []) : []),
+    [skills, skillsLoaded, skillsError, draft?.skills],
+  );
 
   /** D18：选择 Operator 发布且有生效价格的模型；旧配置即使价格失效也保留可见。 */
   const availableModels = useMemo(
@@ -454,16 +474,35 @@ export function EmployeeConfigDrawer({
 
                     <VStack gap={3}>
                       <Heading level={3}>技能</Heading>
-                      <MultiSelector
-                        label="企业已安装技能"
-                        description={skills.length ? "选择此专家可使用的技能" : "暂无企业技能，请先在「技能管理」里新增技能"}
-                        options={skills.map((skill) => ({ value: skill.skill_id, label: `${skill.display_name || "未命名技能"} · v${skill.version}` }))}
-                        value={draft.skills}
-                        onChange={(value) => update("skills", value)}
-                        placeholder="选择技能"
-                        triggerDisplay="labels"
-                        isDisabled={submitting || skills.length === 0}
-                      />
+                      {skillsError ? (
+                        <Banner
+                          status="warning"
+                          title="技能库暂时没加载出来"
+                          endContent={<Button label="重试" size="sm" variant="ghost" onClick={() => setSkillsAttempt((n) => n + 1)} />}
+                        />
+                      ) : (
+                        <MultiSelector
+                          label="企业已安装技能"
+                          description={skills.length ? "选择此专家可使用的技能；灰色的暂时不能给员工用" : "暂无企业技能，请先在「技能管理」里添加平台技能或导入技能"}
+                          options={skillOptions}
+                          value={draft.skills.filter((ref) => !dangling.includes(ref))}
+                          onChange={(value) => update("skills", [...value, ...dangling])}
+                          placeholder="选择技能"
+                          triggerDisplay="labels"
+                          isDisabled={submitting || skills.length === 0}
+                        />
+                      )}
+                      {dangling.map((ref) => (
+                        <HStack key={ref} gap={2} align="center">
+                          <Text type="supporting">「{ref}」已从企业技能库移除，这位员工现在用不了它</Text>
+                          <Button
+                            type="button"
+                            label="从员工身上去掉"
+                            isDisabled={submitting}
+                            onClick={() => update("skills", draft.skills.filter((item) => item !== ref))}
+                          />
+                        </HStack>
+                      ))}
                     </VStack>
 
                     <KnowledgePolicyPanel key={employeeId} employeeId={employeeId} tools={employee?.tools ?? []} />
