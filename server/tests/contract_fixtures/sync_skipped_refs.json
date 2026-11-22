@@ -1,0 +1,10 @@
+{
+  "_comment": "Manager 授权同步响应里 skipped_refs 的跨端契约样例：Manager 测试断言它能产出这份内容，Agent 测试断言它能读懂这份内容（AGENTS §3.9）。employee_id 在 Manager 测试里按占位符 EMP 归一。",
+  "experts": [],
+  "skipped_refs": [
+    {"employee_id": "EMP", "ref": "off", "skill_id": "off", "reason": "disabled"},
+    {"employee_id": "EMP", "ref": "wip", "skill_id": "wip", "reason": "draft"},
+    {"employee_id": "EMP", "ref": "bad", "skill_id": "bad", "reason": "invalid"},
+    {"employee_id": "EMP", "ref": "gone@2", "skill_id": "gone", "reason": "missing"}
+  ]
+}

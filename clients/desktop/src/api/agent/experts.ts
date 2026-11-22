@@ -61,7 +61,8 @@ export async function listSolutions(client: ServiceApiClient): Promise<Solutions
   }
 }
 
-export interface ExpertReadiness { available: boolean; reasons: string[] }
+export interface SkillReadinessItem { ref: string; status: 'ready' | 'blocked'; reason?: string }
+export interface ExpertReadiness { available: boolean; reasons: string[]; skills?: SkillReadinessItem[] }
 
 // 单个专家就绪状态。UI 层用来判断"点这个员工能不能立刻发消息"。
 export async function getExpertReadiness(
@@ -76,5 +77,15 @@ export async function getExpertReadiness(
     || !('reasons' in payload) || !Array.isArray(payload.reasons) || !payload.reasons.every((reason: unknown) => typeof reason === 'string')) {
     throw new Error('员工就绪状态响应无效，请重试')
   }
-  return { available: payload.available, reasons: payload.reasons }
+  // skills 是可选的展示信息：旧版随包 Agent 没有或形状不对就当没有，不影响能否对话的判断。
+  const rawSkills = (payload as { skills?: unknown }).skills
+  const skills = Array.isArray(rawSkills)
+    ? rawSkills.flatMap((item): SkillReadinessItem[] => {
+      const entry = item as { ref?: unknown; status?: unknown; reason?: unknown } | null
+      return entry && typeof entry.ref === 'string' && (entry.status === 'ready' || entry.status === 'blocked')
+        ? [{ ref: entry.ref, status: entry.status, ...(typeof entry.reason === 'string' ? { reason: entry.reason } : {}) }]
+        : []
+    })
+    : undefined
+  return { available: payload.available, reasons: payload.reasons, ...(skills ? { skills } : {}) }
 }

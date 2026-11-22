@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import { test } from "node:test";
@@ -555,4 +556,11 @@ test("同步响应的 skipped_refs 只收形状合法的项；旧版 Manager 没
   });
   assert.deepEqual(normalized.skipped_skill_refs, [ok, { employee_id: "e2", ref: "x", skill_id: "x", reason: "missing" }]);
   assert.equal(normalizeAuthorizedConfig({ experts: [] }).skipped_skill_refs, undefined);
+});
+
+test("跨端契约：Manager 测试产出的 skipped_refs 样例，Agent 全部读得懂", () => {
+  const fixture = JSON.parse(readFileSync(new URL("../../tests/contract_fixtures/sync_skipped_refs.json", import.meta.url), "utf8")) as { skipped_refs: unknown[] };
+  const normalized = normalizeAuthorizedConfig({ experts: [], skipped_refs: fixture.skipped_refs });
+  assert.deepEqual(normalized.skipped_skill_refs, fixture.skipped_refs);
+  assert.deepEqual(normalized.skipped_skill_refs?.map((item) => item.reason).sort(), ["disabled", "draft", "invalid", "missing"]);
 });

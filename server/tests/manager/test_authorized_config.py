@@ -594,6 +594,11 @@ def test_pull_reports_why_each_skill_ref_was_not_delivered_even_when_version_is_
     assert {item.employee_id for item in response.skipped_refs} == {created.employee_id}
     assert next(item for item in response.skipped_refs if item.skill_id == "gone").ref == "gone@2"
     assert "skill_status" not in str(response.model_dump()["experts"])
+    # 跨端契约：与 Agent 测试共用同一份样例，字段名 / 取值任何一边改了都会有一边失败。
+    import json, pathlib
+    fixture = json.loads((pathlib.Path(__file__).parent.parent / "contract_fixtures" / "sync_skipped_refs.json").read_text(encoding="utf8"))
+    emitted = [{**item, "employee_id": "EMP"} for item in response.model_dump(mode="json")["skipped_refs"]]
+    assert sorted(emitted, key=lambda i: i["skill_id"]) == sorted(fixture["skipped_refs"], key=lambda i: i["skill_id"])
 
     catalog.skills["off"] = ("停用的", "1", "opt_in", True, "h")  # 管理员重新启用
     again = svc.pull(owner, req)

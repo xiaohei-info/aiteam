@@ -29,10 +29,7 @@ _SPACER = re.compile(r"[\s-]+")
 @dataclass(frozen=True)
 class CopyRepositories:
     employees: Any
-    prompts: Any
-    skills: Any
     knowledge: Any
-    connectors: Any
     memory: Any
 
 
@@ -99,23 +96,11 @@ class EmployeeCopyService:
             origin="copied", copied_from_employee_id=source.employee_id,
         )
         new_id = row.employee_id
-        prompt = repos.prompts.get_current(ctx, employee_id=source.employee_id)
-        if prompt is not None:
-            repos.prompts.create(
-                ctx, employee_id=new_id, display_name=name, persona=prompt.persona,
-                model=policy.model or None, provider_ref=policy.provider_ref or None,
-                thinking_level=policy.thinking_level, tools=list(prompt.tools), is_current=True,
-                change_note=f"复制自「{source.display_name}」",
-            )
-        for b in repos.skills.list_all(ctx, employee_id=source.employee_id):
-            repos.skills.create(ctx, employee_id=new_id, skill_id=b.skill_id, enabled=b.enabled, config=dict(b.config))
+        # 技能与连接器只在员工自己的清单里（上面已复制），不再有单独的绑定行（设计 2026-11-22 §3.1）。
         for b in repos.knowledge.list_all(ctx, employee_id=source.employee_id):
             if b.revoked_at is None:
                 repos.knowledge.create(ctx, employee_id=new_id, knowledge_space_id=b.knowledge_space_id,
                                        enabled=b.enabled, config=dict(b.config))
-        for b in repos.connectors.list_all(ctx, employee_id=source.employee_id):
-            repos.connectors.create(ctx, employee_id=new_id, connector_id=b.connector_id, grant_ref=b.grant_ref,
-                                    enabled=b.enabled, config=dict(b.config))
         return {"employee_id": new_id}
 
 
@@ -131,8 +116,7 @@ def _unique_slug(employees, ctx, name: str) -> str:
 
 def build_employee_copy_service(router, operator, avatars, config_service) -> EmployeeCopyService:
     from .employee_bindings_repositories import (
-        EmployeeConnectorBindingRepository, EmployeeKnowledgeBindingRepository, EmployeeMemorySettingRepository,
-        EmployeePromptVersionRepository, EmployeeSkillBindingRepository,
+        EmployeeKnowledgeBindingRepository, EmployeeMemorySettingRepository,
     )
     from .employee_config_repository import EmployeeConfigRepository
     from .idempotency_repository import ManagerIdempotencyRepository
@@ -141,9 +125,8 @@ def build_employee_copy_service(router, operator, avatars, config_service) -> Em
     def repositories(session) -> CopyRepositories:
         bound = _TransactionRouter(session)
         return CopyRepositories(
-            employees=EmployeeConfigRepository(bound), prompts=EmployeePromptVersionRepository(bound),
-            skills=EmployeeSkillBindingRepository(bound), knowledge=EmployeeKnowledgeBindingRepository(bound),
-            connectors=EmployeeConnectorBindingRepository(bound), memory=EmployeeMemorySettingRepository(bound),
+            employees=EmployeeConfigRepository(bound), knowledge=EmployeeKnowledgeBindingRepository(bound),
+            memory=EmployeeMemorySettingRepository(bound),
         )
 
     return EmployeeCopyService(

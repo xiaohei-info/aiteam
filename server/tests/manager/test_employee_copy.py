@@ -8,9 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from manager_service.catalog_scope_reconciler import REVOKED
-from manager_service.employee_bindings_repositories import (
-    ConnectorBindingRow, KnowledgeBindingRow, PromptVersionRow, SkillBindingRow,
-)
+from manager_service.employee_bindings_repositories import KnowledgeBindingRow
 from manager_service.employee_config_repository import EmployeeConfigRow
 from manager_service.employee_copy_service import CopyRepositories, EmployeeCopyService
 from manager_service.operator_catalog import FakeOperatorCatalogClient
@@ -117,31 +115,16 @@ class FakeConfigService:
         return SimpleNamespace(employee_id=employee_id)
 
 
-def _prompt(**over):
-    base = dict(binding_id="p1", employee_id="src-1", version=3, display_name="文案专家", persona="你是文案专家",
-                model=MODEL, provider_ref=PROVIDER, thinking_level=None, tools=["web"], is_current=True,
-                change_note="x", created_at=NOW)
-    base.update(over)
-    return PromptVersionRow(**base)
-
-
 def _build(source=None, *, catalog=None, avatars=None, memory_policy=None, extra_rows=()):
     source = source or _source()
     employees = FakeEmployees(source, *extra_rows)
-    prompts = Recorder([_prompt(), _prompt(binding_id="p0", version=2, is_current=False)])
-    skills = Recorder([SkillBindingRow(binding_id="s1", employee_id="src-1", skill_id="skill-a", enabled=True,
-                                       config={"k": 1}, created_at=NOW, updated_at=NOW)])
     knowledge = Recorder([
         KnowledgeBindingRow(binding_id="k1", employee_id="src-1", knowledge_space_id="ks-1", enabled=True,
                             config={}, created_at=NOW, updated_at=NOW),
         KnowledgeBindingRow(binding_id="k2", employee_id="src-1", knowledge_space_id="ks-old", enabled=False,
                             config={}, created_at=NOW, updated_at=NOW, revoked_at=NOW),
     ])
-    connectors = Recorder([ConnectorBindingRow(binding_id="c1", employee_id="src-1", connector_id="conn-a",
-                                               grant_ref="g1", enabled=True, config={}, created_at=NOW,
-                                               updated_at=NOW)])
-    repos = CopyRepositories(employees=employees, prompts=prompts, skills=skills, knowledge=knowledge,
-                             connectors=connectors, memory=FakeMemory(memory_policy))
+    repos = CopyRepositories(employees=employees, knowledge=knowledge, memory=FakeMemory(memory_policy))
     operator = catalog or FakeOperatorCatalogClient()
     if catalog is None:
         operator.seed_platform_catalog(platform_catalog_with_model())
@@ -174,15 +157,13 @@ def test_copy_creates_custom_expert_with_provenance_and_configuration():
     assert avatars.calls == [("src-1", "new-1")]
 
 
-def test_copy_carries_current_prompt_and_bindings_but_not_revoked_knowledge():
+def test_copy_carries_knowledge_bindings_but_not_revoked_ones():
     svc, repos, _ = _build()
     _copy(svc)
-    assert [p["is_current"] for p in repos.prompts.created] == [True]
-    assert repos.prompts.created[0]["employee_id"] == "new-1" and repos.prompts.created[0]["display_name"] == "文案专家 - 副本"
-    assert [(s["skill_id"], s["config"]) for s in repos.skills.created] == [("skill-a", {"k": 1})]
     assert [k["knowledge_space_id"] for k in repos.knowledge.created] == ["ks-1"]
-    assert [(c["connector_id"], c["grant_ref"]) for c in repos.connectors.created] == [("conn-a", "g1")]
-    assert all(r["employee_id"] == "new-1" for r in repos.skills.created + repos.knowledge.created + repos.connectors.created)
+    assert all(r["employee_id"] == "new-1" for r in repos.knowledge.created)
+    # 技能 / 连接器只在员工自己的清单里，随员工配置一起复制，没有单独的绑定行。
+    assert not hasattr(repos, "skills") and not hasattr(repos, "connectors") and not hasattr(repos, "prompts")
 
 
 def test_copy_slug_is_unique_in_tenant():

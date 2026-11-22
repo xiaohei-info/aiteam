@@ -18,6 +18,8 @@ import EmployeeUsageCard from '../Usage/EmployeeUsageCard'
 import EmployeeMemoryView from './EmployeeMemoryView'
 import { useEmployeeMemorySummary } from '../../hooks/useEmployeeMemorySummary'
 import { memoryEntryLabel } from '../../lib/employeeMemory'
+import { useEmployeeSkillStates } from '../../hooks/useEmployeeSkillStates'
+import SkillStateNotes from '../SkillStateNotes'
 
 export default function AgentDetailPanel() {
   const {
@@ -75,6 +77,7 @@ export default function AgentDetailPanel() {
       }
     : undefined
   // 面板打开时才读取记忆条数；旧版 Agent 没有记忆接口时隐藏「查看全部」。
+  const skillStates = useEmployeeSkillStates(detailOpen && employeeId ? employeeId : null)
   const { state: memorySummaryState, reload: reloadMemorySummary } = useEmployeeMemorySummary(detailOpen && employeeId ? employeeId : null)
 
   useEffect(() => {
@@ -276,6 +279,7 @@ export default function AgentDetailPanel() {
             ) : (
               <span className="adp-empty-text">暂无技能信息</span>
             )}
+            <SkillStateNotes groups={skillStates} className="adp-skill-states" />
           </div>
 
           <div className="adp-card adp-feature-card"><div className="adp-card-header"><span className="adp-card-title">记忆摘要</span>{employeeId && memorySummaryState.status !== 'unsupported' && <button type="button" className="adp-inline-action" onClick={() => setMemoryOpen(true)}>{memoryEntryLabel(memorySummaryState.status === 'ready' ? memorySummaryState.data : null)}</button>}</div><p className="adp-persona-text">{memorySummary || '最近 3 天暂无新的记忆摘要'}</p><span className="adp-period">最近 3 天</span></div>

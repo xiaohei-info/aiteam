@@ -42,16 +42,6 @@ def _client(db_url):
     return TestClient(app)
 
 
-PROMPT_OUT = dict(
-    binding_id="pv-1", employee_id="emp-1", version=1, display_name="v1",
-    persona="p", model="m", provider_ref="r", thinking_level="high",
-    tools=["search"], is_current=True, change_note=None,
-    created_at="2026-07-01T00:00:00",
-)
-SKILL_OUT = dict(
-    binding_id="sk-1", employee_id="emp-1", skill_id="code-review", enabled=True,
-    config={}, created_at="2026-07-01T00:00:00", updated_at="2026-07-01T00:00:00",
-)
 KNOW_OUT = dict(
     binding_id="kn-1", employee_id="emp-1", knowledge_space_id="ks_default", enabled=True,
     config={}, created_at="2026-07-01T00:00:00", updated_at="2026-07-01T00:00:00",
@@ -60,30 +50,15 @@ MEM_OUT = dict(
     binding_id="mem-1", employee_id="emp-1", policy={}, seed_memories=[],
     retention_days=30, scope="tenant", updated_at="2026-07-01T00:00:00",
 )
-CONN_OUT = dict(
-    binding_id="co-1", employee_id="emp-1", connector_id="slack", grant_ref="grant-1",
-    enabled=True, config={}, created_at="2026-07-01T00:00:00",
-    updated_at="2026-07-01T00:00:00",
-)
 
 
 # ---------------- 401 未登录 ----------------
 
 @pytest.mark.parametrize("method,path", [
-    ("POST", "/api/manager/employees/emp-1/prompt-versions"),
-    ("GET", "/api/manager/employees/emp-1/prompt-versions"),
-    ("GET", "/api/manager/employees/emp-1/prompt-versions/current"),
-    ("GET", "/api/manager/employees/emp-1/prompt-versions/pv-1"),
-    ("POST", "/api/manager/employees/emp-1/prompt-versions/pv-1/activate"),
-    ("DELETE", "/api/manager/employees/emp-1/prompt-versions/pv-1"),
-    ("POST", "/api/manager/employees/emp-1/skill-bindings"),
-    ("GET", "/api/manager/employees/emp-1/skill-bindings"),
     ("POST", "/api/manager/employees/emp-1/knowledge-bindings"),
     ("GET", "/api/manager/employees/emp-1/knowledge-bindings"),
     ("GET", "/api/manager/employees/emp-1/memory-setting"),
     ("PUT", "/api/manager/employees/emp-1/memory-setting"),
-    ("POST", "/api/manager/employees/emp-1/connector-bindings"),
-    ("GET", "/api/manager/employees/emp-1/connector-bindings"),
 ])
 def test_no_token_401(method, path):
     client = _client(None)
@@ -95,9 +70,7 @@ def test_no_token_401(method, path):
 # ---------------- 503 无业务 DB ----------------
 
 @pytest.mark.parametrize("method,path", [
-    ("GET", "/api/manager/employees/emp-1/prompt-versions"),
-    ("POST", "/api/manager/employees/emp-1/prompt-versions"),
-    ("GET", "/api/manager/employees/emp-1/skill-bindings"),
+    ("GET", "/api/manager/employees/emp-1/knowledge-bindings"),
     ("GET", "/api/manager/employees/emp-1/memory-setting"),
 ])
 def test_no_db_503(method, path):
@@ -109,99 +82,7 @@ def test_no_db_503(method, path):
 
 # ---------------- 422 额外字段（契约防腐） ----------------
 
-def test_prompt_version_create_extra_field_422():
-    client = _client("postgresql://fake/fake")
-    body = {"display_name": "v1", "extra_field": 1}
-    r = client.post("/api/manager/employees/emp-1/prompt-versions",
-                    json=body, headers=_auth_header())
-    assert r.status_code == 422, r.text
-
-
-def test_skill_binding_create_extra_field_422():
-    client = _client("postgresql://fake/fake")
-    r = client.post("/api/manager/employees/emp-1/skill-bindings",
-                    json={"skill_id": "x", "surprise": 1}, headers=_auth_header())
-    assert r.status_code == 422, r.text
-
-
 # ---------------- happy path + 错误传播 ----------------
-
-def test_prompt_version_create_and_activate():
-    fake = MagicMock()
-    fake.create.return_value = PROMPT_OUT
-    fake.list_all.return_value = [PROMPT_OUT]
-    fake.get.return_value = PROMPT_OUT
-    fake.get_current.return_value = PROMPT_OUT
-    fake.set_current.return_value = {**PROMPT_OUT, "is_current": True}
-    fake.delete.return_value = None
-    with patch("manager_service.routes_employee_bindings.build_prompt_version_service",
-               return_value=fake):
-        client = _client("postgresql://fake/fake")
-        h = _auth_header()
-        # create
-        r = client.post("/api/manager/employees/emp-1/prompt-versions",
-                        json={"display_name": "v1"}, headers=h)
-        assert r.status_code == 201, r.text
-        assert r.json()["data"]["binding_id"] == "pv-1"
-        assert fake.create.called
-        # list
-        r = client.get("/api/manager/employees/emp-1/prompt-versions", headers=h)
-        assert r.status_code == 200
-        assert len(r.json()["data"]) == 1
-        # current
-        r = client.get("/api/manager/employees/emp-1/prompt-versions/current", headers=h)
-        assert r.status_code == 200
-        # activate
-        r = client.post("/api/manager/employees/emp-1/prompt-versions/pv-1/activate", headers=h)
-        assert r.status_code == 200
-        assert r.json()["data"]["is_current"] is True
-        # delete
-        r = client.delete("/api/manager/employees/emp-1/prompt-versions/pv-1", headers=h)
-        assert r.status_code == 204
-
-
-def test_prompt_version_not_found_404():
-    fake = MagicMock()
-    fake.get.side_effect = NotFound("nope")
-    with patch("manager_service.routes_employee_bindings.build_prompt_version_service",
-               return_value=fake):
-        client = _client("postgresql://fake/fake")
-        r = client.get("/api/manager/employees/emp-1/prompt-versions/missing",
-                       headers=_auth_header())
-        assert r.status_code == 404, r.text
-
-
-def test_skill_binding_create_conflict_409():
-    fake = MagicMock()
-    fake.create.side_effect = Conflict("already bound")
-    with patch("manager_service.routes_employee_bindings.build_skill_binding_service",
-               return_value=fake):
-        client = _client("postgresql://fake/fake")
-        r = client.post("/api/manager/employees/emp-1/skill-bindings",
-                        json={"skill_id": "code-review"}, headers=_auth_header())
-        assert r.status_code == 409, r.text
-
-
-def test_skill_binding_member_full_config_read_and_write_403():
-    fake = MagicMock()
-    fake.list_all.return_value = [SKILL_OUT]
-    fake.create.side_effect = Forbidden("denied")
-    fake.delete.side_effect = Forbidden("denied")
-    with patch("manager_service.routes_employee_bindings.build_skill_binding_service",
-               return_value=fake):
-        client = _client("postgresql://fake/fake")
-        # member read OK
-        r = client.get("/api/manager/employees/emp-1/skill-bindings",
-                       headers=_auth_header(roles=["member"]))
-        assert r.status_code == 403
-        # member write 403
-        r = client.post("/api/manager/employees/emp-1/skill-bindings",
-                        json={"skill_id": "some"}, headers=_auth_header(roles=["member"]))
-        assert r.status_code == 403
-        r = client.delete("/api/manager/employees/emp-1/skill-bindings/sk-1",
-                          headers=_auth_header(roles=["member"]))
-        assert r.status_code == 403
-
 
 def test_knowledge_binding_and_patch_ok():
     fake = MagicMock()
@@ -253,23 +134,16 @@ def test_memory_setting_get_404_when_absent():
         assert r.status_code == 404
 
 
-def test_connector_binding_lifecycle():
-    fake = MagicMock()
-    fake.create.return_value = CONN_OUT
-    fake.list_all.return_value = [CONN_OUT]
-    fake.update.return_value = {**CONN_OUT, "enabled": False}
-    fake.delete.return_value = None
-    with patch("manager_service.routes_employee_bindings.build_connector_binding_service",
-               return_value=fake):
-        client = _client("postgresql://fake/fake")
-        h = _auth_header()
-        r = client.post("/api/manager/employees/emp-1/connector-bindings",
-                        json={"connector_id": "slack", "grant_ref": "g1"}, headers=h)
-        assert r.status_code == 201
-        r = client.get("/api/manager/employees/emp-1/connector-bindings", headers=h)
-        assert r.status_code == 200
-        r = client.patch("/api/manager/employees/emp-1/connector-bindings/co-1",
-                         json={"enabled": False}, headers=h)
-        assert r.status_code == 200
-        r = client.delete("/api/manager/employees/emp-1/connector-bindings/co-1", headers=h)
-        assert r.status_code == 204
+# ---------------- 已移除的旁路绑定（设计 2026-11-22 §3.1）----------------
+
+@pytest.mark.parametrize("method,path", [
+    ("POST", "/api/manager/employees/emp-1/prompt-versions"),
+    ("GET", "/api/manager/employees/emp-1/prompt-versions/current"),
+    ("POST", "/api/manager/employees/emp-1/skill-bindings"),
+    ("GET", "/api/manager/employees/emp-1/skill-bindings"),
+    ("POST", "/api/manager/employees/emp-1/connector-bindings"),
+    ("DELETE", "/api/manager/employees/emp-1/connector-bindings/co-1"),
+])
+def test_removed_side_channel_routes_are_gone(method, path):
+    r = _client("postgresql://fake/fake").request(method, path, json={}, headers=_auth_header())
+    assert r.status_code in (404, 405), r.text
