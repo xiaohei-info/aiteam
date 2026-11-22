@@ -297,7 +297,7 @@ describe("删除 / 停用时有员工在用", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "删除" })[0]!);
     fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
     const dialog = await screen.findByRole("dialog", { name: /删除 技能 A/ });
-    expect(within(dialog).getByText("有 2 位员工正在使用它：")).toBeInTheDocument();
+    expect(within(dialog).getByText("有 2 位员工正在使用它，请选择怎么处理：")).toBeInTheDocument();
     expect(within(dialog).getByText("招聘专员")).toBeInTheDocument();
     expect(within(dialog).getByText("财务助理")).toBeInTheDocument();
     expect(deleteSkill).toHaveBeenCalledTimes(1);

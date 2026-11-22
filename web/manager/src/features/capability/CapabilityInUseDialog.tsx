@@ -39,6 +39,7 @@ export function CapabilityInUseDialog({ title, action, employees, working, error
   onCancel: () => void;
 }): ReactNode {
   const verb = action === "delete" ? "删除" : "停用";
+  const remove = `${verb}，并从这些员工身上去掉`;
   const keep = action === "delete" ? "只删除，员工配置里保留" : "只停用，员工配置里保留";
   return (
     <Dialog isOpen purpose="form" width={520} maxHeight="90vh" aria-label={`${verb} ${title}`} onOpenChange={(isOpen) => { if (!isOpen && !working) onCancel(); }}>
@@ -48,16 +49,17 @@ export function CapabilityInUseDialog({ title, action, employees, working, error
           <LayoutContent>
             <VStack gap={3}>
               {error && <Banner status="error" title={error} />}
-              <Text>有 {employees.length} 位员工正在使用它：</Text>
-              <ul aria-label="正在使用的员工" style={{ margin: 0, paddingInlineStart: 20 }}>
-                {employees.map((employee) => <li key={employee.id}>{employee.name}</li>)}
-              </ul>
+              <Text>有 {employees.length} 位员工正在使用它，请选择怎么处理：</Text>
               <Text>
-                <strong>同时从这些员工身上去掉</strong>：员工下次同步后不再有这项能力，不会再出现“用不了”的提示。
+                <strong>{remove}</strong>：员工之后不再有这项能力，也不会再出现“用不了”的提示。
               </Text>
               <Text>
                 <strong>{keep}</strong>：员工的配置不变，这一项会显示为“{action === "delete" ? "已失效" : "已停用"}”，员工用不上它，由你之后决定是否去掉。
               </Text>
+              <Text type="supporting">正在使用的员工：</Text>
+              <ul aria-label="正在使用的员工" style={{ margin: 0, paddingInlineStart: 20, maxHeight: "28vh", overflowY: "auto" }}>
+                {employees.map((employee) => <li key={employee.id}>{employee.name}</li>)}
+              </ul>
             </VStack>
           </LayoutContent>
         }
@@ -66,7 +68,7 @@ export function CapabilityInUseDialog({ title, action, employees, working, error
             <HStack gap={2} justify="end" wrap="wrap">
               <Button label="取消" variant="ghost" isDisabled={working} onClick={onCancel} />
               <Button label={keep} variant="secondary" isDisabled={working} onClick={() => onChoose(false)} />
-              <Button label={`${verb}，并从这些员工身上去掉`} variant="primary" isLoading={working} onClick={() => onChoose(true)} />
+              <Button label={remove} variant="primary" isLoading={working} onClick={() => onChoose(true)} />
             </HStack>
           </LayoutFooter>
         }
