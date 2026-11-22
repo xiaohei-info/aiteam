@@ -14,20 +14,25 @@ test("persona that names a skill the snapshot does not carry still gets the answ
   assert.ok(prompt.startsWith(PERSONA));
   assert.ok(prompt.includes(ANSWER_FIRST_HINT));
   assert.ok(prompt.indexOf(ANSWER_FIRST_HINT) > prompt.indexOf(PERSONA));
-  assert.doesNotMatch(prompt, /Authorized skill references/);
 });
 
-test("the answer-first rule is present with bound skills too, next to their references", () => {
-  const prompt = snapshotSystemPrompt(authorization({ persona: PERSONA, skills: ["csv-summary@1"] }));
-  assert.ok(prompt.includes(ANSWER_FIRST_HINT));
-  assert.ok(prompt.includes("Authorized skill references: csv-summary@1"));
+test("declared skill references are not advertised: <available_skills> is the only list of what is installed", () => {
+  for (const skills of [[], ["csv-summary@1"]]) {
+    const prompt = snapshotSystemPrompt(authorization({ persona: PERSONA, skills }));
+    assert.ok(prompt.includes(ANSWER_FIRST_HINT));
+    assert.doesNotMatch(prompt, /Authorized skill references|csv-summary/);
+  }
 });
 
 test("the rule answers first, puts problems in a final note, and overrides persona steps that need a missing skill", () => {
   assert.match(ANSWER_FIRST_HINT, /answer the user's question first/);
   assert.match(ANSWER_FIRST_HINT, /Only skills listed in <available_skills> are installed/);
+  assert.match(ANSWER_FIRST_HINT, /depend on a skill that is not installed/);
   assert.match(ANSWER_FIRST_HINT, /do not apply/);
   assert.match(ANSWER_FIRST_HINT, /do not stop/);
+  // Scope: skills only. Tools and data sources keep the honest-failure behaviour.
+  assert.match(ANSWER_FIRST_HINT, /missing skills only/);
+  assert.doesNotMatch(ANSWER_FIRST_HINT, /data source[^.]*do not apply/);
   assert.match(ANSWER_FIRST_HINT, /final separate paragraph/);
   assert.match(HONEST_FAILURE_HINT, /final note of your reply/);
 });
