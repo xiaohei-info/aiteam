@@ -87,6 +87,17 @@ def test_employee_config_crud_e2e_and_cross_tenant_rls(migrated_db, admin_url, t
         "memory_policy": {"enabled": True, "allowed_operations": ["recall"]},
     }
 
+    headers_a = {"Authorization": f"Bearer {owner_a}"}
+    # 目录里还没有这项技能 / 连接器：新增引用被拒（409，逐项给原因），什么都不创建
+    r = client.post("/api/manager/employees?employee_slug=exp-a", json=config, headers=headers_a)
+    assert r.status_code == 409 and r.json()["code"] == "employee_capability_unavailable", r.text
+    assert {tuple(e["loc"]) for e in r.json()["errors"]} == {("body", "skills", "code-review"), ("body", "connector_refs", "slack")}
+    assert client.get("/api/manager/employees", headers=headers_a).json()["data"] == []
+    # 目录里建好之后才能保存
+    from tests.manager._capability_seed import seed_ready_capabilities
+
+    seed_ready_capabilities(migrated_db, tid_a, skills=["code-review"], connectors=["slack"])
+
     # create
     r = client.post(
         f"/api/manager/employees?employee_slug=exp-a",

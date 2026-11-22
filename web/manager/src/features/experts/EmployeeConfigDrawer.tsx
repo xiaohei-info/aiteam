@@ -35,7 +35,7 @@ import { useCapabilityApi } from "../capability/useCapabilityApi";
 import type { Department, EmployeeConfig, EmployeeConfigIn } from "./types";
 import type { PlatformCatalog } from "../platform-models/usePlatformModelsApi";
 import type { SkillCatalog } from "../capability/types";
-import { buildSkillOptions, danglingSkillRefs } from "./skillOptions";
+import { buildSkillOptions, danglingSkillRefs, personaSkillHints } from "./skillOptions";
 
 /** 模型框占位：加载中先亮出当前模型，加载失败与确实没有模型分开说。 */
 function modelPlaceholder(state: { loading: boolean; failed: boolean; current: string; empty: boolean; pick: string }): string {
@@ -243,6 +243,13 @@ export function EmployeeConfigDrawer({
   const dangling = useMemo(
     () => (skillsLoaded && !skillsError ? danglingSkillRefs(skills, draft?.skills ?? []) : []),
     [skills, skillsLoaded, skillsError, draft?.skills],
+  );
+
+  // 角色设定提到的技能与员工实际有的对不上：只提示，管理员可忽略；库没加载出来时不判断。
+  const [ignoredHints, setIgnoredHints] = useState<ReadonlySet<string>>(new Set());
+  const personaHints = useMemo(
+    () => (skillsLoaded && !skillsError ? personaSkillHints(draft?.persona ?? "", skills, draft?.skills ?? []).filter((hint) => !ignoredHints.has(hint.name)) : []),
+    [skills, skillsLoaded, skillsError, draft?.persona, draft?.skills, ignoredHints],
   );
 
   /** D18：选择 Operator 发布且有生效价格的模型；旧配置即使价格失效也保留可见。 */
@@ -492,6 +499,19 @@ export function EmployeeConfigDrawer({
                           isDisabled={submitting || skills.length === 0}
                         />
                       )}
+                      {personaHints.map((hint) => (
+                        <HStack key={hint.name} gap={2} align="center" wrap="wrap">
+                          <Text type="supporting">
+                            {hint.kind === "not_on_employee"
+                              ? `角色设定里提到了「${hint.name}」，但这位员工还没有这项技能。员工会照常工作，只是用不上它。`
+                              : `角色设定里让员工使用「${hint.name}」，但企业技能库里没有这项技能。`}
+                          </Text>
+                          {hint.addable && (
+                            <Button type="button" label="给员工添加这项技能" isDisabled={submitting} onClick={() => update("skills", [...draft.skills, hint.name])} />
+                          )}
+                          <Button type="button" label="忽略" isDisabled={submitting} onClick={() => setIgnoredHints((current) => new Set(current).add(hint.name))} />
+                        </HStack>
+                      ))}
                       {dangling.map((ref) => (
                         <HStack key={ref} gap={2} align="center">
                           <Text type="supporting">「{ref}」已从企业技能库移除，这位员工现在用不了它</Text>

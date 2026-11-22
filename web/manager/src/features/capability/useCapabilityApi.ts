@@ -29,11 +29,12 @@ export interface CapabilityApi {
   createSkill: (input: SkillCatalogIn) => Promise<SkillCatalog | null>;
   updateSkill: (catalogId: string, input: SkillCatalogIn) => Promise<SkillCatalog | null>;
   /** 只改企业自己的两项设置（成员能否自己安装 / 停用）；平台市场装的技能也可以改。 */
-  updateSkillSettings: (catalogId: string, input: SkillSettingsIn) => Promise<SkillCatalog | null>;
-  deleteSkill: (catalogId: string) => Promise<void>;
+  updateSkillSettings: (catalogId: string, input: SkillSettingsIn, removeFromEmployees?: boolean) => Promise<SkillCatalog | null>;
+  /** 有员工在用时，必须带 removeFromEmployees 表态，否则 409 capability_in_use。 */
+  deleteSkill: (catalogId: string, removeFromEmployees?: boolean) => Promise<void>;
   createConnector: (input: ConnectorCatalogIn) => Promise<ConnectorCatalog | null>;
-  updateConnector: (catalogId: string, input: ConnectorCatalogIn) => Promise<ConnectorCatalog | null>;
-  deleteConnector: (catalogId: string) => Promise<void>;
+  updateConnector: (catalogId: string, input: ConnectorCatalogIn, removeFromEmployees?: boolean) => Promise<ConnectorCatalog | null>;
+  deleteConnector: (catalogId: string, removeFromEmployees?: boolean) => Promise<void>;
   createMemoryPolicy: (input: MemoryPolicyCatalogIn) => Promise<MemoryPolicyCatalog | null>;
   updateMemoryPolicy: (catalogId: string, input: MemoryPolicyCatalogIn) => Promise<MemoryPolicyCatalog | null>;
   deleteMemoryPolicy: (catalogId: string) => Promise<void>;
@@ -59,10 +60,10 @@ export function useCapabilityApi(): CapabilityApi {
     const c = createManagerApiClient({ getToken: () => token, onUnauthorized });
     const postSkill = (input: SkillCatalogIn) => c.post<SkillCatalog>("/api/manager/skills", { body: input });
     const putSkill = (catalogId: string, input: SkillCatalogIn) => c.put<SkillCatalog>(`/api/manager/skills/${catalogId}`, { body: input });
-    const delSkill = (catalogId: string) => c.del<void>(`/api/manager/skills/${catalogId}`);
+    const delSkill = (catalogId: string, remove?: boolean) => c.del<void>(`/api/manager/skills/${catalogId}`, { query: { remove_from_employees: remove } });
     const postConn = (input: ConnectorCatalogIn) => c.post<ConnectorCatalog>("/api/manager/connectors", { body: input });
-    const putConn = (catalogId: string, input: ConnectorCatalogIn) => c.put<ConnectorCatalog>(`/api/manager/connectors/${catalogId}`, { body: input });
-    const delConn = (catalogId: string) => c.del<void>(`/api/manager/connectors/${catalogId}`);
+    const putConn = (catalogId: string, input: ConnectorCatalogIn, remove?: boolean) => c.put<ConnectorCatalog>(`/api/manager/connectors/${catalogId}`, { body: input, query: { remove_from_employees: remove } });
+    const delConn = (catalogId: string, remove?: boolean) => c.del<void>(`/api/manager/connectors/${catalogId}`, { query: { remove_from_employees: remove } });
     const postMem = (input: MemoryPolicyCatalogIn) => c.post<MemoryPolicyCatalog>("/api/manager/memory-policies", { body: input });
     const putMem = (catalogId: string, input: MemoryPolicyCatalogIn) => c.put<MemoryPolicyCatalog>(`/api/manager/memory-policies/${catalogId}`, { body: input });
     const delMem = (catalogId: string) => c.del<void>(`/api/manager/memory-policies/${catalogId}`);
@@ -72,11 +73,11 @@ export function useCapabilityApi(): CapabilityApi {
       async listMemoryPolicies() { return (await c.listGet<MemoryPolicyCatalog>("/api/manager/memory-policies")).items; },
       createSkill: (input) => postSkill(input),
       updateSkill: (catalogId, input) => putSkill(catalogId, input),
-      updateSkillSettings: (catalogId, input) => c.put<SkillCatalog>(`/api/manager/skills/${catalogId}`, { body: input }),
-      deleteSkill: async (catalogId) => { await delSkill(catalogId); },
+      updateSkillSettings: (catalogId, input, remove) => c.put<SkillCatalog>(`/api/manager/skills/${catalogId}`, { body: input, query: { remove_from_employees: remove } }),
+      deleteSkill: async (catalogId, remove) => { await delSkill(catalogId, remove); },
       createConnector: (input) => postConn(input),
-      updateConnector: (catalogId, input) => putConn(catalogId, input),
-      deleteConnector: async (catalogId) => { await delConn(catalogId); },
+      updateConnector: (catalogId, input, remove) => putConn(catalogId, input, remove),
+      deleteConnector: async (catalogId, remove) => { await delConn(catalogId, remove); },
       createMemoryPolicy: (input) => postMem(input),
       updateMemoryPolicy: (catalogId, input) => putMem(catalogId, input),
       deleteMemoryPolicy: async (catalogId) => { await delMem(catalogId); },

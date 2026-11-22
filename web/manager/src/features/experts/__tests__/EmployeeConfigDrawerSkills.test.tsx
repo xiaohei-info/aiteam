@@ -36,15 +36,16 @@ const employee: EmployeeConfig = {
   skill_status: [{ ref: "薪酬核算", display_name: "薪酬核算", status: "missing", reason: "已从企业技能库移除，员工现在用不了它" }],
 };
 
-function setup(listSkills: ReturnType<typeof vi.fn>) {
+function setup(listSkills: ReturnType<typeof vi.fn>, persona = "p") {
+  const emp = { ...employee, persona };
   const updateEmployee = vi.fn().mockImplementation(async (_id: string, cfg: unknown) => cfg);
-  (useExpertsApi as unknown as ReturnType<typeof vi.fn>).mockReturnValue({ updateEmployee, listEmployees: vi.fn().mockResolvedValue([employee]) });
+  (useExpertsApi as unknown as ReturnType<typeof vi.fn>).mockReturnValue({ updateEmployee, listEmployees: vi.fn().mockResolvedValue([emp]) });
   (usePlatformModelsApi as unknown as ReturnType<typeof vi.fn>).mockReturnValue({ list: vi.fn().mockResolvedValue({ providers: [], models: [] }) });
   (useCapabilityApi as unknown as ReturnType<typeof vi.fn>).mockReturnValue({ listSkills });
   render(
     <I18nContext.Provider value={i18n}>
       <SessionContext.Provider value={sessionValue}>
-        <EmployeeConfigDrawer employeeId="emp-1" employee={employee} onClose={() => {}} onSaved={() => {}} />
+        <EmployeeConfigDrawer employeeId="emp-1" employee={emp} onClose={() => {}} onSaved={() => {}} />
       </SessionContext.Provider>
     </I18nContext.Provider>,
   );
@@ -77,5 +78,20 @@ describe("员工配置抽屉：技能", () => {
     expect(saved.skills).toEqual(["weekly"]);
     expect(saved.skill_status).toBeUndefined();
     expect(saved.connector_status).toBeUndefined();
+  });
+
+  it("角色设定提到了技能库里有、但员工没有的技能：提示并可一键添加；写了技能库里没有的：只提示；忽略后不再出现", async () => {
+    const persona = "遇到周报需求用 weekly-report。\n第一动作加载 recruitment-dispatch 调度 skill。";
+    const { updateEmployee } = setup(vi.fn().mockResolvedValue([catalogSkill("weekly"), catalogSkill("weekly-report")]), persona);
+    expect(await screen.findByText("角色设定里提到了「weekly-report」，但这位员工还没有这项技能。员工会照常工作，只是用不上它。")).toBeInTheDocument();
+    expect(screen.getByText("角色设定里让员工使用「recruitment-dispatch」，但企业技能库里没有这项技能。")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "给员工添加这项技能" })).toHaveLength(1); // 库里没有的没有添加按钮
+    fireEvent.click(screen.getAllByRole("button", { name: "忽略" })[1]!);
+    expect(screen.queryByText(/「recruitment-dispatch」/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "给员工添加这项技能" }));
+    expect(screen.queryByText(/「weekly-report」，但这位员工还没有/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText("保存"));
+    await waitFor(() => expect(updateEmployee).toHaveBeenCalledTimes(1));
+    expect((updateEmployee.mock.calls[0]![1] as { skills: string[] }).skills).toContain("weekly-report");
   });
 });

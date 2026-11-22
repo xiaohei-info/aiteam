@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { createI18n, sharedMessages, type AuthSession } from "@aiteam/shared";
+import { ApiError, createI18n, sharedMessages, type AuthSession } from "@aiteam/shared";
 import { SessionContext, type SessionContextValue } from "../../auth/session";
 import { I18nContext } from "../../i18n/context";
 import { managerMessages } from "../../i18n/messages";
@@ -163,7 +163,7 @@ describe("CapabilityPage", () => {
     expect(dialog.getByText("scripts/a.sh · 7 B")).toBeInTheDocument();
     fireEvent.click(dialog.getByRole("checkbox", { name: /停用/ }));
     fireEvent.click(dialog.getByRole("button", { name: "保存" }));
-    await waitFor(() => expect(api.updateSkillSettings).toHaveBeenCalledWith("skill-c1", { skill_id: "skill-a", visibility: "tenant", binding_policy: "disabled" }));
+    await waitFor(() => expect(api.updateSkillSettings).toHaveBeenCalledWith("skill-c1", { skill_id: "skill-a", visibility: "tenant", binding_policy: "disabled" }, undefined));
     expect(api.importSkills).not.toHaveBeenCalled();
     expect(await screen.findByText("已更新 技能 A 的设置")).toBeInTheDocument();
   });
@@ -176,14 +176,14 @@ describe("CapabilityPage", () => {
     let dialog = within(await screen.findByRole("dialog", { name: "编辑技能 技能 A" }));
     fireEvent.click(dialog.getByRole("checkbox", { name: /成员可以自己安装/ }));
     fireEvent.click(dialog.getByRole("button", { name: "保存" }));
-    await waitFor(() => expect(api.updateSkillSettings).toHaveBeenCalledWith("skill-c1", { skill_id: "skill-a", visibility: "private", binding_policy: "auto_bind" }));
+    await waitFor(() => expect(api.updateSkillSettings).toHaveBeenCalledWith("skill-c1", { skill_id: "skill-a", visibility: "private", binding_policy: "auto_bind" }, undefined));
 
     vi.mocked(api.updateSkillSettings).mockClear();
     fireEvent.click(screen.getAllByRole("button", { name: "编辑" })[0]!);
     dialog = within(await screen.findByRole("dialog", { name: "编辑技能 技能 A" }));
     fireEvent.click(dialog.getByRole("checkbox", { name: /停用/ }));
     fireEvent.click(dialog.getByRole("button", { name: "保存" }));
-    await waitFor(() => expect(api.updateSkillSettings).toHaveBeenCalledWith("skill-c1", { skill_id: "skill-a", visibility: "public", binding_policy: "disabled" }));
+    await waitFor(() => expect(api.updateSkillSettings).toHaveBeenCalledWith("skill-c1", { skill_id: "skill-a", visibility: "public", binding_policy: "disabled" }, undefined));
   });
 
   it("编辑技能内容：附带文件照带，存为新版本", async () => {
@@ -218,7 +218,7 @@ describe("CapabilityPage", () => {
     expect(dialog.getByText(/「太一科技\/名称」这个副本，平台原件保留/)).toBeInTheDocument();
     fireEvent.click(dialog.getByRole("checkbox", { name: /成员可以自己安装/ }));
     fireEvent.click(dialog.getByRole("button", { name: "保存" }));
-    await waitFor(() => expect(api.updateSkillSettings).toHaveBeenCalledWith("skill-p1", { skill_id: "platform-p1", visibility: "private", binding_policy: "opt_in" }));
+    await waitFor(() => expect(api.updateSkillSettings).toHaveBeenCalledWith("skill-p1", { skill_id: "platform-p1", visibility: "private", binding_policy: "opt_in" }, undefined));
     expect(api.importSkills).not.toHaveBeenCalled();
   });
 
@@ -231,7 +231,7 @@ describe("CapabilityPage", () => {
     const dialog = await screen.findByRole("alertdialog", { name: /删除 taiyim\/weather/ });
     expect(within(dialog).getByText(/平台上的原技能不受影响，可在「新增技能 → 添加平台技能」重新添加/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
-    await waitFor(() => expect(api.deleteSkill).toHaveBeenCalledWith("skill-p1"));
+    await waitFor(() => expect(api.deleteSkill).toHaveBeenCalledWith("skill-p1", undefined));
   });
 
   it("编辑平台技能的内容：另存为企业副本（fork_of），不动原件；与企业技能重名时拦下", async () => {
@@ -276,7 +276,96 @@ describe("CapabilityPage", () => {
     const dialog = screen.getByRole("alertdialog", { name: /删除 技能 A/ });
     expect(dialog).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
-    await waitFor(() => expect(api.deleteSkill).toHaveBeenCalledWith("skill-c1"));
+    await waitFor(() => expect(api.deleteSkill).toHaveBeenCalledWith("skill-c1", undefined));
+  });
+});
+
+/** 后端 409 capability_in_use：员工放在 problem.errors，loc 为 ["employees", 员工 id]。 */
+function inUseError(names: string[]) {
+  return new ApiError("有员工在用", 409, "capability_in_use", {
+    type: "about:blank", title: "Capability is in use", status: 409, code: "capability_in_use", detail: "有员工在用",
+    errors: names.map((name, index) => ({ loc: ["employees", `e${index}`], message: name, type: "employee" })),
+  });
+}
+
+describe("删除 / 停用时有员工在用", () => {
+  it("删除技能遇到 409：弹出二选一，列出员工，选择后带着表态再删一次", async () => {
+    const deleteSkill = vi.fn().mockRejectedValueOnce(inUseError(["招聘专员", "财务助理"])).mockResolvedValue(undefined);
+    mockApi({ deleteSkill });
+    renderPage();
+    await screen.findByText("技能 A");
+    fireEvent.click(screen.getAllByRole("button", { name: "删除" })[0]!);
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
+    const dialog = await screen.findByRole("dialog", { name: /删除 技能 A/ });
+    expect(within(dialog).getByText("有 2 位员工正在使用它：")).toBeInTheDocument();
+    expect(within(dialog).getByText("招聘专员")).toBeInTheDocument();
+    expect(within(dialog).getByText("财务助理")).toBeInTheDocument();
+    expect(deleteSkill).toHaveBeenCalledTimes(1);
+    fireEvent.click(within(dialog).getByRole("button", { name: "删除，并从这些员工身上去掉" }));
+    await waitFor(() => expect(deleteSkill).toHaveBeenLastCalledWith("skill-c1", true));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /删除 技能 A/ })).not.toBeInTheDocument());
+  });
+
+  it("停用技能遇到 409：弹出二选一，选完用同一份设置再存，并保存成功", async () => {
+    const updateSkillSettings = vi.fn().mockRejectedValueOnce(inUseError(["招聘专员"])).mockResolvedValue(skill);
+    mockApi({ updateSkillSettings });
+    renderPage();
+    await screen.findByText("技能 A");
+    fireEvent.click(screen.getAllByRole("button", { name: "编辑" })[0]!);
+    const editor = within(await screen.findByRole("dialog", { name: "编辑技能 技能 A" }));
+    fireEvent.click(editor.getByRole("checkbox", { name: /停用/ }));
+    fireEvent.click(editor.getByRole("button", { name: "保存" }));
+    const dialog = await screen.findByRole("dialog", { name: /停用 技能 A/ });
+    expect(within(dialog).getByText("招聘专员")).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "停用，并从这些员工身上去掉" }));
+    await waitFor(() => expect(updateSkillSettings).toHaveBeenLastCalledWith("skill-c1", { skill_id: "skill-a", visibility: "tenant", binding_policy: "disabled" }, true));
+    expect(await screen.findByText("已更新 技能 A 的设置")).toBeInTheDocument();
+  });
+
+  it("选「只删除，员工配置里保留」传 false；取消则不再请求", async () => {
+    const deleteSkill = vi.fn().mockRejectedValueOnce(inUseError(["招聘专员"])).mockResolvedValue(undefined);
+    mockApi({ deleteSkill });
+    renderPage();
+    await screen.findByText("技能 A");
+    fireEvent.click(screen.getAllByRole("button", { name: "删除" })[0]!);
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
+    let dialog = await screen.findByRole("dialog", { name: /删除 技能 A/ });
+    fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /删除 技能 A/ })).not.toBeInTheDocument());
+    expect(deleteSkill).toHaveBeenCalledTimes(1);
+
+    deleteSkill.mockRejectedValueOnce(inUseError(["招聘专员"]));
+    fireEvent.click(screen.getAllByRole("button", { name: "删除" })[0]!);
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
+    dialog = await screen.findByRole("dialog", { name: /删除 技能 A/ });
+    fireEvent.click(within(dialog).getByRole("button", { name: "只删除，员工配置里保留" }));
+    await waitFor(() => expect(deleteSkill).toHaveBeenLastCalledWith("skill-c1", false));
+  });
+
+  it("员工很多时列表在弹窗内容区里，三个按钮仍都在", async () => {
+    const names = Array.from({ length: 60 }, (_, i) => `员工${i}`);
+    mockApi({ deleteSkill: vi.fn().mockRejectedValueOnce(inUseError(names)) });
+    renderPage();
+    await screen.findByText("技能 A");
+    fireEvent.click(screen.getAllByRole("button", { name: "删除" })[0]!);
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
+    const dialog = await screen.findByRole("dialog", { name: /删除 技能 A/ });
+    expect(within(dialog).getAllByRole("listitem")).toHaveLength(60);
+    for (const name of ["取消", "只删除，员工配置里保留", "删除，并从这些员工身上去掉"]) {
+      expect(within(dialog).getByRole("button", { name })).toBeInTheDocument();
+    }
+  });
+
+  it("删除连接器同理", async () => {
+    const deleteConnector = vi.fn().mockRejectedValueOnce(inUseError(["客服"])).mockResolvedValue(undefined);
+    mockApi({ deleteConnector });
+    renderPage();
+    const table = await screen.findByRole("table", { name: "连接器目录" });
+    fireEvent.click(within(table).getByRole("button", { name: "删除" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
+    const dialog = await screen.findByRole("dialog", { name: /删除 / });
+    fireEvent.click(within(dialog).getByRole("button", { name: "删除，并从这些员工身上去掉" }));
+    await waitFor(() => expect(deleteConnector).toHaveBeenLastCalledWith(connector.catalog_id, true));
   });
 });
 
