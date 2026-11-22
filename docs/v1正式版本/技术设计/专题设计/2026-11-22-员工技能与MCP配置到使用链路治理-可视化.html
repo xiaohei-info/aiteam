@@ -154,15 +154,19 @@ svg text{font-family:inherit}
 <div class="pane" id="u3">
 <div class="win"><div class="bar"><i></i><i></i><i></i><b>技能管理 · 删除「周报整理」</b></div>
 <div class="body">
-<div class="box"><h4>有 3 位员工正在使用这项技能</h4>
+<div class="box"><h4>有 3 位员工正在使用「周报整理」</h4>
 <div class="row"><span>招聘专员</span><span class="tag mg">员工</span></div>
 <div class="row"><span>行政助理</span><span class="tag mg">员工</span></div>
 <div class="row"><span>运营专员</span><span class="tag mg">员工</span></div>
-<p class="note">删除后，这些员工会在下次同步后失去这项技能；正在进行的对话不会被打断。这次变更会记入审计。</p>
 </div>
-<p style="margin-top:10px"><span class="btn danger">仍然删除</span> <span class="btn">取消</span></p>
+<div class="box" style="margin-top:10px"><h4>请选择怎么处理</h4>
+<div class="row"><span><b>● 删除，并从这些员工身上去掉</b>（推荐）<br><span class="note">这些员工会在下次同步后失去这项技能。正在进行的对话不会被打断，新的对话从下一条消息起生效。</span></span></div>
+<div class="row"><span><b>○ 只删除，员工配置里保留</b><br><span class="note">这些员工会继续显示这项技能，但标为「已失效」，实际用不了。需要你稍后到每位员工的配置里手动去掉。</span></span></div>
+<p class="note">这次操作会记入审计。</p>
+</div>
+<p style="margin-top:10px"><span class="btn danger">确认删除</span> <span class="btn">取消</span></p>
 </div></div>
-<p class="note">要点：删除前知道影响谁；确认后员工配置同步清理，不留悬空引用。无人使用时直接删除。技能、连接器、MCP 市场条目共用同一逻辑。</p>
+<p class="note">要点：删除前知道影响谁，并由管理员自己选择后果；无人使用时直接删除。技能、连接器、MCP 市场条目共用同一逻辑；停用同理。</p>
 </div>
 
 <div class="pane" id="u4">
@@ -249,8 +253,8 @@ svg text{font-family:inherit}
 </div>
 <div class="flow">
 <div class="s"><b>删除目录项</b>反查受影响员工</div><div class="a">→</div>
-<div class="s"><b>确认</b>列出员工，confirm=true</div><div class="a">→</div>
-<div class="s"><b>联动</b>同事务去掉引用、升员工版本、写审计</div><div class="a">→</div>
+<div class="s"><b>弹窗二选一</b>列出员工；去掉 / 仅删除 / 取消</div><div class="a">→</div>
+<div class="s"><b>联动（选「去掉」时）</b>同事务去掉引用、升员工版本、写审计</div><div class="a">→</div>
 <div class="s"><b>下次同步</b>Agent 清理；运行中会话只加不清</div>
 </div>
 
@@ -300,7 +304,7 @@ svg text{font-family:inherit}
 <tr><th style="width:20%">变更</th><th>内容</th><th style="width:20%">影响面</th><th style="width:8%">风险</th></tr>
 <tr><td>员工读取响应</td><td>新增 <code>skill_status[]</code>（连接器同构）</td><td>Manager 北向、管理端</td><td class="sz M">中</td></tr>
 <tr><td>员工保存</td><td>新增 409 <code>employee_capability_unavailable</code>，逐项原因；响应新增 <code>warnings[]</code></td><td>Manager 北向</td><td class="sz M">中</td></tr>
-<tr><td>删除技能 / 连接器 / MCP</td><td>有引用时 409 + 受影响员工；<code>confirm=true</code> 才联动删除（行为变更）</td><td>Manager 北向</td><td class="sz L">高</td></tr>
+<tr><td>删除技能 / 连接器 / MCP</td><td>有引用时 409 + 受影响员工；请求须带 <code>remove_from_employees=true|false</code>（二选一，行为变更）</td><td>Manager 北向</td><td class="sz L">高</td></tr>
 <tr><td>同步响应</td><td>新增 <code>skipped_refs[]</code>（引用、原因）</td><td>Manager↔Agent 共享契约、桌面 <code>api.json</code></td><td class="sz L">高</td></tr>
 <tr><td>Agent readiness</td><td>新增跳过原因字段</td><td>Agent 北向、桌面</td><td class="sz M">中</td></tr>
 <tr><td><code>/skill-bindings</code>、<code>/connector-bindings</code> 与两张表</td><td>废弃后删除</td><td>三端 OpenAPI 快照、概要设计 04、测试</td><td class="sz L">高</td></tr>
@@ -326,9 +330,10 @@ svg text{font-family:inherit}
 <section id="s8">
 <h2>8 还需要决策的方面</h2>
 <h3>已决定（不再讨论，仅备查）</h3>
-<p><span class="tag ok">员工技能以 employee.skills 为唯一来源（用户 11-22）</span><span class="tag ok">技能加载失败就跳过，文末提示，保证流程给出结论（owner 余飞，PR #223 评论）</span></p>
+<p><span class="tag ok">员工技能以 employee.skills 为唯一来源（用户 11-22）</span><span class="tag ok">技能加载失败就跳过，文末提示，保证流程给出结论（owner 余飞，PR #223 评论）</span><span class="tag ok">总路线 A+C（#1）</span><span class="tag ok">PR #223 收窄到技能（#2）</span><span class="tag ok">新增项拒绝、存量警告（#3）</span><span class="tag ok">删除时弹窗二选一（#4）</span><span class="tag ok">P1 不加 MCP 入口（#5）</span><span class="tag ok">旁路先废弃再删（#6）</span><span class="tag ok">做一致性提示（#7）</span><span class="tag ok">契约变更可实施（#8）</span><span class="tag ok">常驻技能不做（#10）</span></p>
 
 <h3>待决策</h3>
+<p class="note">除 #9（文案确认）外，其余均已决定；表格保留供备查。</p>
 <table>
 <tr><th style="width:4%">#</th><th style="width:24%">事项</th><th>建议</th><th style="width:12%">卡住谁</th></tr>
 <tr><td>1</td><td>总路线：清单为真相 + 能力引用服务（A+C），暂不做绑定表为真相（B）</td><td>同意。B 要改快照 / 同步 / 招募 / 复制 / 前端五条路径，且目前没有逐项开关或参数的需求；真需要时再迁移</td><td><span class="tag bad">P1</span></td></tr>
