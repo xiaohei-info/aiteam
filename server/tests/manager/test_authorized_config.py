@@ -550,3 +550,51 @@ def test_self_install_is_unavailable_without_catalog_or_signer():
     service._skill_signer = None
     with pytest.raises(ServiceUnavailable):
         service.installable_skills(_ctx("t-a", user_id="m-1"))
+
+
+# ---- 跳过的技能引用（设计 2026-11-22 §3.4）----
+
+
+class _MutableCatalog:
+    """给员工配置服务用的目录：读状态时按当前内容，不走真库。"""
+
+    def __init__(self):
+        self.skills = {}
+
+    def snapshot(self, ctx):
+        from manager_service.employee_capability_refs import CatalogSnapshot
+        return CatalogSnapshot(skills=dict(self.skills))
+
+    def statuses(self, ctx, skills, connectors, *, snapshot=None):
+        view = snapshot or self.snapshot(ctx)
+        return [view.skill_status(ref) for ref in skills], [view.connector_status(ref) for ref in connectors]
+
+    def validate_additions(self, *a, **kw):
+        return None
+
+
+def test_pull_reports_why_each_skill_ref_was_not_delivered_even_when_version_is_unchanged():
+    catalog = _MutableCatalog()
+    # skill_id -> (display_name, version, binding_policy, package_shaped, content_hash)
+    catalog.skills = {"ok": ("好用", "1", "opt_in", True, "h"), "off": ("停用的", "1", "disabled", True, "h"),
+                      "wip": ("没写完", "1", "opt_in", False, ""), "bad": ("坏了", "1", "opt_in", True, "")}
+    config_svc = EmployeeConfigService(_FakeRepo(), capability_refs=catalog)
+    member_svc = _FakeMemberService(); member_svc.set_member("t-a", "m-1")
+    svc = AuthorizedConfigService(config_service=config_svc, grant_service=_FakeGrantService(), member_service=member_svc)
+    body = _body().model_copy(update={"skills": ["ok", "off", "wip", "bad", "gone@2"]})
+    owner = _ctx("t-a", roles=["owner"], user_id="m-1")
+    created = config_svc.create(owner, body, employee_slug="x")
+    req = AuthorizedConfigPullRequest(tenant_id="t-a", member_id="m-1", known_versions={created.employee_id: str(created.version)})
+
+    response = svc.pull(owner, req)
+
+    assert response.experts == []  # 员工配置没变，不重发
+    got = {(item.skill_id, item.reason) for item in response.skipped_refs}
+    assert got == {("off", "disabled"), ("wip", "draft"), ("bad", "invalid"), ("gone", "missing")}
+    assert {item.employee_id for item in response.skipped_refs} == {created.employee_id}
+    assert next(item for item in response.skipped_refs if item.skill_id == "gone").ref == "gone@2"
+    assert "skill_status" not in str(response.model_dump()["experts"])
+
+    catalog.skills["off"] = ("停用的", "1", "opt_in", True, "h")  # 管理员重新启用
+    again = svc.pull(owner, req)
+    assert {item.skill_id for item in again.skipped_refs} == {"wip", "bad", "gone"}

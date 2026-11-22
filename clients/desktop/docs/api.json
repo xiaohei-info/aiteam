@@ -5330,7 +5330,7 @@
           },
           "reason": {
             "type": "string",
-            "description": "技能不可用或降级原因。"
+            "description": "技能不可用或降级原因。企业决定不提供时：skill_removed 企业已移除、skill_disabled 已停用、skill_unfinished 还没写完或内容有问题——运行时跳过它，员工其余能力照常可用；skill_missing 没同步到、skill_invalid / skill_invalid_or_expired 无效或过期等会拦下。"
           },
           "version": {
             "type": "string",

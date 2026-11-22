@@ -42,6 +42,11 @@ export interface ManagerMemoryRuntimeConfig {
   retention_mode: "unlimited" | "fact_only";
 }
 
+/** 企业没有把某个技能签发给本机的原因（设计 2026-11-22 §3.4）；missing 企业目录里没有，draft 没写完，invalid 内容有问题，disabled 被停用。 */
+export const SKIPPED_SKILL_REASONS = ["missing", "draft", "invalid", "disabled"] as const;
+export type SkippedSkillReason = typeof SKIPPED_SKILL_REASONS[number];
+export interface SkippedSkillRef { employee_id: string; ref: string; skill_id: string; reason: SkippedSkillReason }
+
 export interface AuthorizedConfig {
   experts: LoadedExpertProjection[];
   solutions: LoadedSolutionProjection[];
@@ -49,6 +54,7 @@ export interface AuthorizedConfig {
   revoked_ids?: string[];
   skill_packages?: SignedSkillPackage[];
   skill_packages_authoritative?: boolean;
+  skipped_skill_refs?: SkippedSkillRef[];
   skill_signing_keys?: SkillSigningKeyMetadata[];
 }
 
@@ -682,7 +688,15 @@ export function normalizeAuthorizedConfig(value: unknown, tenantId?: string, mem
   const skill_packages = skillPackagesAuthoritative && Array.isArray(body.skill_packages) ? body.skill_packages.map(normalizeSignedSkillPackage) : undefined;
   if (body.skill_signing_keys !== undefined && !Array.isArray(body.skill_signing_keys)) throw new ManagerUnavailableError("Manager returned invalid skill signing key metadata");
   const skill_signing_keys = Array.isArray(body.skill_signing_keys) ? body.skill_signing_keys.map(normalizeSkillSigningKey) : undefined;
-  return { experts, solutions, ...(snapshots ? { snapshots } : {}), revoked_ids, ...(hasSkillPackages && skill_packages ? { skill_packages } : {}), ...(skill_signing_keys ? { skill_signing_keys } : {}) };
+  // 旧版 Manager 没有这个字段：当作没有明确原因，沿用「是否下发过」的推断。
+  const skipped_skill_refs = Array.isArray(body.skipped_refs) ? body.skipped_refs.flatMap((item): SkippedSkillRef[] => {
+    const raw = item as Record<string, unknown> | null;
+    const reason = raw?.reason;
+    return raw && typeof raw.employee_id === "string" && typeof raw.ref === "string" && typeof raw.skill_id === "string"
+      && (SKIPPED_SKILL_REASONS as readonly unknown[]).includes(reason)
+      ? [{ employee_id: raw.employee_id, ref: raw.ref, skill_id: raw.skill_id, reason: reason as SkippedSkillReason }] : [];
+  }) : undefined;
+  return { experts, solutions, ...(snapshots ? { snapshots } : {}), revoked_ids, ...(skipped_skill_refs ? { skipped_skill_refs } : {}), ...(hasSkillPackages && skill_packages ? { skill_packages } : {}), ...(skill_signing_keys ? { skill_signing_keys } : {}) };
 }
 
 function normalizeSkillSigningKey(value: unknown): SkillSigningKeyMetadata {

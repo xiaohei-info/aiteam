@@ -104,6 +104,13 @@ export function canonicalSignedSkillPackageBytes(pkg: SkillPackage, tenantId: st
 const KEYRING_FILE = ".aiteam-keyring.json";
 /** 最近一次成功的权威同步里企业下发了哪些技能：用来区分「企业已删除 / 停用」与「还没同步到 / 同步失败 / 缓存被清」。 */
 const DELIVERED_FILE = ".aiteam-delivered.json";
+/**
+ * 技能引用在本机没有可用包时的就绪原因里，「企业决定不提供」的几种：运行时跳过它，员工其余能力照常可用。
+ * skill_removed 企业目录里没有；skill_disabled 被停用；skill_unfinished 还没写完或内容有问题。
+ * 被篡改、过期、没同步到等仍然拦下。
+ */
+export const ENTERPRISE_SKIPPED_SKILL_REASONS: ReadonlySet<string> = new Set(["skill_removed", "skill_disabled", "skill_unfinished"]);
+const SKIPPED_REASON_TO_READINESS: Record<string, string> = { missing: "skill_removed", disabled: "skill_disabled", draft: "skill_unfinished", invalid: "skill_unfinished" };
 /** Per-skill record of the keys and time a personal skill was verified at install (`<skill_id>.installed.json`). */
 const INSTALLED_SUFFIX = ".installed.json";
 const DEFAULT_OFFLINE_TTL_SECONDS = 24 * 60 * 60;
@@ -279,7 +286,7 @@ export class SkillCache {
     this.assertDirectory(this.root);
   }
 
-  reconcile(scope: SkillScope, packages: SignedSkillPackage[], allowedRefs: readonly string[], verification: SkillVerificationOptions, options: { authoritative?: boolean; recordDelivered?: boolean } = {}): void {
+  reconcile(scope: SkillScope, packages: SignedSkillPackage[], allowedRefs: readonly string[], verification: SkillVerificationOptions, options: { authoritative?: boolean; recordDelivered?: boolean; skipped?: Readonly<Record<string, string>> } = {}): void {
     const resolved = this.verificationFor(scope, verification, true);
     const verified = packages.map((pkg) => verifySignedSkillPackage(pkg, { ...resolved, tenantId: scope.tenantId, memberId: scope.memberId }));
     const requestedVersions = new Map<string, Set<string>>();
@@ -314,7 +321,7 @@ export class SkillCache {
     if (verification.publicKeys !== undefined) this.writeKeyring(scope, normalizeKeySet(verification.publicKeys), verificationNow(verification));
     // 权威同步成功（包括运行中只加不清的那次）才记录企业这次下发的技能清单。
     if (options.recordDelivered ?? options.authoritative !== false) {
-      this.writeDelivered(scope, verified.map((envelope) => envelope.package.skill_id), verificationNow(verification));
+      this.writeDelivered(scope, verified.map((envelope) => envelope.package.skill_id), verificationNow(verification), options.skipped ?? {});
     }
     // An explicit non-authoritative response may add verified packages but must not
     // revoke cache entries. A verified authoritative empty response does prune.
@@ -436,7 +443,9 @@ export class SkillCache {
           // 只有最近一次权威同步成功、且企业没再下发这个技能，才算企业已删除 / 停用；
           // 新机器、还没同步完、同步失败（离线 / 426 / 503）、缓存被误删都仍然拦下。
           const delivered = this.readDelivered(scope);
-          return { ref, status: "blocked", reason: delivered && !delivered.has(skillId) ? "skill_removed" : "skill_missing" };
+          if (!delivered || delivered.has(skillId)) return { ref, status: "blocked", reason: "skill_missing" };
+          // 企业明确说了原因就照实告诉用户；没说（旧版 Manager）按「已移除」。
+          return { ref, status: "blocked", reason: this.readSkipped(scope).get(skillId) ?? "skill_removed" };
         }
         const loaded = loadSkillsFromDir({ dir: paths[0]!, source: "aiteam-manager" });
         if (loaded.skills.length !== 1) return { ref, status: "blocked", reason: "skill_invalid" };
@@ -584,12 +593,24 @@ export class SkillCache {
     return { tenant_id: scope.tenantId, member_id: scope.memberId, cached_at: raw.cached_at, keys: normalizeKeySet(raw.keys as unknown as SkillSigningKeyMetadata[]) };
   }
 
-  private writeDelivered(scope: SkillScope, skillIds: readonly string[], now: Date): void {
+  private writeDelivered(scope: SkillScope, skillIds: readonly string[], now: Date, skipped: Readonly<Record<string, string>>): void {
     const path = join(this.scopeRoot(scope), DELIVERED_FILE);
     this.assertNoSymlink(path);
     const temp = `${path}.tmp-${process.pid}-${Date.now()}`;
-    writeFileSync(temp, JSON.stringify({ tenant_id: scope.tenantId, member_id: scope.memberId, synced_at: now.toISOString(), skill_ids: [...new Set(skillIds)].sort() }), { encoding: "utf8", mode: 0o600, flag: "wx" });
+    writeFileSync(temp, JSON.stringify({ tenant_id: scope.tenantId, member_id: scope.memberId, synced_at: now.toISOString(), skill_ids: [...new Set(skillIds)].sort(), skipped }), { encoding: "utf8", mode: 0o600, flag: "wx" });
     renameSync(temp, path);
+  }
+
+  /** 最近一次权威同步里企业明确给出的「没下发这个技能」的原因（skill_id → 就绪原因）；旧记录或旧版 Manager 没有。 */
+  private readSkipped(scope: SkillScope): Map<string, string> {
+    const path = join(this.scopeRoot(scope), DELIVERED_FILE);
+    if (!existsSync(path)) return new Map();
+    this.assertNoSymlink(path);
+    try {
+      const raw = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+      if (raw.tenant_id !== scope.tenantId || raw.member_id !== scope.memberId || !raw.skipped || typeof raw.skipped !== "object") return new Map();
+      return new Map(Object.entries(raw.skipped as Record<string, unknown>).flatMap(([id, reason]) => typeof reason === "string" && SKIPPED_REASON_TO_READINESS[reason] ? [[id, SKIPPED_REASON_TO_READINESS[reason]!] as [string, string]] : []));
+    } catch { return new Map(); }
   }
 
   private readDelivered(scope: SkillScope): Set<string> | undefined {
@@ -672,7 +693,7 @@ export function skillResourcePaths(cache: SkillCache, scope: SkillScope, refs: r
   const loadedPaths = new Set<string>();
   for (const ref of new Set(refs)) {
     const paths = cache.pathsFor(scope, [ref], verification);
-    if (paths.length === 0 && cache.readinessFor(scope, [ref], verification)[0]?.reason === "skill_removed") {
+    if (paths.length === 0 && ENTERPRISE_SKIPPED_SKILL_REASONS.has(cache.readinessFor(scope, [ref], verification)[0]?.reason ?? "")) {
       // 企业删除或停用了专家配的技能：缓存里已没有它，跳过这一个，专家照常可用（被篡改 / 过期的仍然拦下）。
       diagnostics.push({ type: "warning", message: `Skill ${ref} is no longer provided by the enterprise; skipped` });
       continue;

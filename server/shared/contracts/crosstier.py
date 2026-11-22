@@ -277,6 +277,22 @@ class AuthorizedConfigPullRequest(BaseModel):
     )
 
 
+class SkippedSkillRef(BaseModel):
+    """某位员工清单里、本次没有签发给 Agent 的技能引用及原因（设计 2026-11-22 §3.4）。
+
+    只含引用 ID 与原因枚举，不含会话或配置内容。身份统一用 skill_id（AGENTS §3.9）。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    employee_id: str
+    ref: str = Field(description="员工清单里的写法：skill_id 或 skill_id@version")
+    skill_id: str = Field(description="目录身份，Agent 按它对应本地技能缓存")
+    reason: Literal["missing", "draft", "invalid", "disabled"] = Field(
+        description="missing 企业目录里没有；draft 还没完成；invalid 内容有问题；disabled 被停用",
+    )
+
+
 class AuthorizedConfigPullResponse(BaseModel):
     """F10 授权配置同步（响应）：Manager 按 tenant + member_grant 裁剪后的增量。"""
 
@@ -297,6 +313,10 @@ class AuthorizedConfigPullResponse(BaseModel):
     )
     solutions: list[dict] = Field(default_factory=list, description="方案实例列表")
     revoked_ids: list[str] = Field(default_factory=list, description="已撤销/不可见，需本地失效移除")
+    skipped_refs: list[SkippedSkillRef] = Field(
+        default_factory=list,
+        description="授权员工清单里本次未签发的技能引用及原因（每次同步给全量，不是增量）",
+    )
 
 
 class SnapshotPullRequest(BaseModel):
