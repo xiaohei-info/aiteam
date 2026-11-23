@@ -29,6 +29,14 @@ class _Refs:
     def __init__(self, repo, employees):
         self.repo, self.employees = repo, employees  # employees: {id: {"name", "skills", "connectors"}}
 
+    def transaction(self, ctx):
+        from contextlib import contextmanager
+
+        @contextmanager
+        def scope():
+            yield self.repo, self
+        return scope()
+
     def _column(self, kind):
         return "skills" if kind == "skill" else "connectors"
 
@@ -222,3 +230,11 @@ def test_repository_unlink():
     assert [params for sql, params in router.executed if sql.startswith("UPDATE employee")][0][0] == "[]"
     repo, _ = _repo(FakeCursor())
     assert repo.unlink(CTX, "skill", "none") == []
+
+
+def test_repository_transaction_binds_both_repositories_to_one_session():
+    from manager_service.capability_catalog_repository import CapabilityCatalogRepository
+    repo, router = _repo()
+    with repo.transaction(CTX) as (catalog, refs):
+        assert isinstance(catalog, CapabilityCatalogRepository) and isinstance(refs, EmployeeCapabilityRefRepository)
+        assert catalog._router._session is refs._router._session

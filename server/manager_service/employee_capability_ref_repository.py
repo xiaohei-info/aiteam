@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Literal
 
@@ -44,6 +45,16 @@ class DeleteOutcome:
 class EmployeeCapabilityRefRepository:
     def __init__(self, router: PgTenantRouter):
         self._router = router
+
+    @contextmanager
+    def transaction(self, ctx: TenantContext):
+        """同一个事务里同时改目录项和员工清单：中途失败两边一起回滚，不会留下「目录项已停用、员工清单还留着引用」。"""
+        from .capability_catalog_repository import CapabilityCatalogRepository
+        from .recruit_transaction import _TransactionRouter
+
+        with self._router.session(ctx) as session:
+            bound = _TransactionRouter(session)
+            yield CapabilityCatalogRepository(bound), EmployeeCapabilityRefRepository(bound)
 
     def employees_using(self, ctx: TenantContext, kind: RefKind, key: str) -> list[EmployeeUse]:
         with self._router.session(ctx) as s:

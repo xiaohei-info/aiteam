@@ -143,3 +143,29 @@ def test_connectors_follow_the_same_rules(env):
     assert catalog.get_connector(a, catalog_id=connector.catalog_id) is None
     assert employees.get(a, employee_id=e1.employee_id).connector_refs == ["dingtalk"]
     assert audit.events[-1][2] == "connector.deleted_removed_from_employees"
+
+
+def test_disable_and_remove_rolls_back_together_when_the_unlink_fails(env, monkeypatch):
+    """停用 + 去掉引用在同一个事务里：去引用失败时，目录项不能已经被停用（否则管理员没有重试入口）。"""
+    router, svc, audit, employees, catalog, (ta, tb) = env
+    a = _ctx(ta)
+    skill = _skill(catalog, a)
+    e1 = _employee(employees, a, "e1", skills=["weekly"])
+
+    def boom(self, ctx, kind, key):
+        raise RuntimeError("unlink failed")
+
+    monkeypatch.setattr(EmployeeCapabilityRefRepository, "unlink", boom)
+    with pytest.raises(RuntimeError):
+        svc.update_skill(a, SkillCatalogIn(skill_id="weekly", binding_policy="disabled"),
+                         catalog_id=skill.catalog_id, remove_from_employees=True)
+    assert catalog.get_skill(a, catalog_id=skill.catalog_id).binding_policy == "opt_in"
+    assert employees.get(a, employee_id=e1.employee_id).skills == ["weekly"]
+    assert audit.events == []
+    monkeypatch.undo()
+    # 重试仍会弹「二选一」，并且能成功
+    with pytest.raises(CapabilityInUse):
+        svc.update_skill(a, SkillCatalogIn(skill_id="weekly", binding_policy="disabled"), catalog_id=skill.catalog_id)
+    svc.update_skill(a, SkillCatalogIn(skill_id="weekly", binding_policy="disabled"),
+                     catalog_id=skill.catalog_id, remove_from_employees=True)
+    assert employees.get(a, employee_id=e1.employee_id).skills == []

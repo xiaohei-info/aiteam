@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 from shared.contracts.enums import EnterpriseRole
 from shared.contracts.tenancy import TenantContext
 from shared.db import PgTenantRouter
@@ -78,6 +80,15 @@ class CapabilityCatalogService:
         self._refs = refs
         self._audit = audit
 
+    @contextmanager
+    def _write_scope(self, ctx: TenantContext, unlink: bool):
+        """要同时清员工清单时，目录项与清单在同一事务里改；否则照旧。"""
+        if unlink and self._refs is not None:
+            with self._refs.transaction(ctx) as scope:
+                yield scope
+        else:
+            yield self._repo, self._refs
+
     def _record(self, ctx: TenantContext, action: str, kind: str, key: str, uses: list[EmployeeUse]) -> None:
         if self._audit is not None and uses:
             # 只记引用与员工 id，不记会话或配置内容。
@@ -144,17 +155,18 @@ class CapabilityCatalogService:
         elif "version" in supplied and body.version != current.version and current.files:
             validate_custom_package(skill_id=current.skill_id, version=body.version,
                                     files=current.files, content_hash=current.content_hash)
-        row = self._repo.update_skill(
-            ctx, catalog_id=catalog_id,
-            **{name: getattr(body, name) if name in supplied else None for name in
-               ("display_name", "version", "install_policy", "binding_policy", "visibility", "config")},
-            files=files, content_hash=content_hash,
-        )
-        if row is None:  # 双保险：RLS 下跨 tenant 不可见
-            raise NotFound("skill not found in this tenant")
+        with self._write_scope(ctx, bool(uses and remove_from_employees)) as (catalog, refs):
+            row = catalog.update_skill(
+                ctx, catalog_id=catalog_id,
+                **{name: getattr(body, name) if name in supplied else None for name in
+                   ("display_name", "version", "install_policy", "binding_policy", "visibility", "config")},
+                files=files, content_hash=content_hash,
+            )
+            if row is None:  # 双保险：RLS 下跨 tenant 不可见
+                raise NotFound("skill not found in this tenant")
+            if uses and remove_from_employees:
+                refs.unlink(ctx, "skill", current.skill_id)
         if uses:
-            if remove_from_employees:
-                self._refs.unlink(ctx, "skill", current.skill_id)
             self._record(ctx, "skill.disabled_removed_from_employees" if remove_from_employees else "skill.disabled_kept_in_employees",
                          "skill", current.skill_id, uses)
         return _skill_to_out(row)
@@ -210,15 +222,16 @@ class CapabilityCatalogService:
         uses = self._refs.employees_using(ctx, "connector", current.connector_id) if disabling and self._refs is not None else []
         if uses and remove_from_employees is None:
             raise _in_use("connector", current.display_name or current.connector_id, uses)
-        row = self._repo.update_connector(
-            ctx, catalog_id=catalog_id, display_name=body.display_name, visibility=body.visibility,
-            grant_scope=body.grant_scope, config=body.config,
-        )
-        if row is None:
-            raise NotFound("connector not found in this tenant")
+        with self._write_scope(ctx, bool(uses and remove_from_employees)) as (catalog, refs):
+            row = catalog.update_connector(
+                ctx, catalog_id=catalog_id, display_name=body.display_name, visibility=body.visibility,
+                grant_scope=body.grant_scope, config=body.config,
+            )
+            if row is None:
+                raise NotFound("connector not found in this tenant")
+            if uses and remove_from_employees:
+                refs.unlink(ctx, "connector", current.connector_id)
         if uses:
-            if remove_from_employees:
-                self._refs.unlink(ctx, "connector", current.connector_id)
             self._record(ctx, "connector.disabled_removed_from_employees" if remove_from_employees else "connector.disabled_kept_in_employees",
                          "connector", current.connector_id, uses)
         return _connector_to_out(row)

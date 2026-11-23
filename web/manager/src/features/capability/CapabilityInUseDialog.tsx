@@ -67,8 +67,8 @@ export function CapabilityInUseDialog({ title, action, employees, working, error
           <LayoutFooter hasDivider>
             <HStack gap={2} justify="end" wrap="wrap">
               <Button label="取消" variant="ghost" isDisabled={working} onClick={onCancel} />
-              <Button label={keep} variant="secondary" isDisabled={working} onClick={() => onChoose(false)} />
-              <Button label={remove} variant="primary" isLoading={working} onClick={() => onChoose(true)} />
+              <Button label={keep} variant="primary" isDisabled={working} onClick={() => onChoose(false)} />
+              <Button label={remove} variant="secondary" isLoading={working} onClick={() => onChoose(true)} />
             </HStack>
           </LayoutFooter>
         }
