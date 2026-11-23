@@ -233,10 +233,7 @@ def test_existing_hindsight_lease_checks_active_member_in_real_route_assembly(au
 
 
 @pytest.mark.parametrize("path,body,mutation", [
-    ("skill-bindings", {"skill_id": "fixture"}, "PATCH"),
     ("knowledge-bindings", {"knowledge_space_id": "fixture", "enabled": False}, "PATCH"),
-    ("connector-bindings", {"connector_id": "fixture"}, "PATCH"),
-    ("prompt-versions", {"display_name": "fixture", "set_current": False}, "POST"),
 ])
 def test_registered_binding_routes_bind_path_employee_to_real_resource(auth_app, path, body, mutation):
     from manager_service.routes_employee import build_employee_router

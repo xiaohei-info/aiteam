@@ -50,7 +50,7 @@ import { CustomSkillError, importCustomSkill, installMcpDirectly, installMcpFrom
 import type { CustomSkillStore } from "../custom-skills.js";
 import { validBearerHeader, type McpOwner } from "../mcp-auth.js";
 import type { LocalCapability as StoredCapability } from "../storage/sqlite.js";
-import { SkillCache, SkillVerificationError, skillRefsForSnapshot, skillSigningVerificationForSnapshot, skillSigningVerificationFromEnv, verifySignedSkillPackage } from "../skills.js";
+import { ENTERPRISE_SKIPPED_SKILL_REASONS, SkillCache, SkillVerificationError, skillRefsForSnapshot, skillSigningVerificationForSnapshot, skillSigningVerificationFromEnv, verifySignedSkillPackage } from "../skills.js";
 import { ALLOWED_FILE_MIMES, AUDIO_MIMES, hasImageSignature, IMAGE_MIMES, MAX_LOCAL_FILE_BYTES } from "../local-files.js";
 export type { AuthenticatedCaller, AuthenticateRequest } from "./auth.js";
 
@@ -662,7 +662,7 @@ const SnapshotListEnvelope = Type.Object({ data: Type.Array(Type.Ref("SnapshotPr
 const SkillReadiness = Type.Object({
   ref: Type.String({ minLength: 1, description: "技能引用。" }),
   status: Type.Ref("ReadinessState"),
-  reason: Type.Optional(Type.String({ description: "技能不可用或降级原因。" })),
+  reason: Type.Optional(Type.String({ description: "技能不可用或降级原因。企业决定不提供时：skill_removed 企业已移除、skill_disabled 已停用、skill_unfinished 还没写完或内容有问题——运行时跳过它，员工其余能力照常可用；skill_missing 没同步到、skill_invalid / skill_invalid_or_expired 无效或过期等会拦下。" })),
   version: Type.Optional(Type.String({ description: "已解析的技能版本。" })),
 }, { $id: "SkillReadiness", additionalProperties: false, description: "单个技能的本地就绪状态。" });
 const CapabilityReadiness = Type.Object({
@@ -2762,7 +2762,7 @@ export class AgentHttpServer {
         refs.push(...this.options.store.listSnapshots(caller.tenantId, memberId).filter((snapshot) => currentEmployeeIds.has(snapshot.employee_id)).flatMap((snapshot) => skillRefsForSnapshot(snapshot as { skill_refs?: unknown; skills?: unknown })));
         // 有会话正在运行时只加新版本、不清旧文件：正在用的技能目录不能被删掉；下次同步再清。
         const running = this.options.host.hasActiveRunsFor?.(caller.tenantId, memberId) ?? false;
-        this.options.skillCache.reconcile({ tenantId: caller.tenantId, memberId }, signedPackages, refs, verification, { authoritative: skillPackagesAuthoritative && !running, recordDelivered: skillPackagesAuthoritative });
+        this.options.skillCache.reconcile({ tenantId: caller.tenantId, memberId }, signedPackages, refs, verification, { authoritative: skillPackagesAuthoritative && !running, recordDelivered: skillPackagesAuthoritative, skipped: Object.fromEntries((config.skipped_skill_refs ?? []).map((item) => [item.skill_id, item.reason])) });
       }
       this.writeJson(response, 200, { data: { ok: true, ...result, partial: skippedEmployeeIds.length > 0, skipped_employee_ids: skippedEmployeeIds } });
     } catch (error) {
@@ -2815,7 +2815,7 @@ export class AgentHttpServer {
           : refs.map((ref) => ({ ref, status: "blocked", reason: "skill_cache_unavailable" }));
     } catch { skills = malformedSnapshot ? [{ ref: "snapshot", status: "blocked", reason: "skill_snapshot_invalid" }] : refs.map((ref) => ({ ref, status: "blocked", reason: "skill_invalid_or_expired" })); }
     // 最近一次权威同步确认企业已删除 / 停用的技能运行时会跳过，不让整个专家不可用；其余缺失仍然拦下。
-    const missing = skills.filter((skill) => skill.status !== "ready" && skill.reason !== "skill_removed");
+    const missing = skills.filter((skill) => skill.status !== "ready" && !ENTERPRISE_SKIPPED_SKILL_REASONS.has(skill.reason ?? ""));
     return { employee_id: expert.employee_id, display_name: expert.display_name, handle: expert.handle, available: !expert.availability_reason && runtime && provider === "ready" && lifecycle === "ready" && missing.length === 0, runtime: runtime ? "ready" : "blocked", provider, skills, capabilities: [], reasons: [ ...missing.map((skill) => `Required skill ${skill.ref}: ${skill.reason}`), ...(runtime ? [] : ["Pi runtime is not ready"]), ...(lifecycle === "ready" ? [] : ["Manager has not activated this expert"]), ...(expert.availability_reason ? [dependencyUnavailable ? "Employee model, provider or price is unavailable" : "Employee is unavailable"] : []), ...(provider === "ready" || dependencyUnavailable ? [] : ["Manager snapshot has no model provider"]) ] };
   }
 

@@ -43,7 +43,8 @@ test('readiness 决定最后的可对话 / 未就绪 / 检查中 / 状态未知�
     readiness: { available: false, reasons: ['Required skill web-search: skill_missing', 'Required skill web-search: skill_missing'] },
     lifecycle: active,
     listing: 'listed',
-  }), { state: 'not_ready', tone: 'warn', label: '未就绪', detail: '技能「web-search」未就绪' })
+  }), { state: 'not_ready', tone: 'warn', label: '未就绪', detail: '技能「web-search」还没同步到本机，请稍后刷新' })
+  assert.equal(describeReadinessReason('Required skill web-search: skill_invalid'), '技能「web-search」未就绪')
   assert.equal(resolveEmployeeChatStatus({}), EMPLOYEE_CHAT_CHECKING)
   assert.equal(resolveEmployeeChatStatus({ readiness: null }), EMPLOYEE_CHAT_UNKNOWN)
   assert.equal(resolveEmployeeChatStatus({ readiness: { available: false } }).detail, '员工尚未就绪')

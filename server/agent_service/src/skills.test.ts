@@ -473,6 +473,13 @@ test("required skill readiness blocks unsynced, missing, tampered or unparseable
     assert.equal(new SkillCache(root).readinessFor(scope, ["review@1"])[0]?.reason, "skill_removed");
     assert.equal((await get()).available, true);
     assert.doesNotThrow(load);
+    // 企业明确给了原因：各说各的，运行时都只跳过这一个，员工其余能力照常可用。
+    for (const [reason, expected] of [["disabled", "skill_disabled"], ["draft", "skill_unfinished"], ["invalid", "skill_unfinished"], ["missing", "skill_removed"]] as const) {
+      cache.reconcile(scope, [], [], { publicKeys: keys }, { authoritative: false, recordDelivered: true, skipped: { review: reason } });
+      assert.equal(new SkillCache(root).readinessFor(scope, ["review@1"])[0]?.reason, expected, reason);
+      assert.equal((await get()).available, true, reason);
+      assert.doesNotThrow(load, reason);
+    }
     // 不是权威同步（例如单个安装）不改清单。
     cache.reconcile(scope, [signed(key)], ["review@1"], { publicKeys: keys }, { authoritative: false });
     rmSync(join(root, scope.tenantId, scope.memberId, "review", "1"), { recursive: true });

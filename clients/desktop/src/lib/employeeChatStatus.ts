@@ -65,8 +65,10 @@ const READINESS_REASON_LABELS: Record<string, string> = {
 export function describeReadinessReason(reason: string): string {
   const known = READINESS_REASON_LABELS[reason]
   if (known) return known
-  const skill = /^Required skill (.+): .+$/.exec(reason)
-  return skill ? `技能「${skill[1]}」未就绪` : reason
+  const skill = /^Required skill (.+): (.+)$/.exec(reason)
+  if (!skill) return reason
+  // 只有没同步到本机时才有明确的下一步；其余（被改动、过期等）保持原有说法。
+  return skill[2] === 'skill_missing' ? `技能「${skill[1]}」还没同步到本机，请稍后刷新` : `技能「${skill[1]}」未就绪`
 }
 
 function readinessDetail(readiness: EmployeeReadiness): string {

@@ -14,6 +14,7 @@ from shared.contracts.crosstier import (
     AuthorizedConfigPullResponse,
     InstallableSkill,
     InstallableSkillPackage,
+    SkippedSkillRef,
 )
 from shared.contracts.enums import EnterpriseRole
 from shared.contracts.skill import SignedSkillPackage
@@ -24,6 +25,7 @@ from .capability_origin import skill_origin
 from .active_principal import require_active
 from .knowledge_access_policy import KnowledgeAccessPolicy
 from .capability_catalog_service import CapabilityCatalogService
+from .employee_capability_refs import ref_key
 from .employee_config_service import EmployeeConfigService
 from .member_service import GrantService, MemberDeptService
 from .recruit_repository import RecruitRepository
@@ -104,7 +106,7 @@ class AuthorizedConfigService:
            按 version/hash 判定更新。capability_catalog 未提供 → skill_packages 置 []（D14）。
         """
         require_active(self._members.get_member(ctx, req.member_id))
-        all_configs = self._config.list_all(ctx)
+        all_configs = self._config.list_all(ctx, with_status=True)
         all_employee_ids = {c.employee_id for c in all_configs}
 
         all_solution_instances = self._recruit_repo.list_solution_instances(ctx) if self._recruit_repo else []
@@ -183,8 +185,14 @@ class AuthorizedConfigService:
             ctx, [cfg.model_dump(mode="json") for cfg in authorized_configs]
         )
 
+        # 与 skill_packages 一样是目录真相，不是配置增量：员工版本没变，技能被停用 / 删除也要让 Agent 知道原因。
+        skipped_refs = [
+            SkippedSkillRef(employee_id=cfg.employee_id, ref=item.ref, skill_id=ref_key(item.ref), reason=item.status)
+            for cfg in authorized_configs for item in cfg.skill_status if item.status != "ready"
+        ]
+
         return AuthorizedConfigPullResponse(
-            experts=experts, solutions=solutions, revoked_ids=revoked_ids,
+            experts=experts, solutions=solutions, revoked_ids=revoked_ids, skipped_refs=skipped_refs,
             skill_packages=skill_packages,
             skill_packages_authoritative=self._capability is not None and self._skill_signer is not None,
             skill_signing_keys=self._skill_signer.public_metadata() if self._skill_signer is not None else [],

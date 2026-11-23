@@ -1,11 +1,8 @@
 """employee 独立绑定实体 北向路由（issue AITEAM-234 / GitHub AITEAM-280，02 §10/03 §9.7/04 §6）。
 
 路径挂载在现有 /api/employees 路由之下：
-    /api/manager/employees/{employee_id}/prompt-versions
-    /api/manager/employees/{employee_id}/skill-bindings
     /api/manager/employees/{employee_id}/knowledge-bindings
     /api/manager/employees/{employee_id}/memory-setting
-    /api/manager/employees/{employee_id}/connector-bindings
 
 公开完整配置读写均需 owner/enterprise_admin；内部授权snapshot/RAG直接使用repository读取。
 统一 envelope（02 §10.3.4）+ problem+json（02 §11.2）。tenant_id 经 TenantContext（D22），不手写过滤。
@@ -27,22 +24,13 @@ from shared.errors import AppError
 
 from .active_principal import require_admin
 from .employee_bindings_services import (
-    build_connector_binding_service,
     build_knowledge_binding_service,
     build_knowledge_document_binding_service,
     build_memory_setting_service,
-    build_prompt_version_service,
-    build_skill_binding_service,
-    EmployeeConnectorBindingService,
     EmployeeKnowledgeBindingService,
     EmployeeMemorySettingService,
-    EmployeePromptVersionService,
-    EmployeeSkillBindingService,
 )
 from .schemas_employee_bindings import (
-    ConnectorBindingCreate,
-    ConnectorBindingOut,
-    ConnectorBindingPatch,
     KnowledgeBindingCreate,
     KnowledgeBindingOut,
     KnowledgeBindingPatch,
@@ -50,217 +38,12 @@ from .schemas_employee_bindings import (
     KnowledgeDocumentBindingOut,
     MemorySettingIn,
     MemorySettingOut,
-    PromptVersionCreate,
-    PromptVersionOut,
-    SkillBindingCreate,
-    SkillBindingOut,
-    SkillBindingPatch,
 )
 
 
 class _ManagerNotConfigured(AppError):
     status, code, title = 503, "manager_db_unconfigured", "Manager DB Unconfigured"
 
-
-
-# ---------------- Prompt Versions ----------------
-
-def _build_prompt_versions_router(verifier) -> APIRouter:
-    require = require_claims(verifier)
-
-    def svc(request: Request):
-        dsn = request.app.state.settings.db_url
-        if not dsn:
-            raise _ManagerNotConfigured("Manager 业务 DB 未配置（设置 DB_URL）")
-        cache = getattr(request.app.state, "_emp_bind_svc_pv", None)
-        if cache is None:
-            cache = build_prompt_version_service(PgTenantRouter(dsn))
-            setattr(request.app.state, "_emp_bind_svc_pv", cache)
-        return cache
-
-    router = APIRouter(prefix="/api/manager/employees/{employee_id}/prompt-versions",
-                       tags=["manager", "employee-bindings"])
-
-    @router.post("", summary="新建 employee prompt 版本",
-                 operation_id="manager_employee_prompt_version_create",
-                 status_code=status.HTTP_201_CREATED)
-    async def create_prompt_version(
-        body: PromptVersionCreate,
-        employee_id: str = Path(...),
-        request: Request = None,
-        claims: TokenClaims = Depends(require),
-    ) -> Envelope[PromptVersionOut]:
-        require_admin(tenant_context_from(claims))
-        s = svc(request)
-        out = s.create(tenant_context_from(claims), employee_id=employee_id,
-                       display_name=body.display_name, persona=body.persona,
-                       model=body.model, provider_ref=body.provider_ref,
-                       thinking_level=body.thinking_level, tools=body.tools,
-                       set_current=body.set_current, change_note=body.change_note)
-        return Envelope(data=PromptVersionOut(**out))
-
-    @router.get("", summary="列 employee 全部 prompt 版本",
-                operation_id="manager_employee_prompt_version_list")
-    async def list_prompt_versions(
-        employee_id: str = Path(...),
-        request: Request = None,
-        claims: TokenClaims = Depends(require),
-    ) -> ListEnvelope[PromptVersionOut]:
-        require_admin(tenant_context_from(claims))
-        s = svc(request)
-        items = s.list_all(tenant_context_from(claims), employee_id=employee_id)
-        return ListEnvelope(data=[PromptVersionOut(**i) for i in items])
-
-    @router.get("/current", summary="取当前生效 prompt 版本",
-                operation_id="manager_employee_prompt_version_get_current")
-    async def get_current_prompt_version(
-        employee_id: str = Path(...),
-        request: Request = None,
-        claims: TokenClaims = Depends(require),
-    ) -> Envelope[PromptVersionOut]:
-        require_admin(tenant_context_from(claims))
-        s = svc(request)
-        return Envelope(data=PromptVersionOut(
-            **s.get_current(tenant_context_from(claims), employee_id=employee_id)))
-
-    @router.get("/{binding_id}", summary="取单个 prompt 版本",
-                operation_id="manager_employee_prompt_version_get")
-    async def get_prompt_version(
-        employee_id: str = Path(...),
-        binding_id: str = Path(...),
-        request: Request = None,
-        claims: TokenClaims = Depends(require),
-    ) -> Envelope[PromptVersionOut]:
-        require_admin(tenant_context_from(claims))
-        s = svc(request)
-        s.require_employee(tenant_context_from(claims), binding_id=binding_id, employee_id=employee_id)
-        return Envelope(data=PromptVersionOut(
-            **s.get(tenant_context_from(claims), binding_id=binding_id)))
-
-    @router.post("/{binding_id}/activate", summary="把指定 prompt 版设为当前生效",
-                 operation_id="manager_employee_prompt_version_activate")
-    async def activate_prompt_version(
-        employee_id: str = Path(...),
-        binding_id: str = Path(...),
-        request: Request = None,
-        claims: TokenClaims = Depends(require),
-    ) -> Envelope[PromptVersionOut]:
-        require_admin(tenant_context_from(claims))
-        s = svc(request)
-        s.require_employee(tenant_context_from(claims), binding_id=binding_id, employee_id=employee_id)
-        return Envelope(data=PromptVersionOut(
-            **s.set_current(tenant_context_from(claims), binding_id=binding_id)))
-
-    @router.delete("/{binding_id}", summary="删除 prompt 版本",
-                   operation_id="manager_employee_prompt_version_delete",
-                   status_code=status.HTTP_204_NO_CONTENT)
-    async def delete_prompt_version(
-        employee_id: str = Path(...),
-        binding_id: str = Path(...),
-        request: Request = None,
-        claims: TokenClaims = Depends(require),
-    ) -> Response:
-        require_admin(tenant_context_from(claims))
-        s = svc(request)
-        s.require_employee(tenant_context_from(claims), binding_id=binding_id, employee_id=employee_id)
-        s.delete(tenant_context_from(claims), binding_id=binding_id)
-        return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-    return router
-
-
-# ---------------- Skill Bindings ----------------
-
-def _build_skill_bindings_router(verifier) -> APIRouter:
-    require = require_claims(verifier)
-
-    def svc(request: Request):
-        dsn = request.app.state.settings.db_url
-        if not dsn:
-            raise _ManagerNotConfigured("Manager 业务 DB 未配置（设置 DB_URL）")
-        cache = getattr(request.app.state, "_emp_bind_svc_sk", None)
-        if cache is None:
-            cache = build_skill_binding_service(PgTenantRouter(dsn))
-            setattr(request.app.state, "_emp_bind_svc_sk", cache)
-        return cache
-
-    # 已弃用（设计 2026-11-22 §3.1）：运行时只读员工自己的清单（employee.skills / connector_refs），
-    # 这里写的绑定行不会影响员工；确认生产表为空后在 P4 删除。
-    router = APIRouter(prefix="/api/manager/employees/{employee_id}/skill-bindings",
-                       tags=["manager", "employee-bindings"], deprecated=True)
-
-    @router.post("", summary="新增 employee ↔ skill 绑定", operation_id="manager_employee_skill_bind",
-                 status_code=status.HTTP_201_CREATED)
-    async def create_skill_binding(
-        body: SkillBindingCreate,
-        employee_id: str = Path(...),
-        request: Request = None,
-        claims: TokenClaims = Depends(require),
-    ) -> Envelope[SkillBindingOut]:
-        require_admin(tenant_context_from(claims))
-        s = svc(request)
-        out = s.create(tenant_context_from(claims), employee_id=employee_id,
-                       skill_id=body.skill_id, enabled=body.enabled, config=body.config)
-        return Envelope(data=SkillBindingOut(**out))
-
-    @router.get("", summary="列 employee 全部 skill 绑定",
-                operation_id="manager_employee_skill_bind_list")
-    async def list_skill_bindings(
-        employee_id: str = Path(...),
-        request: Request = None,
-        claims: TokenClaims = Depends(require),
-    ) -> ListEnvelope[SkillBindingOut]:
-        require_admin(tenant_context_from(claims))
-        s = svc(request)
-        items = s.list_all(tenant_context_from(claims), employee_id=employee_id)
-        return ListEnvelope(data=[SkillBindingOut(**i) for i in items])
-
-    @router.get("/{binding_id}", summary="取单个 skill 绑定",
-                operation_id="manager_employee_skill_bind_get")
-    async def get_skill_binding(
-        employee_id: str = Path(...),
-        binding_id: str = Path(...),
-        request: Request = None,
-        claims: TokenClaims = Depends(require),
-    ) -> Envelope[SkillBindingOut]:
-        require_admin(tenant_context_from(claims))
-        s = svc(request)
-        s.require_employee(tenant_context_from(claims), binding_id=binding_id, employee_id=employee_id)
-        return Envelope(data=SkillBindingOut(
-            **s.get(tenant_context_from(claims), binding_id=binding_id)))
-
-    @router.patch("/{binding_id}", summary="改 skill 绑定（enabled/config）",
-                  operation_id="manager_employee_skill_bind_patch")
-    async def patch_skill_binding(
-        body: SkillBindingPatch,
-        employee_id: str = Path(...),
-        binding_id: str = Path(...),
-        request: Request = None,
-        claims: TokenClaims = Depends(require),
-    ) -> Envelope[SkillBindingOut]:
-        require_admin(tenant_context_from(claims))
-        s = svc(request)
-        s.require_employee(tenant_context_from(claims), binding_id=binding_id, employee_id=employee_id)
-        return Envelope(data=SkillBindingOut(
-            **s.update(tenant_context_from(claims), binding_id=binding_id,
-                      enabled=body.enabled, config=body.config)))
-
-    @router.delete("/{binding_id}", summary="删 skill 绑定",
-                   operation_id="manager_employee_skill_bind_delete",
-                   status_code=status.HTTP_204_NO_CONTENT)
-    async def delete_skill_binding(
-        employee_id: str = Path(...),
-        binding_id: str = Path(...),
-        request: Request = None,
-        claims: TokenClaims = Depends(require),
-    ) -> Response:
-        require_admin(tenant_context_from(claims))
-        s = svc(request)
-        s.require_employee(tenant_context_from(claims), binding_id=binding_id, employee_id=employee_id)
-        s.delete(tenant_context_from(claims), binding_id=binding_id)
-        return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-    return router
 
 
 # ---------------- Knowledge Bindings ----------------
@@ -480,101 +263,6 @@ def _build_memory_setting_router(verifier) -> APIRouter:
     return router
 
 
-# ---------------- Connector Bindings ----------------
-
-def _build_connector_bindings_router(verifier) -> APIRouter:
-    require = require_claims(verifier)
-
-    def svc(request: Request):
-        dsn = request.app.state.settings.db_url
-        if not dsn:
-            raise _ManagerNotConfigured("Manager 业务 DB 未配置（设置 DB_URL）")
-        cache = getattr(request.app.state, "_emp_bind_svc_co", None)
-        if cache is None:
-            cache = build_connector_binding_service(PgTenantRouter(dsn))
-            setattr(request.app.state, "_emp_bind_svc_co", cache)
-        return cache
-
-    # 已弃用（设计 2026-11-22 §3.1）：运行时只读员工自己的清单（employee.skills / connector_refs），
-    # 这里写的绑定行不会影响员工；确认生产表为空后在 P4 删除。
-    router = APIRouter(prefix="/api/manager/employees/{employee_id}/connector-bindings",
-                       tags=["manager", "employee-bindings"], deprecated=True)
-
-    @router.post("", summary="新增 employee ↔ connector 绑定",
-                 operation_id="manager_employee_connector_bind", status_code=status.HTTP_201_CREATED)
-    async def create_connector_binding(
-        body: ConnectorBindingCreate,
-        employee_id: str = Path(...),
-        request: Request = None,
-        claims: TokenClaims = Depends(require),
-    ) -> Envelope[ConnectorBindingOut]:
-        require_admin(tenant_context_from(claims))
-        s = svc(request)
-        out = s.create(tenant_context_from(claims), employee_id=employee_id,
-                       connector_id=body.connector_id, grant_ref=body.grant_ref,
-                       enabled=body.enabled, config=body.config)
-        return Envelope(data=ConnectorBindingOut(**out))
-
-    @router.get("", summary="列 employee 全部 connector 绑定",
-                operation_id="manager_employee_connector_bind_list")
-    async def list_connector_bindings(
-        employee_id: str = Path(...),
-        request: Request = None,
-        claims: TokenClaims = Depends(require),
-    ) -> ListEnvelope[ConnectorBindingOut]:
-        require_admin(tenant_context_from(claims))
-        s = svc(request)
-        items = s.list_all(tenant_context_from(claims), employee_id=employee_id)
-        return ListEnvelope(data=[ConnectorBindingOut(**i) for i in items])
-
-    @router.get("/{binding_id}", summary="取单个 connector 绑定",
-                operation_id="manager_employee_connector_bind_get")
-    async def get_connector_binding(
-        employee_id: str = Path(...),
-        binding_id: str = Path(...),
-        request: Request = None,
-        claims: TokenClaims = Depends(require),
-    ) -> Envelope[ConnectorBindingOut]:
-        require_admin(tenant_context_from(claims))
-        s = svc(request)
-        s.require_employee(tenant_context_from(claims), binding_id=binding_id, employee_id=employee_id)
-        return Envelope(data=ConnectorBindingOut(
-            **s.get(tenant_context_from(claims), binding_id=binding_id)))
-
-    @router.patch("/{binding_id}", summary="改 connector 绑定（grant_ref/enabled/config）",
-                  operation_id="manager_employee_connector_bind_patch")
-    async def patch_connector_binding(
-        body: ConnectorBindingPatch,
-        employee_id: str = Path(...),
-        binding_id: str = Path(...),
-        request: Request = None,
-        claims: TokenClaims = Depends(require),
-    ) -> Envelope[ConnectorBindingOut]:
-        require_admin(tenant_context_from(claims))
-        s = svc(request)
-        s.require_employee(tenant_context_from(claims), binding_id=binding_id, employee_id=employee_id)
-        return Envelope(data=ConnectorBindingOut(
-            **s.update(tenant_context_from(claims), binding_id=binding_id,
-                      grant_ref=body.grant_ref, enabled=body.enabled, config=body.config)))
-
-    @router.delete("/{binding_id}", summary="删 connector 绑定",
-                   operation_id="manager_employee_connector_bind_delete",
-                   status_code=status.HTTP_204_NO_CONTENT)
-    async def delete_connector_binding(
-        employee_id: str = Path(...),
-        binding_id: str = Path(...),
-        request: Request = None,
-        claims: TokenClaims = Depends(require),
-    ) -> Response:
-        require_admin(tenant_context_from(claims))
-        s = svc(request)
-        s.require_employee(tenant_context_from(claims), binding_id=binding_id, employee_id=employee_id)
-        s.delete(tenant_context_from(claims), binding_id=binding_id)
-        return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-    return router
-
-
 def build_employee_bindings_router(verifier) -> APIRouter:
     """构造聚合路由：把 5 组独立绑定实体子路由挂在 /api/manager/employees/{employee_id}/... 下。
 
@@ -582,10 +270,7 @@ def build_employee_bindings_router(verifier) -> APIRouter:
     等多段路径不会和现有 /{employee_id} GET/PUT/DELETE 冲突（段数不同）。
     """
     root = APIRouter(tags=["manager", "employee-bindings"])
-    root.include_router(_build_prompt_versions_router(verifier))
-    root.include_router(_build_skill_bindings_router(verifier))
     root.include_router(_build_knowledge_bindings_router(verifier))
     root.include_router(_build_knowledge_document_bindings_router(verifier))
     root.include_router(_build_memory_setting_router(verifier))
-    root.include_router(_build_connector_bindings_router(verifier))
     return root

@@ -75,47 +75,6 @@ def test_bindings_crud_and_cross_tenant(migrated_db, admin_url, two_tenants):
     eid_a = _make_employee(client, tok_a, slug=f"bind-a-{uuid.uuid4().hex[:6]}")
     auth_a = {"Authorization": f"Bearer {tok_a}"}
 
-    # ---- prompt version: create + list + set current ----
-    r = client.post(f"/api/manager/employees/{eid_a}/prompt-versions",
-                    json={"display_name": "v1", "persona": "pt1", "set_current": True},
-                    headers=auth_a)
-    assert r.status_code == 201, r.text
-    pv1 = r.json()["data"]
-    assert pv1["is_current"] is True
-    assert pv1["version"] == 1
-
-    r = client.post(f"/api/manager/employees/{eid_a}/prompt-versions",
-                    json={"display_name": "v2", "persona": "pt2"},
-                    headers=auth_a)
-    assert r.status_code == 201, r.text
-    pv2 = r.json()["data"]
-    assert pv2["is_current"] is False
-    assert pv2["version"] == 2
-
-    # activate v1
-    r = client.post(f"/api/manager/employees/{eid_a}/prompt-versions/{pv1['binding_id']}/activate",
-                    headers=auth_a)
-    assert r.status_code == 200, r.text
-    assert r.json()["data"]["is_current"] is True
-    # now pv2 no longer current
-    r = client.get(f"/api/manager/employees/{eid_a}/prompt-versions/current", headers=auth_a)
-    assert r.status_code == 200
-    assert r.json()["data"]["version"] == 1
-
-    # list count
-    r = client.get(f"/api/manager/employees/{eid_a}/prompt-versions", headers=auth_a)
-    assert len(r.json()["data"]) == 2
-
-    # ---- skill binding ----
-    r = client.post(f"/api/manager/employees/{eid_a}/skill-bindings",
-                    json={"skill_id": "code-review", "enabled": True}, headers=auth_a)
-    assert r.status_code == 201, r.text
-    sk = r.json()["data"]
-    # duplicate -> 409
-    r = client.post(f"/api/manager/employees/{eid_a}/skill-bindings",
-                    json={"skill_id": "code-review"}, headers=auth_a)
-    assert r.status_code == 409
-
     # ---- knowledge binding ----
     r = client.post(f"/api/manager/employees/{eid_a}/knowledge-bindings",
                     json={"knowledge_space_id": "ks_default"}, headers=auth_a)
@@ -131,32 +90,26 @@ def test_bindings_crud_and_cross_tenant(migrated_db, admin_url, two_tenants):
     assert r.status_code == 200
     assert r.json()["data"]["retention_days"] == 60
 
-    # ---- connector binding ----
-    r = client.post(f"/api/manager/employees/{eid_a}/connector-bindings",
-                    json={"connector_id": "slack", "grant_ref": "grant-1"}, headers=auth_a)
-    assert r.status_code == 201, r.text
-
     # ---- cross tenant: t-b cannot see t-a's bindings (RLS) ----
     tok_b = _token(tid_b, ["owner"], user_id="owner-b", admin_url=admin_url)
     auth_b = {"Authorization": f"Bearer {tok_b}"}
-    r = client.get(f"/api/manager/employees/{eid_a}/skill-bindings", headers=auth_b)
-    assert r.json()["data"] == []
-    r = client.get(f"/api/manager/employees/{eid_a}/prompt-versions/{pv1['binding_id']}", headers=auth_b)
-    assert r.status_code == 404
+    r = client.get(f"/api/manager/employees/{eid_a}/knowledge-bindings", headers=auth_b)
+    assert r.status_code == 404 or r.json()["data"] == []
+    assert kn["binding_id"] not in r.text
     r = client.get(f"/api/manager/employees/{eid_a}/memory-setting", headers=auth_b)
     assert r.status_code == 404
 
     # ---- member full configuration read/write 403 ----
     tok_m = _token(tid_a, ["member"], user_id="mem-a", admin_url=admin_url)
     auth_m = {"Authorization": f"Bearer {tok_m}"}
-    r = client.get(f"/api/manager/employees/{eid_a}/skill-bindings", headers=auth_m)
+    r = client.get(f"/api/manager/employees/{eid_a}/knowledge-bindings", headers=auth_m)
     assert r.status_code == 403
-    r = client.post(f"/api/manager/employees/{eid_a}/skill-bindings",
-                    json={"skill_id": "reading"}, headers=auth_m)
+    r = client.post(f"/api/manager/employees/{eid_a}/knowledge-bindings",
+                    json={"knowledge_space_id": "ks_other"}, headers=auth_m)
     assert r.status_code == 403
 
     # ---- deletes ----
-    r = client.delete(f"/api/manager/employees/{eid_a}/skill-bindings/{sk['binding_id']}", headers=auth_a)
+    r = client.delete(f"/api/manager/employees/{eid_a}/knowledge-bindings/{kn['binding_id']}", headers=auth_a)
     assert r.status_code == 204
     r = client.delete(f"/api/manager/employees/{eid_a}/memory-setting", headers=auth_a)
     assert r.status_code == 204

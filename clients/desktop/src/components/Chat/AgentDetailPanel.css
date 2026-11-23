@@ -458,3 +458,5 @@
 .adp-memory-more-row button:disabled { cursor: not-allowed; opacity: .5; }
 .adp-memory-notice:empty { display: none; }
 .adp-memory-notice { margin: 0 12px 12px; padding: 8px 12px; border-radius: 8px; background: var(--success-bg); color: var(--success); font-size: 12px; text-align: center; }
+
+.adp-skill-states{margin-top:8px;color:var(--text-secondary);font-size:12px;line-height:1.6}.adp-skill-states p{margin:2px 0}
