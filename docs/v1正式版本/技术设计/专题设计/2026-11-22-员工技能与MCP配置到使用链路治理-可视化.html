@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>员工技能与 MCP：配置到使用的链路治理 · 细化方案</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--ink:#1d2330;--sub:#667085;--line:#e4e7ec;--brand:#3b5bdb;--ok:#12a150;--warn:#d98a00;--bad:#d92d20;--op:#7048e8;--mg:#0b7285;--ag:#e8590c}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;font:14px/1.65 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;color:var(--ink);background:var(--bg)}
+nav{position:fixed;top:0;left:0;bottom:0;width:190px;background:#fff;border-right:1px solid var(--line);padding:18px 12px;overflow:auto}
+nav h1{font-size:14px;margin:0 0 14px;color:var(--brand)}
+nav a{display:block;padding:7px 10px;border-radius:6px;color:var(--ink);text-decoration:none;font-size:13px}
+nav a:hover{background:#eef2ff}
+main{margin-left:190px;padding:28px 36px 80px;max-width:1280px}
+section{margin-bottom:46px}
+h2{font-size:21px;margin:0 0 6px}
+h2 small{font-size:13px;color:var(--sub);font-weight:400;margin-left:8px}
+h3{font-size:15px;margin:22px 0 8px}
+p{margin:6px 0}
+.lead{color:var(--sub);margin-bottom:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:10px 0}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+table{border-collapse:collapse;width:100%;background:#fff;border:1px solid var(--line);border-radius:8px;overflow:hidden;font-size:13px}
+th,td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{background:#f9fafb;font-weight:600;white-space:nowrap}
+tr:last-child td{border-bottom:0}
+.tag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;background:#eef2ff;color:var(--brand);margin:1px 2px}
+.tag.ok{background:#e6f6ec;color:var(--ok)}.tag.warn{background:#fff4e0;color:var(--warn)}.tag.bad{background:#fdeceb;color:var(--bad)}
+.tag.op{background:#f1ecff;color:var(--op)}.tag.mg{background:#e3f6f9;color:var(--mg)}.tag.ag{background:#fff0e6;color:var(--ag)}.tag.gray{background:#f2f4f7;color:var(--sub)}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0}
+.tabs button{border:1px solid var(--line);background:#fff;padding:6px 12px;border-radius:16px;cursor:pointer;font-size:13px}
+.tabs button.on{background:var(--brand);color:#fff;border-color:var(--brand)}
+.pane{display:none}.pane.on{display:block}
+/* mock window */
+.win{border:1px solid #cfd4dc;border-radius:10px;background:#fff;overflow:hidden;box-shadow:0 2px 10px rgba(16,24,40,.06);margin:10px 0}
+.win .bar{display:flex;align-items:center;gap:6px;background:#f2f4f7;padding:7px 12px;font-size:12px;color:var(--sub);border-bottom:1px solid var(--line)}
+.win .bar i{width:9px;height:9px;border-radius:50%;background:#d0d5dd;display:inline-block}
+.win .bar b{margin-left:8px;font-weight:600;color:var(--ink)}
+.win .body{padding:14px;font-size:12.5px}
+.win .cols{display:grid;grid-template-columns:260px 1fr;gap:14px}
+.box{border:1px solid var(--line);border-radius:8px;padding:10px;background:#fcfcfd}
+.box h4{margin:0 0 8px;font-size:12.5px}
+.row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:1px dashed var(--line)}
+.row:last-child{border-bottom:0}
+.btn{display:inline-block;padding:4px 12px;border-radius:6px;border:1px solid var(--brand);color:var(--brand);font-size:12px;background:#fff}
+.btn.pri{background:var(--brand);color:#fff}.btn.dis{border-color:#d0d5dd;color:#98a2b3;background:#f2f4f7}.btn.danger{border-color:var(--bad);color:var(--bad)}
+.steps{display:flex;gap:4px;margin:6px 0 10px}
+.steps span{flex:1;text-align:center;padding:4px 0;border-radius:4px;font-size:11.5px;background:#f2f4f7;color:var(--sub)}
+.steps span.done{background:#e6f6ec;color:var(--ok)}.steps span.cur{background:#eef2ff;color:var(--brand);font-weight:600}
+.input{border:1px solid #d0d5dd;border-radius:6px;padding:5px 8px;background:#fff;color:#475467}
+.note{font-size:12px;color:var(--sub);margin-top:6px}
+.callout{border-left:4px solid var(--warn);background:#fffaf0;padding:10px 14px;border-radius:0 8px 8px 0;margin:12px 0}
+.callout.red{border-color:var(--bad);background:#fff5f4}.callout.green{border-color:var(--ok);background:#f3fbf6}
+svg text{font-family:inherit}
+.flow{display:flex;align-items:stretch;gap:0;flex-wrap:wrap;margin:10px 0}
+.flow .s{background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px 10px;min-width:120px;font-size:12px;flex:1}
+.flow .s b{display:block;font-size:12.5px}
+.flow .a{align-self:center;padding:0 6px;color:var(--sub);font-size:18px}
+.sz{font-weight:700}
+.sz.S{color:var(--ok)}.sz.M{color:var(--warn)}.sz.L{color:var(--bad)}
+@media(max-width:900px){nav{display:none}main{margin-left:0;padding:16px}.grid2,.grid3,.win .cols{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<nav>
+<h1>员工技能与 MCP 链路</h1>
+<a href="#s0">总览</a>
+<a href="#s1">1 解决什么问题</a>
+<a href="#s2">2 实现效果（UI）</a>
+<a href="#s3">3 数据流</a>
+<a href="#s4">4 前端要做什么</a>
+<a href="#s5">5 后端要做什么</a>
+<a href="#s6">6 契约与数据变更</a>
+<a href="#s7">7 阶段与依赖</a>
+<a href="#s8">8 待决策</a>
+</nav>
+<main>
+
+<section id="s0">
+<h2>员工技能与 MCP：配置到使用的链路治理 <small>2026-11-22 · 设计草案，未写代码</small></h2>
+<p class="lead">一句话：管理员配的技能不一定到得了员工、被删后留着悬空引用、用户端又把「声明」当「能力」展示 → 技能和 MCP 共用一个「能力引用」机制，让每一项状态看得见、改动能联动 → 配了就能用，用不了也说得清。</p>
+<div class="grid3">
+<div class="card"><b>一个读取入口</b><p class="note">员工的技能 / MCP 清单只认一个来源，快照、同步、就绪检查、选择器都从同一个入口读，返回每一项的状态。</p></div>
+<div class="card"><b>技能与 MCP 共用</b><p class="note">知识库因为有三态、撤销记录才用绑定表；技能和 MCP 只有「有 / 没有」，用员工清单加统一服务，不照搬。</p></div>
+<div class="card"><b>看得见，也改得动</b><p class="note">选择器标出哪些用不了；删除技能时列出受影响员工；用户端分「可用 / 企业已移除 / 暂时不可用」。</p></div>
+</div>
+<div class="callout"><b>阅读提示：</b>工作量用 S / M / L 粗估，只表示相对大小，不是排期承诺；UI 为示意图，不是最终视觉稿；表格里标「新」的是仓库里目前没有的东西。配套设计文档：<code>2026-11-22-员工技能与MCP配置到使用链路治理-需求与设计.md</code>（现状带文件:行号）。</div>
+</section>
+
+<section id="s1">
+<h2>1 解决什么问题</h2>
+<table>
+<tr><th style="width:24%">现在的问题</th><th style="width:44%">本方案怎么解决</th><th>谁受益</th></tr>
+<tr><td>选择器里什么都能选，草稿、无效、已停用的技能也能配上，保存成功却永远到不了员工</td><td>选择器按状态置灰并写明原因；保存时校验<b>新增项</b>，不可用的直接拒绝并说明</td><td><span class="tag mg">企业管理员</span></td></tr>
+<tr><td>技能被删后，员工配置里还留着它；用户端静默跳过，谁也看不出</td><td>删除前反查受影响员工，确认后在同一事务里从员工身上去掉并留审计；员工里已失效的项标「已失效」，一键去掉</td><td><span class="tag mg">企业管理员</span></td></tr>
+<tr><td>技能库加载失败时显示「暂无技能，请先新增」，没有重试</td><td>失败就说「技能库暂时没加载出来」并给重试</td><td><span class="tag mg">企业管理员</span></td></tr>
+<tr><td>角色设定里写了要用某技能，员工却没有，模型就去找、找不到、把探测过程讲给用户（招聘专员事故）</td><td>运行时兜底：先直接回答，缺什么放末尾「注意：」；保存时人话提示「角色设定里提到了 X，但员工还没有这项技能」</td><td><span class="tag ag">用户</span> <span class="tag mg">管理员</span></td></tr>
+<tr><td>用户端展示的是「声明了什么」，不是「实际能用什么」</td><td>同步带回被跳过的引用与原因，桌面端分类展示</td><td><span class="tag ag">用户</span></td></tr>
+<tr><td>仓库里有两张没人读的绑定表和整套接口，改了也不生效</td><td>员工清单为唯一来源；旁路接口先标废弃，确认生产表为空后删除</td><td><span class="tag">开发 / 运维</span></td></tr>
+<tr><td>技能和 MCP 结构相同却各管各的；管理端还没有任何 MCP 选择入口</td><td>共用同一个能力引用服务；MCP 选择入口是否做列入待决策</td><td><span class="tag mg">企业管理员</span></td></tr>
+</table>
+<div class="callout red"><b>不能保证的事（对外口径一致）：</b>
+<br>① 提示词兜底只能降低弱模型「先叙述探测过程」的概率，不能保证每次遵守；
+<br>② persona 提示只识别<b>目录里已存在</b>的技能名，角色设定里写了从未入库的名字（如招聘专员的 <code>recruitment-dispatch</code>）发现不了；
+<br>③ 不会自动补上缺失的技能，缺什么由管理员决定；
+<br>④ 删除联动不中断正在运行的对话，离线用户重新同步前仍按旧清单工作；
+<br>⑤ <code>employee_prompt_version</code> 是否也是旁路、知识空间删除后绑定是否清理，<b>尚未验证</b>，在 P0 核实。</div>
+</section>
+
+<section id="s2">
+<h2>2 实现效果 <small>点击标签切换界面示意</small></h2>
+<div class="tabs" id="tabs-ui">
+<button class="on" data-p="u1">企业端 · 技能选择器</button>
+<button data-p="u2">企业端 · 角色设定提示</button>
+<button data-p="u3">企业端 · 删除技能确认</button>
+<button data-p="u4">用户端 · 员工能力</button>
+<button data-p="u5">企业端 · MCP 选择（待决策）</button>
+</div>
+
+<div class="pane on" id="u1">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>员工配置 · 招聘专员 · 技能</b></div>
+<div class="body">
+<div class="box"><h4>企业技能库</h4>
+<div class="row"><span>周报整理 · v1.2</span><span><span class="tag ok">可用</span> <span class="btn">已选</span></span></div>
+<div class="row"><span>CSV 数据摘要 · v1.0</span><span><span class="tag ok">可用</span> <span class="btn">选择</span></span></div>
+<div class="row"><span>汇报 PPT 大纲 · v0.3</span><span><span class="tag warn">草稿</span> <span class="note">还没完成，暂时不能给员工用</span> <span class="btn dis">不可选</span></span></div>
+<div class="row"><span>合同审阅 · v2.0</span><span><span class="tag gray">已停用</span> <span class="note">已被停用</span> <span class="btn dis">不可选</span></span></div>
+<div class="row"><span>简历解析 · v1.0</span><span><span class="tag bad">无效</span> <span class="note">内容有问题，请重新导入</span> <span class="btn dis">不可选</span></span></div>
+</div>
+<div class="box" style="margin-top:10px"><h4>员工已有但已失效</h4>
+<div class="row"><span>薪酬核算</span><span><span class="tag bad">已失效</span> <span class="note">已从企业技能库移除，员工现在用不了它</span> <span class="btn danger">从员工身上去掉</span></span></div>
+</div>
+<p class="note">技能库加载失败时，这里显示「技能库暂时没加载出来」和「重试」，不再冒充「暂无技能」。库为空时给「添加平台技能 / 导入技能」入口。</p>
+</div></div>
+<p class="note">要点：能不能选、选了能不能到员工，一眼看清；已失效的项不会悄悄留在配置里。</p>
+</div>
+
+<div class="pane" id="u2">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>员工配置 · 招聘专员 · 角色设定</b></div>
+<div class="body">
+<div class="box"><h4>角色设定</h4>
+<div class="input" style="min-height:54px">你是招聘专家……启动：被唤醒后第一动作加载 <b>招聘调度</b> 技能，再读用户本次输入……</div>
+</div>
+<div class="callout" style="margin-top:8px"><b>角色设定里提到了「招聘调度」，但这位员工还没有这项技能。</b>员工会照常工作，只是用不上它。<br><span class="btn pri">给员工添加这项技能</span> <span class="btn">忽略</span></div>
+<div class="callout" style="margin-top:8px"><b>角色设定里让员工使用「面试排期」，但企业技能库里没有这项技能。</b><br><span class="btn pri">去添加技能</span> <span class="btn">忽略</span></div>
+<p class="note">只提示，不拦保存。只能识别技能库里已有的名字；库里从未出现过的名字发现不了。</p>
+</div></div>
+<p class="note">要点：用管理员听得懂的话说明「对员工意味着什么」，再给能点的动作。</p>
+</div>
+
+<div class="pane" id="u3">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>技能管理 · 删除「周报整理」</b></div>
+<div class="body">
+<div class="box"><h4>有 3 位员工正在使用「周报整理」</h4>
+<div class="row"><span>招聘专员</span><span class="tag mg">员工</span></div>
+<div class="row"><span>行政助理</span><span class="tag mg">员工</span></div>
+<div class="row"><span>运营专员</span><span class="tag mg">员工</span></div>
+</div>
+<div class="box" style="margin-top:10px"><h4>请选择怎么处理</h4>
+<div class="row"><span><b>● 删除，并从这些员工身上去掉</b>（推荐）<br><span class="note">这些员工会在下次同步后失去这项技能。正在进行的对话不会被打断，新的对话从下一条消息起生效。</span></span></div>
+<div class="row"><span><b>○ 只删除，员工配置里保留</b><br><span class="note">这些员工会继续显示这项技能，但标为「已失效」，实际用不了。需要你稍后到每位员工的配置里手动去掉。</span></span></div>
+<p class="note">这次操作会记入审计。</p>
+</div>
+<p style="margin-top:10px"><span class="btn danger">确认删除</span> <span class="btn">取消</span></p>
+</div></div>
+<p class="note">要点：删除前知道影响谁，并由管理员自己选择后果；无人使用时直接删除。技能、连接器、MCP 市场条目共用同一逻辑；停用同理。</p>
+</div>
+
+<div class="pane" id="u4">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>桌面端 · 员工详情 · 招聘专员</b></div>
+<div class="body"><div class="cols">
+<div>
+<div class="box"><h4>员工</h4>
+<div class="row"><span>招聘专员</span><span class="tag ok">在线</span></div>
+<p class="note">制造业招聘数字员工</p></div>
+</div>
+<div>
+<div class="box"><h4>可以帮你做的事（技能）</h4>
+<div class="row"><span>CSV 数据摘要</span><span class="tag ok">可用</span></div>
+<div class="row"><span>周报整理</span><span class="tag ok">可用</span></div>
+<div class="row"><span>薪酬核算</span><span><span class="tag gray">企业已移除</span></span></div>
+<div class="row"><span>简历解析</span><span><span class="tag warn">暂时不可用</span> <span class="note">正在同步，稍后再试</span></span></div>
+<p class="note">上方「可以帮你做的事」只列实际可用的；其余分开展示并说明原因。</p>
+</div>
+</div>
+</div></div></div>
+<p class="note">要点：展示的是「实际能用什么」，不是「配置里写了什么」。</p>
+</div>
+
+<div class="pane" id="u5">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>员工配置 · 招聘专员 · MCP（待决策 #5，P5 可选）</b></div>
+<div class="body">
+<div class="box"><h4>可配置的 MCP</h4>
+<div class="row"><span>企业自建 · 内部知识检索</span><span><span class="tag ok">可用</span> <span class="btn">选择</span></span></div>
+<div class="row"><span>平台 · 网页搜索</span><span><span class="tag ok">可用</span> <span class="btn">选择</span></span></div>
+<div class="row"><span>企业自建 · 钉钉表格</span><span><span class="tag gray">已停用</span> <span class="btn dis">不可选</span></span></div>
+</div>
+<p class="note">现状：员工配置抽屉里没有任何 MCP 选择入口，员工的 MCP 只能靠招募模板或复制员工带入；市场里的 MCP 目前只能由成员自己安装。此页仅为是否做、怎么做的示意，不在 P1 范围。</p>
+</div></div>
+<p class="note">要点：技能和 MCP 用同一套状态与样式，后端同一个服务；是否开放入口另行评审。</p>
+</div>
+</section>
+
+<section id="s3">
+<h2>3 数据流</h2>
+<p class="lead">边界：不向用户机器入站（Agent 周期 / 触发式主动同步）；会话内容不上传（跨端只流转引用 ID 与原因）；员工清单由 Manager 单写；Manager 租户数据经 TenantContext / RLS。</p>
+
+<h3>3.1 总图：谁在哪一端做什么</h3>
+<div class="card" style="overflow:auto">
+<svg viewBox="0 0 1100 520" width="1100" style="max-width:100%">
+<defs><marker id="ar" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8z" fill="#667085"/></marker></defs>
+<rect x="5" y="10" width="1090" height="100" rx="10" fill="#f1ecff" stroke="#c9b8ff"/><text x="18" y="32" font-size="13" font-weight="700" fill="#7048e8">运营端 Operator（oper 库）</text>
+<rect x="5" y="125" width="1090" height="200" rx="10" fill="#e3f6f9" stroke="#9ed8e2"/><text x="18" y="147" font-size="13" font-weight="700" fill="#0b7285">企业端 Manager（租户数据空间 + RLS）</text>
+<rect x="5" y="340" width="1090" height="170" rx="10" fill="#fff0e6" stroke="#ffc9a3"/><text x="18" y="362" font-size="13" font-weight="700" fill="#e8590c">用户本机 Desktop + Agent（本地库，会话不上传）</text>
+
+<g font-size="12" fill="#1d2330">
+<rect x="30" y="48" width="300" height="48" rx="6" fill="#fff" stroke="#c9b8ff"/><text x="40" y="68">① 平台技能 / MCP 目录</text><text x="40" y="84" fill="#667085">企业从平台目录添加（P1 不改）</text>
+
+<rect x="30" y="165" width="200" height="56" rx="6" fill="#fff" stroke="#9ed8e2"/><text x="40" y="185">② 管理端员工配置</text><text x="40" y="201" fill="#667085">选择器带状态；保存校验新增项</text>
+<rect x="270" y="165" width="220" height="56" rx="6" fill="#fff" stroke="#9ed8e2"/><text x="280" y="185">③ 能力引用服务（新）</text><text x="280" y="201" fill="#667085">resolve / 校验 / 反查 / 联动</text>
+<rect x="530" y="165" width="220" height="56" rx="6" fill="#fff" stroke="#9ed8e2"/><text x="540" y="185">④ 快照 / 授权同步</text><text x="540" y="201" fill="#667085">只读统一入口；带 skipped_refs（新）</text>
+<rect x="790" y="165" width="280" height="56" rx="6" fill="#fff" stroke="#9ed8e2"/><text x="800" y="185">员工清单（唯一来源）</text><text x="800" y="201" fill="#667085">employee.skills / connector_refs</text>
+<rect x="270" y="250" width="220" height="56" rx="6" fill="#fff" stroke="#9ed8e2"/><text x="280" y="270">⑤ 目录删除 / 停用</text><text x="280" y="286" fill="#667085">反查 → 确认 → 同事务联动 + 审计</text>
+<rect x="790" y="250" width="280" height="56" rx="6" fill="#f3f4f6" stroke="#cfd4dc" stroke-dasharray="4 3"/><text x="800" y="270" fill="#667085">旁路表（P4 删除）</text><text x="800" y="286" fill="#98a2b3">employee_skill_binding / connector_binding</text>
+
+<rect x="530" y="390" width="220" height="56" rx="6" fill="#fff" stroke="#ffc9a3"/><text x="540" y="410">⑥ Agent 同步 + 装载</text><text x="540" y="426" fill="#667085">跳过已移除项；提示词只列已装载</text>
+<rect x="270" y="390" width="220" height="56" rx="6" fill="#fff" stroke="#ffc9a3"/><text x="280" y="410">⑦ readiness 就绪检查</text><text x="280" y="426" fill="#667085">带跳过原因（新）</text>
+<rect x="30" y="390" width="200" height="56" rx="6" fill="#fff" stroke="#ffc9a3"/><text x="40" y="410">⑧ 桌面端展示</text><text x="40" y="426" fill="#667085">可用 / 企业已移除 / 暂时不可用</text>
+<rect x="790" y="390" width="280" height="56" rx="6" fill="#fff" stroke="#ffc9a3"/><text x="800" y="410">本地技能缓存 + 下发清单记录</text><text x="800" y="426" fill="#667085">.aiteam-delivered.json</text>
+</g>
+<g stroke="#667085" stroke-width="1.5" fill="none" marker-end="url(#ar)">
+<path d="M180 96 V165" stroke-dasharray="4 3"/>
+<path d="M230 193 H270"/><path d="M490 193 H530"/><path d="M750 193 H790"/>
+<path d="M380 250 V221"/>
+<path d="M640 221 V390" stroke-dasharray="4 3"/>
+<path d="M530 418 H490"/><path d="M270 418 H230"/><path d="M750 418 H790"/>
+</g>
+<text x="650" y="320" font-size="11" fill="#667085">Agent 主动同步（不向用户机器入站）</text>
+</svg>
+<p class="note">实线 = 同端流程；虚线 = 跨端调用。方向只有：运营端→企业端服务间调用、Agent 主动访问 Manager、Agent 本机内部；没有入站到用户机器。</p>
+</div>
+
+<h3>3.2 主流程</h3>
+<div class="flow">
+<div class="s"><b>① 配置</b>选择器取目录与状态，置灰不可用项</div><div class="a">→</div>
+<div class="s"><b>② 保存</b>只校验新增项；返回 warnings</div><div class="a">→</div>
+<div class="s"><b>③ 同步</b>统一入口出快照；带跳过的引用</div><div class="a">→</div>
+<div class="s"><b>④ 装载</b>提示词只列已装载技能</div><div class="a">→</div>
+<div class="s"><b>⑤ 展示</b>分类显示实际能力</div>
+</div>
+<div class="flow">
+<div class="s"><b>删除目录项</b>反查受影响员工</div><div class="a">→</div>
+<div class="s"><b>弹窗二选一</b>列出员工；去掉 / 仅删除 / 取消</div><div class="a">→</div>
+<div class="s"><b>联动（选「去掉」时）</b>同事务去掉引用、升员工版本、写审计</div><div class="a">→</div>
+<div class="s"><b>下次同步</b>Agent 清理；运行中会话只加不清</div>
+</div>
+
+<h3>3.3 状态与处置矩阵</h3>
+<table>
+<tr><th>状态</th><th>管理端选择器</th><th>保存新增项</th><th>同步下发</th><th>Agent 装载</th><th>桌面展示</th></tr>
+<tr><td><span class="tag ok">可用 ready</span></td><td>可选</td><td>通过</td><td>签发</td><td>装载</td><td>可用</td></tr>
+<tr><td><span class="tag warn">草稿 draft</span></td><td>置灰 + 原因</td><td>409</td><td>不签</td><td>—</td><td>暂时不可用</td></tr>
+<tr><td><span class="tag bad">无效 invalid</span></td><td>置灰 + 原因</td><td>409</td><td>不签</td><td>—</td><td>暂时不可用</td></tr>
+<tr><td><span class="tag gray">已停用 disabled</span></td><td>置灰 + 原因</td><td>409</td><td>不签</td><td>—</td><td>暂时不可用</td></tr>
+<tr><td><span class="tag bad">目录里没有 missing</span></td><td>标「已失效」+ 一键去掉</td><td>409</td><td>跳过</td><td>跳过并告警</td><td>企业已移除</td></tr>
+</table>
+<p class="note">存量悬空项只警告，不阻塞保存。</p>
+</section>
+
+<section id="s4">
+<h2>4 前端要做什么</h2>
+<p class="lead">已核对：<code>web/manager/src/features/experts/EmployeeConfigDrawer.tsx</code>、<code>clients/desktop/src</code> 现有页面。以下在其上扩展。</p>
+<table>
+<tr><th style="width:15%">位置</th><th>要做什么</th><th style="width:9%">阶段</th><th style="width:7%">量级</th></tr>
+<tr><td><span class="tag mg">web/manager</span></td><td>员工配置抽屉：选择器显示每项状态、置灰不可用项；已失效项标签 + 一键去掉；加载失败显示错误与重试；库为空给直达入口（新）</td><td>P1</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag mg">web/manager</span></td><td>角色设定下的人话提示（新）</td><td>P2</td><td class="sz S">S</td></tr>
+<tr><td><span class="tag mg">web/manager</span></td><td>技能管理 / MCP 删除、停用确认弹窗：列受影响员工（新）；员工列表能力健康度标记（新）</td><td>P2</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag ag">clients/desktop</span></td><td>员工详情与对话头部：能力分三类；未就绪文案细化；同步 <code>api.json</code></td><td>P3</td><td class="sz M">M</td></tr>
+<tr><td>全部</td><td>i18n、a11y、Playwright；<b>长列表 + 小窗口（1440×640）下确认按钮真实点得到、能滚动</b>；弹窗用组件库固定结构</td><td>随各期</td><td class="sz M">M</td></tr>
+</table>
+</section>
+
+<section id="s5">
+<h2>5 后端要做什么</h2>
+<table>
+<tr><th style="width:15%">位置</th><th>要做什么</th><th style="width:9%">阶段</th><th style="width:7%">量级</th></tr>
+<tr><td><span class="tag mg">manager_service</span></td><td><b>能力引用服务（新）</b>：resolve / validate_additions / status / employees_using / remove_from_employees，技能与连接器共用</td><td>P1</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag mg">manager_service</span></td><td>员工保存前校验新增项；读取响应带 <code>skill_status</code>（新）；保存返回 <code>warnings</code>（新）</td><td>P1 / P2</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag mg">manager_service</span></td><td>删除、停用联动：反查 → 409 → 弹窗二选一（<code>remove_from_employees</code>）→ 选「去掉」时同事务清理 + 升版本 + 审计（技能、连接器、MCP 市场共用）</td><td>P2</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag mg">manager_service</span></td><td>快照与授权同步改走统一入口；同步响应带 <code>skipped_refs</code>（新）</td><td>P3</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag mg">manager_service</span></td><td>旁路接口标废弃（P2）；删路由、表、复制逻辑（P4）</td><td>P2 / P4</td><td class="sz S">S</td></tr>
+<tr><td><span class="tag ag">agent_service（Node）</span></td><td>提示词「Authorized skill references」只列已装载（P0，随 PR #223）；readiness 带跳过原因（P3）</td><td>P0 / P3</td><td class="sz M">M</td></tr>
+<tr><td>全部</td><td>统一 <code>application/problem+json</code>；单元；真 PostgreSQL + RLS 集成（删除联动、跨租户反查）；<b>跨端闭环用例（Manager 写 → Agent 读）</b>；旁路删除回归</td><td>随各期</td><td class="sz M">M</td></tr>
+</table>
+<div class="callout"><b>注意：</b>跨端引用统一以 <code>skill_id</code> 为身份（授权同步已支持 <code>skill_id@version</code>）；共享契约变更必须先升级 Agent / 桌面（能忽略新增字段），再发布 Manager；删除旁路接口最后做，且先确认生产两张表为空。</div>
+</section>
+
+<section id="s6">
+<h2>6 契约与数据变更</h2>
+<table>
+<tr><th style="width:20%">变更</th><th>内容</th><th style="width:20%">影响面</th><th style="width:8%">风险</th></tr>
+<tr><td>员工读取响应</td><td>新增 <code>skill_status[]</code>（连接器同构）</td><td>Manager 北向、管理端</td><td class="sz M">中</td></tr>
+<tr><td>员工保存</td><td>新增 409 <code>employee_capability_unavailable</code>，逐项原因；响应新增 <code>warnings[]</code></td><td>Manager 北向</td><td class="sz M">中</td></tr>
+<tr><td>删除技能 / 连接器 / MCP</td><td>有引用时 409 + 受影响员工；请求须带 <code>remove_from_employees=true|false</code>（二选一，行为变更）</td><td>Manager 北向</td><td class="sz L">高</td></tr>
+<tr><td>同步响应</td><td>新增 <code>skipped_refs[]</code>（引用、原因）</td><td>Manager↔Agent 共享契约、桌面 <code>api.json</code></td><td class="sz L">高</td></tr>
+<tr><td>Agent readiness</td><td>新增跳过原因字段</td><td>Agent 北向、桌面</td><td class="sz M">中</td></tr>
+<tr><td><code>/skill-bindings</code>、<code>/connector-bindings</code> 与两张表</td><td>废弃后删除</td><td>三端 OpenAPI 快照、概要设计 04、测试</td><td class="sz L">高</td></tr>
+<tr><td>审计事件</td><td>新增「能力引用因目录变更被移除」</td><td>Manager 审计</td><td class="sz S">低</td></tr>
+</table>
+<div class="callout red"><b>高风险：</b>涉及北向 API 契约、共享契约与表所有权，需按 AGENTS.md §8「高风险操作」确认后再实施。建议发布顺序：先升级 Agent / 桌面，再发布 Manager；最后清理旁路。</div>
+</section>
+
+<section id="s7">
+<h2>7 阶段与依赖</h2>
+<table>
+<tr><th style="width:12%">阶段</th><th>内容</th><th style="width:16%">依赖</th><th style="width:34%">验收</th></tr>
+<tr><td>P0 验证与止血</td><td>PR #223：「跳过且不停」收窄到技能；产品口径写入 <code>ANSWER_FIRST_HINT</code> 注释；提示词只列已装载技能。小规模验证：查生产两张绑定表行数；知识空间删除后绑定是否清理；确认 <code>&lt;available_skills&gt;</code> 对企业 / 个人 / 自定义技能都注入</td><td>无</td><td>单测通过；桌面端对「招聘专员」清空上下文后<b>多次</b>问「你能做什么」，先给结论、末尾有提示；验证结论回写设计文档</td></tr>
+<tr><td>P1 能力引用服务</td><td>服务 + 保存校验 + 读取状态 + 选择器状态 / 重试 / 失效项（技能与连接器后端共用）</td><td>P0</td><td>单测；真 PG 集成：新增草稿技能保存被拒、存量悬空只警告；浏览器真实点击（长列表 + 小窗口）；跨端闭环用例</td></tr>
+<tr><td>P2 联动与提示</td><td>删除联动 + 审计；角色设定人话提示；旁路接口标废弃</td><td>P1</td><td>集成：删除有引用的技能需确认，确认后员工清单与版本号变化、审计有记录、跨租户不串；浏览器真实点击确认弹窗</td></tr>
+<tr><td>P3 跨端可见性</td><td>同步 <code>skipped_refs</code>、readiness 原因；桌面分类展示</td><td>P2；契约先行</td><td>契约测试（Manager 写 → Agent 读）；桌面截图 + 真实点击；<code>api.json</code> 已更新</td></tr>
+<tr><td>P4 清理旁路</td><td>删两组路由、两张表、测试、复制逻辑；更新概要设计 04</td><td>P3；生产表为空</td><td>全量后端测试；三端 OpenAPI 快照更新；复制员工回归</td></tr>
+<tr><td>P5（可选）</td><td>市场 MCP 可配给员工</td><td>决策 #5</td><td>另行设计</td></tr>
+</table>
+<p class="note">P1 之后管理端与后端可并行；P3 依赖契约先行；P4 必须在确认生产表为空之后。</p>
+</section>
+
+<section id="s8">
+<h2>8 还需要决策的方面</h2>
+<h3>已决定（不再讨论，仅备查）</h3>
+<p><span class="tag ok">员工技能以 employee.skills 为唯一来源（用户 11-22）</span><span class="tag ok">技能加载失败就跳过，文末提示，保证流程给出结论（owner 余飞，PR #223 评论）</span><span class="tag ok">总路线 A+C（#1）</span><span class="tag ok">PR #223 收窄到技能（#2）</span><span class="tag ok">新增项拒绝、存量警告（#3）</span><span class="tag ok">删除时弹窗二选一（#4）</span><span class="tag ok">P1 不加 MCP 入口（#5）</span><span class="tag ok">旁路先废弃再删（#6）</span><span class="tag ok">做一致性提示（#7）</span><span class="tag ok">契约变更可实施（#8）</span><span class="tag ok">常驻技能不做（#10）</span></p>
+
+<h3>待决策</h3>
+<p class="note">除 #9（文案确认）外，其余均已决定；表格保留供备查。</p>
+<table>
+<tr><th style="width:4%">#</th><th style="width:24%">事项</th><th>建议</th><th style="width:12%">卡住谁</th></tr>
+<tr><td>1</td><td>总路线：清单为真相 + 能力引用服务（A+C），暂不做绑定表为真相（B）</td><td>同意。B 要改快照 / 同步 / 招募 / 复制 / 前端五条路径，且目前没有逐项开关或参数的需求；真需要时再迁移</td><td><span class="tag bad">P1</span></td></tr>
+<tr><td>2</td><td>PR #223 范围：「跳过且不停」只针对技能，工具、数据源缺失仍按诚实上报</td><td>收窄。更贴近 owner 原话，不必再打扰 owner</td><td><span class="tag bad">P0</span></td></tr>
+<tr><td>3</td><td>保存时遇到草稿 / 无效 / 停用的技能</td><td><b>新增项拒绝，存量只警告</b>，不让历史数据无法保存</td><td><span class="tag bad">P1</span></td></tr>
+<tr><td>4</td><td>删除、停用技能 / MCP 时有员工在用</td><td>确认后<b>自动从员工去掉并留审计</b>；替代方案是只拦截、必须先手动解绑（更保守但麻烦）</td><td><span class="tag warn">P2</span></td></tr>
+<tr><td>5</td><td>MCP 配给员工：管理端抽屉没有 MCP 选择入口，员工的 MCP 只能靠招募 / 复制带入；市场 MCP 没有员工绑定路径</td><td>P1 只做后端统一机制，<b>不加 MCP 选择入口</b>；是否让管理员把市场 MCP 配给员工单独评审（涉及共享契约与 Agent 装载）</td><td><span class="tag warn">P5</span></td></tr>
+<tr><td>6</td><td>旁路接口与两张表（涉及表所有权）</td><td>先标废弃一个版本，确认生产表为空后再删路由和表</td><td><span class="tag warn">P2 / P4</span></td></tr>
+<tr><td>7</td><td>角色设定与技能的一致性提示</td><td>做，只提示不拦截；明确它发现不了库里没有的名字</td><td><span class="tag warn">P2</span></td></tr>
+<tr><td>8</td><td>北向 / 共享契约变更（409、<code>skill_status</code>、<code>skipped_refs</code> 等）</td><td>确认可进入实施，按先 Agent / 桌面、后 Manager 的顺序发布</td><td><span class="tag bad">P1 起</span></td></tr>
+<tr><td>9</td><td>提示文案（人话版本）</td><td>确认措辞，尤其「会在下次同步后失去这项技能」是否合适</td><td><span class="tag warn">P1 / P2</span></td></tr>
+<tr><td>10</td><td>「常驻技能」（入口型技能建会话时强制注入）</td><td>不在本期，另立专题</td><td><span class="tag gray">—</span></td></tr>
+</table>
+<div class="callout green"><b>建议你最先拍板：</b>#1（决定整体方向）、#5（决定范围是否扩到 MCP 选择入口）、#6（涉及表所有权）、#8（高风险契约）。</div>
+</section>
+
+</main>
+<script>
+document.querySelectorAll('#tabs-ui button').forEach(function(b){
+  b.addEventListener('click',function(){
+    document.querySelectorAll('#tabs-ui button').forEach(function(x){x.classList.remove('on')});
+    document.querySelectorAll('#s2 .pane').forEach(function(x){x.classList.remove('on')});
+    b.classList.add('on');
+    document.querySelector('#' + CSS.escape(b.dataset.p)).classList.add('on');
+  });
+});
+</script>
+</body>
+</html>
