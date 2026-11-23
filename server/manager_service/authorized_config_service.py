@@ -63,6 +63,10 @@ def _catalog_row_to_out(row) -> SkillCatalogOut:
     )
 
 
+# 管理端的只读视图字段，不属于下发给 Agent 的员工配置。
+_ADMIN_ONLY_FIELDS = {"skill_status", "connector_status"}
+
+
 class AuthorizedConfigService:
     """按 member_grant 裁剪本 tenant 可见的 expert 配置，返回增量（F10）。"""
 
@@ -131,7 +135,7 @@ class AuthorizedConfigService:
                 policy = self._knowledge_policy.resolve(
                     ctx, employee_id=cfg.employee_id, tools=cfg.tools, version=str(cfg.version),
                 )
-                experts.append({**cfg.model_dump(mode="json"), "tools": list(policy.tools),
+                experts.append({**cfg.model_dump(mode="json", exclude=_ADMIN_ONLY_FIELDS), "tools": list(policy.tools),
                                 "knowledge_refs": list(policy.refs),
                                 "knowledge_policy": policy.projection.model_dump(mode="json"),
                                 "avatar_url": avatar.avatar_url if avatar else None,

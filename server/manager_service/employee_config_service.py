@@ -28,22 +28,41 @@ _CONFIG_WRITE_ROLES = [
 class EmployeeConfigService:
     """employee 配置 CRUD 编排。tenant_id 全程经 TenantContext，不手写过滤（D22）。"""
 
-    def __init__(self, repo: EmployeeConfigRepository, operator=None, memory_policy=None):
+    def __init__(self, repo: EmployeeConfigRepository, operator=None, memory_policy=None, capability_refs=None):
         self._repo = repo
         self._operator = operator
         self._memory_policy = memory_policy
+        # 技能 / 连接器引用的统一入口；隔离的领域测试可不注入（不做目录校验、不出状态）。
+        self._capability_refs = capability_refs
 
-    def _out(self, ctx: TenantContext, row: EmployeeConfigRow) -> EmployeeConfigOut:
+    def _out(self, ctx: TenantContext, row: EmployeeConfigRow, catalog=None, *, with_status: bool = False) -> EmployeeConfigOut:
         out = _to_out(row)
         policy = (self._memory_policy.effective(ctx, employee_id=row.employee_id)
                   if self._memory_policy is not None else normalize_policy(row.memory_policy))
-        return out.model_copy(update={"memory_policy": policy})
+        update: dict = {"memory_policy": policy}
+        # 状态只给管理端读取；快照 / 同步 / 指纹用的配置不带，目录状态变化不能让员工配置指纹变动。
+        if with_status and self._capability_refs is not None:
+            skill_status, connector_status = self._capability_refs.statuses(
+                ctx, row.skills, row.connector_refs, snapshot=catalog,
+            )
+            update.update(skill_status=skill_status, connector_status=connector_status)
+        return out.model_copy(update=update)
 
-    def create(self, ctx: TenantContext, body: EmployeeConfigIn, *, employee_slug: str) -> EmployeeConfigOut:
+    def _validate_capabilities(self, ctx: TenantContext, body: EmployeeConfigIn, *, before: EmployeeConfigRow | None) -> None:
+        if self._capability_refs is None:
+            return
+        self._capability_refs.validate_additions(
+            ctx,
+            before_skills=before.skills if before else [], after_skills=body.skills,
+            before_connectors=before.connector_refs if before else [], after_connectors=body.connector_refs,
+        )
+
+    def create(self, ctx: TenantContext, body: EmployeeConfigIn, *, employee_slug: str, with_status: bool = False) -> EmployeeConfigOut:
         _ensure_can_write(ctx)
         if self._repo.get_by_slug(ctx, employee_slug=employee_slug) is not None:
             raise Conflict("employee slug already exists in this tenant")
         self._validate_platform_model(ctx, body.model_policy)
+        self._validate_capabilities(ctx, body, before=None)
         row = self._repo.create(
             ctx,
             employee_slug=employee_slug,
@@ -63,17 +82,17 @@ class EmployeeConfigService:
             platform_model_ref=_platform_model_ref(body.model_policy),
             department_ids=list(body.department_ids),
         )
-        return self._out(ctx, row)
+        return self._out(ctx, row, with_status=with_status)
 
-    def get(self, ctx: TenantContext, *, employee_id: str) -> EmployeeConfigOut:
+    def get(self, ctx: TenantContext, *, employee_id: str, with_status: bool = False) -> EmployeeConfigOut:
         row = self._require(ctx, employee_id)
-        return self._out(ctx, row)
+        return self._out(ctx, row, with_status=with_status)
 
-    def update(self, ctx: TenantContext, body: EmployeeConfigIn, *, employee_id: str) -> EmployeeConfigOut:
+    def update(self, ctx: TenantContext, body: EmployeeConfigIn, *, employee_id: str, with_status: bool = False) -> EmployeeConfigOut:
         _ensure_can_write(ctx)
-        if self._require(ctx, employee_id) is None:
-            raise NotFound("employee not found in this tenant")
+        current = self._require(ctx, employee_id)
         self._validate_platform_model(ctx, body.model_policy)
+        self._validate_capabilities(ctx, body, before=current)
         row = self._repo.update(
             ctx,
             employee_id=employee_id,
@@ -95,7 +114,7 @@ class EmployeeConfigService:
         )
         if row is None:  # 双保险：RLS 下跨 tenant 删除/不可见
             raise NotFound("employee not found in this tenant")
-        return self._out(ctx, row)
+        return self._out(ctx, row, with_status=with_status)
 
     def _validate_platform_model(self, ctx: TenantContext, policy: ModelPolicy) -> None:
         if self._operator is None:  # isolated domain tests/read-only services; production write routes inject Operator client
@@ -192,8 +211,11 @@ class EmployeeConfigService:
             raise NotFound("employee not found in this tenant")
         return self._out(ctx, updated)
 
-    def list_all(self, ctx: TenantContext) -> list[EmployeeConfigOut]:
-        return [self._out(ctx, r) for r in self._repo.list_all(ctx)]
+    def list_all(self, ctx: TenantContext, *, with_status: bool = False) -> list[EmployeeConfigOut]:
+        rows = self._repo.list_all(ctx)
+        # 列员工时只读一次目录，不是每位员工查一遍。
+        catalog = self._capability_refs.snapshot(ctx) if with_status and self._capability_refs is not None and rows else None
+        return [self._out(ctx, r, catalog, with_status=with_status) for r in rows]
 
     def _require(self, ctx: TenantContext, employee_id: str) -> EmployeeConfigRow:
         row = self._repo.get(ctx, employee_id=employee_id)
@@ -263,9 +285,12 @@ def _to_out(row: EmployeeConfigRow) -> EmployeeConfigOut:
 
 
 def build_employee_config_service(router: PgTenantRouter, operator=None) -> EmployeeConfigService:
+    from .capability_catalog_repository import CapabilityCatalogRepository
     from .employee_bindings_repositories import EmployeeMemorySettingRepository
+    from .employee_capability_refs import EmployeeCapabilityRefs
     return EmployeeConfigService(EmployeeConfigRepository(router), operator,
-                                 MemoryPolicyService(EmployeeMemorySettingRepository(router)))
+                                 MemoryPolicyService(EmployeeMemorySettingRepository(router)),
+                                 EmployeeCapabilityRefs(CapabilityCatalogRepository(router)))
 
 
 # ---- 生命周期便捷查询（供前端/Agent 运行前检查）----

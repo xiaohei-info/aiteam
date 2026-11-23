@@ -9,9 +9,12 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 from shared.contracts.enums import EnterpriseRole
 from shared.contracts.tenancy import TenantContext
 from shared.db import PgTenantRouter
+from shared.contracts.envelope import ProblemFieldError
 from shared.errors import Conflict, Forbidden, NotFound, ValidationProblem
 
 from .capability_catalog_repository import (
@@ -20,6 +23,7 @@ from .capability_catalog_repository import (
     MemoryPolicyCatalogRow,
     SkillCatalogRow,
 )
+from .employee_capability_ref_repository import EmployeeCapabilityRefRepository, EmployeeUse
 from .custom_skill_package import package_status, validate_custom_package
 from .schemas import (
     ConnectorCatalogIn,
@@ -52,11 +56,44 @@ def _reject_reserved_skill_config(config: dict | None) -> None:
         raise ValidationProblem(detail=f"config 不能包含保留键：{', '.join(reserved)}（平台技能只能从技能市场安装）", errors=None)
 
 
+class CapabilityInUse(Conflict):
+    """目录项还有员工在用，调用方必须表态：同时从员工身上去掉，还是只处理目录项（设计 2026-11-22 §3.4）。"""
+
+    code = "capability_in_use"
+    title = "Capability is in use"
+
+
+def _in_use(kind: str, label: str, uses: list[EmployeeUse]) -> CapabilityInUse:
+    names = "、".join(use.display_name or use.employee_id for use in uses[:5]) + ("等" if len(uses) > 5 else "")
+    return CapabilityInUse(
+        f"有 {len(uses)} 位员工正在使用「{label}」（{names}）。请选择：同时从这些员工身上去掉，或只处理目录里的这一项、员工配置里保留。",
+        errors=[ProblemFieldError(loc=["employees", use.employee_id], message=use.display_name or use.employee_id, type="employee") for use in uses],
+    )
+
+
 class CapabilityCatalogService:
     """能力目录 CRUD 编排。tenant_id 全程经 TenantContext，不手写过滤（D22）。"""
 
-    def __init__(self, repo: CapabilityCatalogRepository):
+    def __init__(self, repo: CapabilityCatalogRepository, refs: EmployeeCapabilityRefRepository | None = None, audit=None):
         self._repo = repo
+        # 员工清单的反查与联动；隔离的领域测试可不注入（删除 / 停用就不联动）。
+        self._refs = refs
+        self._audit = audit
+
+    @contextmanager
+    def _write_scope(self, ctx: TenantContext, unlink: bool):
+        """要同时清员工清单时，目录项与清单在同一事务里改；否则照旧。"""
+        if unlink and self._refs is not None:
+            with self._refs.transaction(ctx) as scope:
+                yield scope
+        else:
+            yield self._repo, self._refs
+
+    def _record(self, ctx: TenantContext, action: str, kind: str, key: str, uses: list[EmployeeUse]) -> None:
+        if self._audit is not None and uses:
+            # 只记引用与员工 id，不记会话或配置内容。
+            self._audit.record(ctx, actor=ctx.user_id, action=action, resource_type=kind, resource_id=key,
+                               detail=f"{len(uses)} 位员工：" + ",".join(use.employee_id for use in uses))
 
     # ---- skill ----
 
@@ -84,7 +121,9 @@ class CapabilityCatalogService:
     def get_skill(self, ctx: TenantContext, *, catalog_id: str) -> SkillCatalogOut:
         return _skill_to_out(self._require_skill(ctx, catalog_id))
 
-    def update_skill(self, ctx: TenantContext, body: SkillCatalogIn, *, catalog_id: str) -> SkillCatalogOut:
+    def update_skill(
+        self, ctx: TenantContext, body: SkillCatalogIn, *, catalog_id: str, remove_from_employees: bool | None = None,
+    ) -> SkillCatalogOut:
         _ensure_can_write(ctx)
         current = self._require_skill(ctx, catalog_id)
         if body.skill_id != current.skill_id:
@@ -96,6 +135,11 @@ class CapabilityCatalogService:
             raise Conflict("Operator-managed skills are immutable; update through the platform skill market")
         if "config" in supplied:
             _reject_reserved_skill_config(body.config)
+        # 停用同删除：有员工在用时，管理员要选择是否同时从员工身上去掉。
+        disabling = "binding_policy" in supplied and body.binding_policy == "disabled" and current.binding_policy != "disabled"
+        uses = self._refs.employees_using(ctx, "skill", current.skill_id) if disabling and self._refs is not None else []
+        if uses and remove_from_employees is None:
+            raise _in_use("skill", current.display_name or current.skill_id, uses)
         files = None
         content_hash = None
         if "files" in supplied:
@@ -111,22 +155,37 @@ class CapabilityCatalogService:
         elif "version" in supplied and body.version != current.version and current.files:
             validate_custom_package(skill_id=current.skill_id, version=body.version,
                                     files=current.files, content_hash=current.content_hash)
-        row = self._repo.update_skill(
-            ctx, catalog_id=catalog_id,
-            **{name: getattr(body, name) if name in supplied else None for name in
-               ("display_name", "version", "install_policy", "binding_policy", "visibility", "config")},
-            files=files, content_hash=content_hash,
-        )
-        if row is None:  # 双保险：RLS 下跨 tenant 不可见
-            raise NotFound("skill not found in this tenant")
+        with self._write_scope(ctx, bool(uses and remove_from_employees)) as (catalog, refs):
+            row = catalog.update_skill(
+                ctx, catalog_id=catalog_id,
+                **{name: getattr(body, name) if name in supplied else None for name in
+                   ("display_name", "version", "install_policy", "binding_policy", "visibility", "config")},
+                files=files, content_hash=content_hash,
+            )
+            if row is None:  # 双保险：RLS 下跨 tenant 不可见
+                raise NotFound("skill not found in this tenant")
+            if uses and remove_from_employees:
+                refs.unlink(ctx, "skill", current.skill_id)
+        if uses:
+            self._record(ctx, "skill.disabled_removed_from_employees" if remove_from_employees else "skill.disabled_kept_in_employees",
+                         "skill", current.skill_id, uses)
         return _skill_to_out(row)
 
-    def delete_skill(self, ctx: TenantContext, *, catalog_id: str) -> None:
+    def delete_skill(self, ctx: TenantContext, *, catalog_id: str, remove_from_employees: bool | None = None) -> None:
         _ensure_can_write(ctx)
         # 平台技能的内容不可改，但企业可以把它移出自己的列表（之后可从平台技能重新添加）。
-        self._require_skill(ctx, catalog_id)
-        if not self._repo.delete(ctx, resource_kind="skill", catalog_id=catalog_id):
+        current = self._require_skill(ctx, catalog_id)
+        if self._refs is None:
+            if not self._repo.delete(ctx, resource_kind="skill", catalog_id=catalog_id):
+                raise NotFound("skill not found in this tenant")
+            return
+        outcome = self._refs.delete_catalog_entry(ctx, "skill", catalog_id, unlink=remove_from_employees)
+        if outcome is None:
             raise NotFound("skill not found in this tenant")
+        if not outcome.deleted:
+            raise _in_use("skill", current.display_name or current.skill_id, outcome.uses)
+        self._record(ctx, "skill.deleted_removed_from_employees" if remove_from_employees else "skill.deleted_kept_in_employees",
+                     "skill", current.skill_id, outcome.uses)
 
     def list_skills(self, ctx: TenantContext) -> list[SkillCatalogOut]:
         return [_skill_to_out(r) for r in self._repo.list_skills(ctx)]
@@ -152,22 +211,47 @@ class CapabilityCatalogService:
     def get_connector(self, ctx: TenantContext, *, catalog_id: str) -> ConnectorCatalogOut:
         return _connector_to_out(self._require_connector(ctx, catalog_id))
 
-    def update_connector(self, ctx: TenantContext, body: ConnectorCatalogIn, *, catalog_id: str) -> ConnectorCatalogOut:
+    def update_connector(
+        self, ctx: TenantContext, body: ConnectorCatalogIn, *, catalog_id: str, remove_from_employees: bool | None = None,
+    ) -> ConnectorCatalogOut:
         _ensure_can_write(ctx)
-        if self._repo.get_connector(ctx, catalog_id=catalog_id) is None:
+        current = self._repo.get_connector(ctx, catalog_id=catalog_id)
+        if current is None:
             raise NotFound("connector not found in this tenant")
-        row = self._repo.update_connector(
-            ctx, catalog_id=catalog_id, display_name=body.display_name, visibility=body.visibility,
-            grant_scope=body.grant_scope, config=body.config,
-        )
-        if row is None:
-            raise NotFound("connector not found in this tenant")
+        disabling = body.grant_scope == "disabled" and current.grant_scope != "disabled"
+        uses = self._refs.employees_using(ctx, "connector", current.connector_id) if disabling and self._refs is not None else []
+        if uses and remove_from_employees is None:
+            raise _in_use("connector", current.display_name or current.connector_id, uses)
+        with self._write_scope(ctx, bool(uses and remove_from_employees)) as (catalog, refs):
+            row = catalog.update_connector(
+                ctx, catalog_id=catalog_id, display_name=body.display_name, visibility=body.visibility,
+                grant_scope=body.grant_scope, config=body.config,
+            )
+            if row is None:
+                raise NotFound("connector not found in this tenant")
+            if uses and remove_from_employees:
+                refs.unlink(ctx, "connector", current.connector_id)
+        if uses:
+            self._record(ctx, "connector.disabled_removed_from_employees" if remove_from_employees else "connector.disabled_kept_in_employees",
+                         "connector", current.connector_id, uses)
         return _connector_to_out(row)
 
-    def delete_connector(self, ctx: TenantContext, *, catalog_id: str) -> None:
+    def delete_connector(self, ctx: TenantContext, *, catalog_id: str, remove_from_employees: bool | None = None) -> None:
         _ensure_can_write(ctx)
-        if not self._repo.delete(ctx, resource_kind="connector", catalog_id=catalog_id):
+        current = self._repo.get_connector(ctx, catalog_id=catalog_id)
+        if current is None:
             raise NotFound("connector not found in this tenant")
+        if self._refs is None:
+            if not self._repo.delete(ctx, resource_kind="connector", catalog_id=catalog_id):
+                raise NotFound("connector not found in this tenant")
+            return
+        outcome = self._refs.delete_catalog_entry(ctx, "connector", catalog_id, unlink=remove_from_employees)
+        if outcome is None:
+            raise NotFound("connector not found in this tenant")
+        if not outcome.deleted:
+            raise _in_use("connector", current.display_name or current.connector_id, outcome.uses)
+        self._record(ctx, "connector.deleted_removed_from_employees" if remove_from_employees else "connector.deleted_kept_in_employees",
+                     "connector", current.connector_id, outcome.uses)
 
     def list_connectors(self, ctx: TenantContext) -> list[ConnectorCatalogOut]:
         return [_connector_to_out(r) for r in self._repo.list_connectors(ctx)]
@@ -269,4 +353,7 @@ def _memory_to_out(row: MemoryPolicyCatalogRow) -> MemoryPolicyCatalogOut:
 
 
 def build_capability_catalog_service(router: PgTenantRouter) -> CapabilityCatalogService:
-    return CapabilityCatalogService(CapabilityCatalogRepository(router))
+    from .enterprise_audit_repository import build_enterprise_audit_repository
+    return CapabilityCatalogService(
+        CapabilityCatalogRepository(router), EmployeeCapabilityRefRepository(router), build_enterprise_audit_repository(router),
+    )

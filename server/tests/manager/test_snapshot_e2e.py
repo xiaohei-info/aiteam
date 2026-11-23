@@ -130,6 +130,9 @@ def test_snapshot_generate_e2e_grant_and_cross_tenant_rls(migrated_db, admin_url
     tid_a, tid_b = two_tenants
     client = _client(migrated_db, admin_url=admin_url)
     member_svc, grant_svc = _member_services(migrated_db, admin_url)
+    from tests.manager._capability_seed import seed_ready_capabilities
+
+    seed_ready_capabilities(migrated_db, tid_a, skills=["code-review"], connectors=["slack"])
 
     # owner 建配置（owner 用真 app_user id：先建一个 owner 成员，token 主体须 == member_id）
     ctx_a = TenantContext(tenant_id=tid_a, user_id=str(uuid.uuid4()), roles=["owner"])

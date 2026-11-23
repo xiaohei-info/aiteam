@@ -21,6 +21,7 @@ import {
 } from "@aiteam/shared";
 import { CheckboxInput } from "@astryxdesign/core/CheckboxInput";
 import { VStack } from "@astryxdesign/core/VStack";
+import { CapabilityInUseDialog, inUseEmployees, type InUseEmployee } from "./CapabilityInUseDialog";
 import type { CapabilityApi } from "./useCapabilityApi";
 import type { CatalogVisibility, SkillBindingPolicy, SkillCatalog } from "./types";
 
@@ -82,7 +83,12 @@ export function EnterpriseSkillEditor({ api, row, existingIds, enterpriseNamespa
   const visibility: CatalogVisibility = memberInstall ? (row && row.visibility !== "private" ? row.visibility as CatalogVisibility : "tenant") : "private";
   const bindingPolicy: SkillBindingPolicy = disabled ? "disabled" : (row && row.binding_policy !== "disabled" ? row.binding_policy as SkillBindingPolicy : "opt_in");
 
-  async function save({ files, contentChanged }: SkillEditorSaveInput): Promise<string | null> {
+  /** 停用一个还有员工在用的技能：先弹窗让管理员选，选完用同一份改动再存一次。 */
+  const [inUse, setInUse] = useState<{ input: SkillEditorSaveInput; employees: InUseEmployee[] } | null>(null);
+  const [resolving, setResolving] = useState(false);
+  const [resolveError, setResolveError] = useState<string | null>(null);
+
+  async function save({ files, contentChanged }: SkillEditorSaveInput, removeFromEmployees?: boolean): Promise<string | null> {
     try {
       if (!row) {
         const name = parseSkillMd(files[0]!.content).name.trim();
@@ -103,7 +109,7 @@ export function EnterpriseSkillEditor({ api, row, existingIds, enterpriseNamespa
       }
       const settingsChanged = (row.visibility !== "private") !== memberInstall || (row.binding_policy === "disabled") !== disabled;
       // 先改设置（用当前版本），再存内容（升新版本时保留刚改的设置）。
-      if (settingsChanged) await api.updateSkillSettings(row.catalog_id, { skill_id: row.skill_id, visibility, binding_policy: bindingPolicy });
+      if (settingsChanged) await api.updateSkillSettings(row.catalog_id, { skill_id: row.skill_id, visibility, binding_policy: bindingPolicy }, removeFromEmployees);
       if (contentChanged) {
         const failed = firstFailure(await api.importSkills(editorInput(files)));
         if (failed) return failed;
@@ -111,11 +117,27 @@ export function EnterpriseSkillEditor({ api, row, existingIds, enterpriseNamespa
       onSaved(contentChanged ? `已保存 ${skillTitle(row)}（新版本）` : settingsChanged ? `已更新 ${skillTitle(row)} 的设置` : "没有改动");
       return null;
     } catch (err) {
+      const employees = inUseEmployees(err);
+      if (employees) {
+        setInUse({ input: { files, contentChanged }, employees });
+        return null;
+      }
       return err instanceof ApiError || err instanceof Error ? err.message : "保存失败，请重试";
     }
   }
 
+  async function resolveInUse(removeFromEmployees: boolean) {
+    if (!inUse) return;
+    setResolving(true);
+    setResolveError(null);
+    const message = await save(inUse.input, removeFromEmployees);
+    setResolving(false);
+    // 成功时 save 已调用 onSaved，外层会关闭编辑器；失败则留在弹窗里显示原因。
+    if (message) setResolveError(message);
+  }
+
   return (
+    <>
     <SkillEditorDialog
       title={row ? `编辑技能 ${skillTitle(row)}` : "从零写一个技能"}
       files={row?.files}
@@ -123,9 +145,21 @@ export function EnterpriseSkillEditor({ api, row, existingIds, enterpriseNamespa
       note={platform ? `这是平台技能。改了内容保存后会生成${enterpriseNamespace ? `「${enterpriseNamespace}/名称」这个` : "本企业自己的"}副本，平台原件保留并继续跟随平台更新；只改下面的设置则作用于平台原件。` : undefined}
       extraNameProblem={(name) => (name.startsWith("platform-") ? "platform- 开头的名称留给平台技能市场" : null)}
       settings={<SkillSettings memberInstall={memberInstall} disabled={disabled} onMemberInstall={setMemberInstall} onDisabled={setDisabled} />}
-      onSave={save}
+      onSave={(input) => save(input)}
       onClose={onClose}
     />
+    {inUse && row && (
+      <CapabilityInUseDialog
+        title={skillTitle(row)}
+        action="disable"
+        employees={inUse.employees}
+        working={resolving}
+        error={resolveError}
+        onChoose={(remove) => void resolveInUse(remove)}
+        onCancel={() => { setInUse(null); setResolveError(null); }}
+      />
+    )}
+    </>
   );
 }
 

@@ -11,6 +11,8 @@ import { usePlatformModelsApi } from "../../platform-models/usePlatformModelsApi
 
 vi.mock("../useExpertsApi", () => ({ useExpertsApi: vi.fn() }));
 vi.mock("../../platform-models/usePlatformModelsApi", () => ({ usePlatformModelsApi: vi.fn() }));
+// 抽屉会读企业技能库；这里的用例不关心它，给一个能成功的空库，免得真实请求失败出现技能库的「重试」。
+vi.mock("../../capability/useCapabilityApi", () => ({ useCapabilityApi: () => ({ listSkills: () => Promise.resolve([]) }) }));
 
 import type { ExpertsApi } from "../useExpertsApi";
 import type { EmployeeConfig } from "../types";

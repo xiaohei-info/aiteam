@@ -72,6 +72,17 @@ class EmployeeConfigIn(EmployeeConfig):
     """写入请求体。继承 EmployeeConfig 全部中立字段。"""
 
 
+class CapabilityRefStatusOut(BaseModel):
+    """员工身上一项技能 / 连接器在企业目录里的状态（设计 2026-11-22 §3.5）。"""
+
+    ref: str = Field(description="员工清单里的引用（skill_id 或 skill_id@version / connector_id）")
+    display_name: str = Field(description="展示名；目录里没有时回退为引用本身")
+    status: Literal["ready", "draft", "invalid", "disabled", "missing"] = Field(
+        description="ready 可用；draft 还没完成；invalid 内容有问题；disabled 已停用；missing 目录里没有",
+    )
+    reason: str | None = Field(default=None, description="面向管理员的一句话原因；ready 时为空")
+
+
 
 class EmployeeConfigOut(EmployeeConfig):
     """读取响应体。带 employee 身份、版本与生命周期状态（供增量 sync / 快照冻结 / 运行前检查）。"""
@@ -87,6 +98,8 @@ class EmployeeConfigOut(EmployeeConfig):
     status_reason: str | None = Field(default=None, description="自动停用原因：catalog_scope_revoked（模板不在本企业发布范围内）等；空表示无")
     origin: str = Field(default="recruited", description="来源：recruited 市场招募 / solution 应用方案 / copied 复制 / custom 企业自建")
     copied_from_employee_id: str | None = Field(default=None, description="复制品的源专家 id；仅作溯源")
+    skill_status: list[CapabilityRefStatusOut] = Field(default_factory=list, description="skills 里每一项在企业目录里的状态；只读，写入请求不带")
+    connector_status: list[CapabilityRefStatusOut] = Field(default_factory=list, description="connector_refs 里每一项的状态；只读")
 
 
 # ---- 成员/部门/角色 + member_grant 授权（issue #35；03 §9.7；04 §6.1，D12）----

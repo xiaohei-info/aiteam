@@ -33,6 +33,7 @@ import { useCapabilityAssistApi } from "../capability-assist/useCapabilityAssist
 import { useMe } from "../../shell/useMe";
 import type { PlatformSkillMarketItem } from "../skill-market/types";
 import { useSkillMarketApi } from "../skill-market/useSkillMarketApi";
+import { CapabilityInUseDialog, inUseEmployees, type InUseEmployee } from "./CapabilityInUseDialog";
 import { EnterpriseSkillEditor, EnterpriseSkillImport, isPlatformSkill, skillTitle } from "./EnterpriseSkillDialogs";
 import { useCapabilityApi } from "./useCapabilityApi";
 import type {
@@ -173,6 +174,8 @@ export function CapabilityPage({ skillsOnly = false }: CapabilityPageProps = {})
   const [editor, setEditor] = useState<EditorState>({ mode: "closed" });
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
   const [working, setWorking] = useState(false);
+  /** 删除时发现还有员工在用：弹窗让管理员选择。 */
+  const [inUse, setInUse] = useState<{ title: string; action: "delete" | "disable"; employees: InUseEmployee[]; run: (removeFromEmployees: boolean) => Promise<void> } | null>(null);
   /** 导入对话框；从「让模型帮我找」来时带着预填的来源与地址。 */
   const [importing, setImporting] = useState<{ initial?: { source: "url" | "clawhub"; url: string } } | null>(null);
   const [assisting, setAssisting] = useState(false);
@@ -305,9 +308,29 @@ export function CapabilityPage({ skillsOnly = false }: CapabilityPageProps = {})
         visibility: draft.visibility,
         config: parseJson(draft.config),
       };
-      operation = editingId
-        ? () => api.updateConnector(editingId, body)
-        : () => api.createConnector(body);
+      if (editingId) {
+        // 停用一个还有员工在用的连接器：先弹窗让管理员选，选完用同一份改动再存一次。
+        const saveEdit = async (remove?: boolean): Promise<void> => {
+          setWorking(true);
+          setActionError(null);
+          try {
+            await api.updateConnector(editingId, body, remove);
+            setNotice(i18n.t("manager.capability.update_ok"));
+            setInUse(null);
+            setEditor({ mode: "closed" });
+            await load();
+          } catch (err) {
+            const employees = inUseEmployees(err);
+            if (employees) setInUse({ title: body.display_name || body.connector_id, action: "disable", employees, run: (r) => saveEdit(r) });
+            else setActionError(err instanceof ApiError ? err.message : i18n.t("manager.capability.action_error"));
+          } finally {
+            setWorking(false);
+          }
+        };
+        await saveEdit();
+        return;
+      }
+      operation = () => api.createConnector(body);
     } else {
       const draft = editor.draft as MemoryDraft;
       const body: MemoryPolicyCatalogIn = {
@@ -416,16 +439,35 @@ export function CapabilityPage({ skillsOnly = false }: CapabilityPageProps = {})
     return columns;
   }, [actionCell, canWrite, i18n]);
 
-  const deleteSelected = async () => {
-    if (!pendingDelete) return;
-    const selected = pendingDelete;
+  const deleteSelected = async (removeFromEmployees?: boolean, target: PendingDelete | null = pendingDelete) => {
+    if (!target) return;
+    const selected = target;
     const operation = selected.kind === "skill"
-      ? () => api.deleteSkill(selected.catalogId)
+      ? () => api.deleteSkill(selected.catalogId, removeFromEmployees)
       : selected.kind === "connector"
-        ? () => api.deleteConnector(selected.catalogId)
+        ? () => api.deleteConnector(selected.catalogId, removeFromEmployees)
         : () => api.deleteMemoryPolicy(selected.catalogId);
-    const success = await runWrite(operation, "manager.capability.delete_ok");
-    if (success) setPendingDelete(null);
+    setWorking(true);
+    setActionError(null);
+    setNotice(null);
+    try {
+      await operation();
+      setNotice(i18n.t("manager.capability.delete_ok"));
+      setPendingDelete(null);
+      setInUse(null);
+      await load();
+    } catch (err) {
+      const employees = inUseEmployees(err);
+      if (employees) {
+        // 有员工在用：换成二选一弹窗，什么都还没改。
+        setPendingDelete(null);
+        setInUse({ title: selected.displayName, action: "delete", employees, run: (remove) => deleteSelected(remove, selected) });
+      } else {
+        setActionError(err instanceof ApiError ? err.message : i18n.t("manager.capability.action_error"));
+      }
+    } finally {
+      setWorking(false);
+    }
   };
 
   const editorTitle = editor.mode === "closed"
@@ -541,6 +583,18 @@ export function CapabilityPage({ skillsOnly = false }: CapabilityPageProps = {})
             }
           />
         </AstryxDialog>
+      )}
+
+      {inUse && (
+        <CapabilityInUseDialog
+          title={inUse.title}
+          action={inUse.action}
+          employees={inUse.employees}
+          working={working}
+          error={actionError}
+          onChoose={(remove) => void inUse.run(remove)}
+          onCancel={() => setInUse(null)}
+        />
       )}
 
       {pendingDelete && (

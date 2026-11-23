@@ -129,6 +129,13 @@ export interface ExecutionPolicy {
   timeout_seconds?: number | null;
 }
 
+export interface CapabilityRefStatus {
+  ref: string;
+  display_name: string;
+  status: "ready" | "draft" | "invalid" | "disabled" | "missing";
+  reason?: string | null;
+}
+
 /** 专家实例配置（对齐 EmployeeConfigOut；PUT 时回传全量为 EmployeeConfigIn）。 */
 export interface EmployeeConfig {
   employee_id: string;
@@ -158,6 +165,9 @@ export interface EmployeeConfig {
   /** 来源（服务端维护）：recruited 市场 / solution 方案 / copied 复制 / custom 自建。 */
   origin?: "recruited" | "solution" | "copied" | "custom";
   copied_from_employee_id?: string | null;
+  /** 技能 / 连接器在企业目录里的状态（服务端只读；写入负载不带）。 */
+  skill_status?: CapabilityRefStatus[];
+  connector_status?: CapabilityRefStatus[];
 }
 
 /**
@@ -168,7 +178,7 @@ export interface EmployeeConfig {
 export type EmployeeConfigIn = Omit<
   EmployeeConfig,
   | "employee_id" | "employee_slug" | "version" | "status" | "archive_reason" | "archived_at" | "memory_policy"
-  | "source_template_id" | "source_template_version" | "status_reason" | "origin" | "copied_from_employee_id"
+  | "source_template_id" | "source_template_version" | "status_reason" | "origin" | "copied_from_employee_id" | "skill_status" | "connector_status"
 > & { memory_policy?: Record<string, unknown> | null };
 
 /** 可用生命周期流转（对齐 EmployeeLifecycleOptionsOut）。 */

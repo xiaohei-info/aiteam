@@ -121,7 +121,7 @@ def build_employee_router(verifier) -> APIRouter:
     ) -> Envelope[EmployeeConfigOut]:
         require_admin(tenant_context_from(claims))
         svc = _service(request)
-        out = svc.create(tenant_context_from(claims), body, employee_slug=employee_slug)
+        out = svc.create(tenant_context_from(claims), body, employee_slug=employee_slug, with_status=True)
         return Envelope[EmployeeConfigOut](data=out)
 
     @router.get(
@@ -135,7 +135,7 @@ def build_employee_router(verifier) -> APIRouter:
     ) -> ListEnvelope[EmployeeConfigOut]:
         ctx = tenant_context_from(claims)
         require_admin(ctx)
-        items = _service(request).list_all(ctx)
+        items = _service(request).list_all(ctx, with_status=True)
         # 发布范围对账要调运营端：放到响应之后，运营端慢或不可用时列表照常返回；结果在下次打开时可见。
         background.add_task(reconcile_for_admin, request, ctx)
         return ListEnvelope[EmployeeConfigOut](data=items)
@@ -171,7 +171,7 @@ def build_employee_router(verifier) -> APIRouter:
     ) -> Envelope[EmployeeConfigOut]:
         require_admin(tenant_context_from(claims))
         svc = _service(request)
-        return Envelope[EmployeeConfigOut](data=svc.get(tenant_context_from(claims), employee_id=employee_id))
+        return Envelope[EmployeeConfigOut](data=svc.get(tenant_context_from(claims), employee_id=employee_id, with_status=True))
 
     @router.post(
         "/{employee_id}/avatar",
@@ -256,7 +256,7 @@ def build_employee_router(verifier) -> APIRouter:
         require_admin(tenant_context_from(claims))
         svc = _service(request)
         return Envelope[EmployeeConfigOut](
-            data=svc.update(tenant_context_from(claims), body, employee_id=employee_id)
+            data=svc.update(tenant_context_from(claims), body, employee_id=employee_id, with_status=True)
         )
 
     @router.delete(

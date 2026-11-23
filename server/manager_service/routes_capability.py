@@ -11,7 +11,7 @@ verifier 注入：照 build_employee_router 模式，由 app 闭包注入避免�
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, Query, Request, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response
 from pydantic import ValidationError
@@ -207,10 +207,11 @@ def build_capability_router(verifier) -> APIRouter:
     async def update_skill(
         catalog_id: str, body: SkillCatalogIn, request: Request,
         claims: TokenClaims = Depends(require),
+        remove_from_employees: bool | None = Query(default=None, description="停用（binding_policy=disabled / grant_scope=disabled）时有员工在用必须表态：true 同时从这些员工身上去掉；false 只停用、员工配置里保留。其余更新可省略。"),
     ) -> Envelope[SkillCatalogOut]:
         svc = _service(request)
         return Envelope[SkillCatalogOut](
-            data=svc.update_skill(tenant_context_from(claims), body, catalog_id=catalog_id)
+            data=svc.update_skill(tenant_context_from(claims), body, catalog_id=catalog_id, remove_from_employees=remove_from_employees)
         )
 
     @router.delete(
@@ -219,9 +220,10 @@ def build_capability_router(verifier) -> APIRouter:
     )
     async def delete_skill(
         catalog_id: str, request: Request, claims: TokenClaims = Depends(require),
+        remove_from_employees: bool | None = Query(default=None, description="有员工在用时必须表态：true 同时从这些员工身上去掉；false 只删目录项、员工配置里保留（员工那一项变为已失效）。没人在用时可省略；有人在用而省略返回 409 capability_in_use 与员工列表。"),
     ) -> Response:
         svc = _service(request)
-        svc.delete_skill(tenant_context_from(claims), catalog_id=catalog_id)
+        svc.delete_skill(tenant_context_from(claims), catalog_id=catalog_id, remove_from_employees=remove_from_employees)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     # ---- connector 目录（/api/manager/connectors/*）----
@@ -264,10 +266,11 @@ def build_capability_router(verifier) -> APIRouter:
     async def update_connector(
         catalog_id: str, body: ConnectorCatalogIn, request: Request,
         claims: TokenClaims = Depends(require),
+        remove_from_employees: bool | None = Query(default=None, description="停用（binding_policy=disabled / grant_scope=disabled）时有员工在用必须表态：true 同时从这些员工身上去掉；false 只停用、员工配置里保留。其余更新可省略。"),
     ) -> Envelope[ConnectorCatalogOut]:
         svc = _service(request)
         return Envelope[ConnectorCatalogOut](
-            data=svc.update_connector(tenant_context_from(claims), body, catalog_id=catalog_id)
+            data=svc.update_connector(tenant_context_from(claims), body, catalog_id=catalog_id, remove_from_employees=remove_from_employees)
         )
 
     @router.delete(
@@ -276,9 +279,10 @@ def build_capability_router(verifier) -> APIRouter:
     )
     async def delete_connector(
         catalog_id: str, request: Request, claims: TokenClaims = Depends(require),
+        remove_from_employees: bool | None = Query(default=None, description="同技能：有员工在用时必须表态。"),
     ) -> Response:
         svc = _service(request)
-        svc.delete_connector(tenant_context_from(claims), catalog_id=catalog_id)
+        svc.delete_connector(tenant_context_from(claims), catalog_id=catalog_id, remove_from_employees=remove_from_employees)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     # ---- memory_policy 目录（/api/manager/memory-policies/*，D17）----

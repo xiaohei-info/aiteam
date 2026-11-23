@@ -184,8 +184,10 @@ def _build_skill_bindings_router(verifier) -> APIRouter:
             setattr(request.app.state, "_emp_bind_svc_sk", cache)
         return cache
 
+    # 已弃用（设计 2026-11-22 §3.1）：运行时只读员工自己的清单（employee.skills / connector_refs），
+    # 这里写的绑定行不会影响员工；确认生产表为空后在 P4 删除。
     router = APIRouter(prefix="/api/manager/employees/{employee_id}/skill-bindings",
-                       tags=["manager", "employee-bindings"])
+                       tags=["manager", "employee-bindings"], deprecated=True)
 
     @router.post("", summary="新增 employee ↔ skill 绑定", operation_id="manager_employee_skill_bind",
                  status_code=status.HTTP_201_CREATED)
@@ -493,8 +495,10 @@ def _build_connector_bindings_router(verifier) -> APIRouter:
             setattr(request.app.state, "_emp_bind_svc_co", cache)
         return cache
 
+    # 已弃用（设计 2026-11-22 §3.1）：运行时只读员工自己的清单（employee.skills / connector_refs），
+    # 这里写的绑定行不会影响员工；确认生产表为空后在 P4 删除。
     router = APIRouter(prefix="/api/manager/employees/{employee_id}/connector-bindings",
-                       tags=["manager", "employee-bindings"])
+                       tags=["manager", "employee-bindings"], deprecated=True)
 
     @router.post("", summary="新增 employee ↔ connector 绑定",
                  operation_id="manager_employee_connector_bind", status_code=status.HTTP_201_CREATED)
