@@ -265,6 +265,20 @@ export default function Capabilities() {
 
   return <div className="settings-page">
     <div className="settings-content">
+      <section className="settings-card glass-panel" aria-labelledby="capabilities-ask-title">
+        <div className="settings-section-heading">
+          <UserRound size={16} strokeWidth={1.7} aria-hidden="true" />
+          <div>
+            <h2 id="capabilities-ask-title">帮我安装</h2>
+            <p>企业目录里没有的能力，交给一个员工去判断和安装。装的是你个人的能力，员工判断完仍要你批准。</p>
+          </div>
+          <span className="capabilities-heading-action">
+            <button type="button" className="capabilities-add" disabled={employees.length === 0} onClick={() => setDialog({ type: 'ask-employee' })}>
+              <UserRound size={13} aria-hidden="true" />让员工帮我装
+            </button>
+          </span>
+        </div>
+      </section>
       {error && <p role="alert" className="file-access-error"><AlertCircle size={14} aria-hidden="true" /><span>{error}</span></p>}
       {notice && <p role="status" className="file-access-note"><ShieldCheck size={13} aria-hidden="true" /><span>{notice}</span></p>}
       {updates.length > 0 && <div className="cap-update-bar" role="region" aria-label="能力更新">
@@ -289,20 +303,6 @@ export default function Capabilities() {
           </li>)}
         </ul>
       </section>}
-      <section className="settings-card glass-panel" aria-labelledby="capabilities-ask-title">
-        <div className="settings-section-heading">
-          <UserRound size={16} strokeWidth={1.7} aria-hidden="true" />
-          <div>
-            <h2 id="capabilities-ask-title">让员工帮我装</h2>
-            <p>企业目录里没有的能力，交给一个员工去判断和安装。装的是你个人的能力，员工判断完仍要你批准。</p>
-          </div>
-          <span className="capabilities-heading-action">
-            <button type="button" className="capabilities-add" disabled={employees.length === 0} onClick={() => setDialog({ type: 'ask-employee' })}>
-              <UserRound size={13} aria-hidden="true" />让员工帮我装
-            </button>
-          </span>
-        </div>
-      </section>
       <p className="file-access-note"><ShieldCheck size={13} aria-hidden="true" /><span>自己添加的 MCP 在添加时已授权，调用时不再逐次询问（只读会话里仍会先问你）；技能可能附带脚本和资料，不会自动执行，员工运行命令仍按审批策略。撤销后下一条消息起失效，不影响企业配置。</span></p>
     </div>
     {dialog?.type === 'add-mcp' && <AddMcpDialog onInstalled={() => void load()} onClose={() => setDialog(null)} />}
