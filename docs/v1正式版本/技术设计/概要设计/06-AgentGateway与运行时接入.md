@@ -176,6 +176,17 @@ Manager 应用方案：
 
 Agent 创建方案群聊时只提交 `solution_instance_id`；Agent 根据本地授权 projection 固定 coordinator 与 participant roster，并创建一组 Pi Session 文件。自定义群聊是平级入口，允许用户在本地已授权员工中选择固定 roster、coordinator 和群行为配置。两种入口都先解析为统一的 group creation input，再由同一创建服务事务写入 Conversation/participant index 并初始化固定 Pi Session；自定义入口不改变授权、snapshot、tool policy 或 Manager-owned solution 的边界。
 
+### 7.7.1 外部审批任务群聊
+
+外部审批任务可以绑定到本地群聊 Conversation。群聊仍使用本节的固定 participant Session 和 `GroupMessageDeliveryService`，只增加任务上下文和审批工具边界：
+
+- `approval_task_id`、任务 snapshot version、流程绑定 revision 和当前映射状态作为受保护的 conversation context。
+- 用户可以在群聊中追问、补充信息和 `@` 已有 participant。消息只进入当前任务的白名单上下文。
+- 负责员工可以提交 `ApprovalProposal`，其他 participant 只能返回协作意见。任何 participant 都不能获得第三方 Secret 或外部写工具。
+- 用户在群聊中说出「同意」或「拒绝」时，只生成本地 Review Gate 卡片。外部写操作仍由 UI/Hub 在状态复查、身份校验和幂等检查后执行。
+- 外部平台机器人消息先由 Adapter 去重、鉴权和裁剪，再通过同一 delivery seam 投递给本地 participant Session。回复回外部平台前必须脱敏。
+- 任务进入 `stale`、`mapping_failed`、`canceled` 或 `expired` 后，群聊保留历史并停止新的审批建议和外部回复。
+
 ### 7.8 审批、幂等与取消
 
 - 同一 participant Session 单写者；
