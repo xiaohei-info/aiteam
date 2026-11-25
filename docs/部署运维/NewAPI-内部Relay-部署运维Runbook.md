@@ -14,7 +14,7 @@
 复制 `.env.example` 后至少设置：
 
 ```dotenv
-NEWAPI_IMAGE=calciumion/new-api:v1.0.0-rc.25@sha256:54a0b10924aa75fa5b5947208b820ced66b6ef4b445b35f122b31d80676aba2b
+NEWAPI_IMAGE=calciumion/new-api:v1.0.0-rc.51@sha256:d6effcdbc58175494765c0cc5954bdacb2300516eec79ba1a9c61f9b9fae7b49
 NEWAPI_PORT=9300
 NEWAPI_BIND_HOST=127.0.0.1  # 生产固定 loopback；远程浏览器经独立 TLS 反代，不直接暴露 NewAPI
 NEWAPI_DB_USER=newapi
