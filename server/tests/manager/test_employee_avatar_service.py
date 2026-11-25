@@ -121,3 +121,21 @@ def test_exists_rejects_unsafe_employee_id(tmp_path: Path):
     service = EmployeeAvatarService(EmployeeAvatarRepository(FakeRouter()), tmp_path)
     with pytest.raises(Exception, match="valid UUID"):
         service.exists(ctx(), "../../escape")
+
+
+def test_parse_catalog_avatar_url_rejects_undecodable_gif():
+    # 匹配 data URL 形状但字节不是 GIF：Pillow 解码失败 → 视为不可用，不抛异常。
+    assert parse_catalog_avatar_url("data:image/gif;base64,AAAA") is None
+
+
+def test_parse_catalog_avatar_url_without_pillow_skips_gif(monkeypatch):
+    import sys
+
+    gif = base64.b64encode(GIF).decode()
+    monkeypatch.setitem(sys.modules, "PIL", None)
+    assert parse_catalog_avatar_url(f"data:image/gif;base64,{gif}") is None
+    # 其余栅格格式不依赖 Pillow，仍然可用。
+    assert parse_catalog_avatar_url(f"data:image/png;base64,{base64.b64encode(PNG).decode()}") == (
+        "image/png",
+        base64.b64encode(PNG).decode(),
+    )
