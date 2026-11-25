@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from shared.contracts.enums import EnterpriseRole
@@ -29,6 +30,7 @@ from shared.solution_authoring.orchestration import (
     validate_member_refs,
 )
 
+from .employee_avatar_service import parse_catalog_avatar_url
 from .employee_config_repository import EmployeeConfigRepository, EmployeeConfigRow
 from .operator_catalog import OperatorCatalogPort
 from .platform_skill_service import PlatformSkillService
@@ -49,6 +51,8 @@ from .schemas import (
 )
 
 # 招募/应用方案写操作允许的企业角色（03 §9.7）。Member 只读（由 routes 层 authorize 强制）。
+logger = logging.getLogger(__name__)
+
 _RECRUIT_WRITE_ROLES = [
     EnterpriseRole.OWNER.value,
     EnterpriseRole.ENTERPRISE_ADMIN.value,
@@ -119,6 +123,7 @@ class RecruitService:
         platform_skills: PlatformSkillService | None = None,
         transaction=None,
         members=None,
+        avatars=None,
     ):
         self._catalog = catalog
         self._employees = employees
@@ -128,6 +133,8 @@ class RecruitService:
         self._platform_skills = platform_skills
         self._transaction = transaction
         self._members = members
+        # 模板头像布种是 best-effort 的附属动作：没有头像服务（测试/最小部署）就不布种。
+        self._avatars = avatars
 
     # ---- F06 招募专家 ----
     def recruit_expert(
@@ -194,6 +201,7 @@ class RecruitService:
                         recruit=repos.recruit,
                         orders=repos.orders,
                         members=getattr(repos, "members", None) or self._members,
+                        avatars=self._avatars,
                         platform_skills=(
                             PlatformSkillService(operator=self._catalog, catalog=repos.capability_catalog)
                             if getattr(repos, "capability_catalog", None) is not None else self._platform_skills
@@ -208,6 +216,10 @@ class RecruitService:
             )
             self._orders.update(ctx, failed)
             raise
+
+        _seed_template_avatars(
+            self._avatars, ctx, [(row.employee_id, getattr(template, "avatar_url", ""))],
+        )
 
         return RecruitExpertResult(
             employee_id=row.employee_id,
@@ -346,12 +358,16 @@ class RecruitService:
                 recruit=repos.recruit,
                 orders=repos.orders,
                 members=getattr(repos, "members", None) or self._members,
+                avatars=self._avatars,
                 platform_skills=(
                     PlatformSkillService(operator=self._catalog, catalog=repos.capability_catalog)
                     if repos.capability_catalog is not None else self._platform_skills
                 ),
             )
-            return writer._publish_solution(ctx, req, package, prepared, coordinator_template_id)
+            result, avatar_seeds = writer._publish_solution(ctx, req, package, prepared, coordinator_template_id)
+        # 头像布种放在发布事务之外：失败/超时不影响已提交的招募与方案应用结果。
+        _seed_template_avatars(self._avatars, ctx, avatar_seeds)
+        return result
 
     def _publish_solution(self, ctx, req, package, prepared, coordinator_template_id):
         # Repeat syntax and tenant-subject validation after the transaction
@@ -364,6 +380,7 @@ class RecruitService:
             raise Conflict("solution instance already applied in this tenant")
         expert_results = []
         employee_ids = []
+        avatar_seeds: list[tuple[str, str]] = []
         match_audits = []
         coordinator_employee_id = None
         template_employees: dict[str, str] = {}
@@ -396,6 +413,7 @@ class RecruitService:
                 )
                 row = self._employees.transition_status(ctx, employee_id=row.employee_id, from_status="draft", to_status="active") or row
                 order_out = _order_out(self._orders.update(ctx, order.mark_succeeded(row.employee_id)))
+                avatar_seeds.append((row.employee_id, getattr(template, "avatar_url", "")))
                 match_audits.append(_match_detail(recommended, match))
             employee_ids.append(row.employee_id)
             template_employees[template.template_id] = row.employee_id
@@ -427,7 +445,10 @@ class RecruitService:
             _upsert_grant(self._grants, ctx, resource_type="solution", resource_id=instance.id,
                           department_ids=department_ids, member_ids=member_ids)
         self._record_solution_apply(ctx, package=package, instance=instance, employee_ids=employee_ids, match_audits=match_audits)
-        return ApplySolutionResult(solution_instance=_solution_out(instance), experts=expert_results, grants_applied=grants_applied)
+        return (
+            ApplySolutionResult(solution_instance=_solution_out(instance), experts=expert_results, grants_applied=grants_applied),
+            avatar_seeds,
+        )
 
     def _change_reused_model(self, ctx: TenantContext, row: EmployeeConfigRow, ref: dict, policy: RecruitModelPolicy):
         """应用方案时顺带改已招募专家的模型：走员工配置更新（版本号递增），其余配置原样保留。"""
@@ -767,10 +788,35 @@ def _track_provision(
     )
 
 
+def _seed_template_avatars(avatars, ctx: TenantContext, seeds: list[tuple[str, str]]) -> None:
+    """把 Operator 模板头像布种成企业侧员工头像（best-effort）。
+
+    模板头像是规范化的本地 data URL；招募/方案应用成功后按模板写一份企业头像，
+    三端才有图可显示。任何失败只记 warning：员工已建好，头像可由管理员后补。
+    """
+    if avatars is None:
+        return
+    for employee_id, avatar_url in seeds:
+        parsed = parse_catalog_avatar_url(avatar_url)
+        if parsed is None:
+            continue
+        mime_type, encoded = parsed
+        try:
+            avatars.update(
+                ctx, employee_id=employee_id, filename="template-avatar",
+                mime_type=mime_type, data=encoded,
+            )
+        except Exception:
+            logger.warning(
+                "recruit template avatar seeding failed", extra={"employee_id": employee_id},
+            )
+
+
 def build_recruit_service(
     *,
     catalog: OperatorCatalogPort,
     router: PgTenantRouter,
+    avatars=None,
 ) -> RecruitService:
     """组装招募服务：Operator 目录端口（编排注入）+ 共用 PgTenantRouter 派生的各 repository。
 
@@ -788,6 +834,7 @@ def build_recruit_service(
         platform_skills=PlatformSkillService(operator=catalog, catalog=CapabilityCatalogRepository(router)),
         transaction=RecruitTransaction(router),
         members=MemberDeptRepository(router),
+        avatars=avatars,
     )
 
 

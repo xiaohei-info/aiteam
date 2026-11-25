@@ -212,6 +212,8 @@ export interface ManagerClient {
   getMcpOAuthClient?(caller: AuthenticatedCaller, serverId: string): Promise<{ client_id: string; client_secret?: string }>;
   /** The package signed for this member plus public verification keys. */
   getInstallableSkillPackage?(caller: AuthenticatedCaller, skillId: string): Promise<{ package: SignedSkillPackage; signing_keys: SkillSigningKeyMetadata[] }>;
+  /** 用成员自己的 Manager 会话读取企业侧头像字节；Agent 只在本机缓存，不上传、不转发给其他成员。 */
+  getEmployeeAvatar?(caller: AuthenticatedCaller, employeeId: string): Promise<{ data: Buffer; mimeType: string }>;
   getOrgTree(caller: AuthenticatedCaller): Promise<unknown>;
   /** Manager enforces owner/enterprise_admin; the gateway only forwards. */
   createDepartment?(caller: AuthenticatedCaller, input: { department_slug: string; display_name: string; parent_id?: string }): Promise<unknown>;
@@ -404,8 +406,14 @@ export class HttpManagerClient implements ManagerClient {
     return { package: normalizeSignedSkillPackage(value.package), signing_keys: value.signing_keys.map(normalizeSkillSigningKey) };
   }
 
-  async getOrgTree(caller: AuthenticatedCaller): Promise<unknown> {
-    const response = await this.request("/api/manager/org/tree", caller);
+  async getEmployeeAvatar(caller: AuthenticatedCaller, employeeId: string): Promise<{ data: Buffer; mimeType: string }> {
+    const response = await this.requestResponse(`/api/manager/employees/${encodeURIComponent(employeeId)}/avatar/content`, caller);
+    const mimeType = (response.headers.get("content-type") ?? "").split(";")[0]?.trim().toLowerCase() ?? "";
+    const data = Buffer.from(await response.arrayBuffer());
+    return { data, mimeType };
+  }
+
+  async getOrgTree(caller: AuthenticatedCaller): Promise<unknown> {    const response = await this.request("/api/manager/org/tree", caller);
     return this.unwrap(response);
   }
 

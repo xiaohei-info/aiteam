@@ -221,6 +221,87 @@ test("Agent employee avatar stays local, preserves tenant scope, and survives Ma
   }
 });
 
+test("Agent proxies Manager employee avatars through a local same-origin cache", async () => {
+  const fixture = await createFixture();
+  const employeeId = "employee-manager-avatar";
+  const managerAvatar = `https://manager.test/api/manager/employees/${employeeId}/avatar/content`;
+  const now = new Date().toISOString();
+  fixture.store.replaceProjections([{
+    employee_id: employeeId,
+    tenant_id: "tenant-1",
+    member_id: "member-1",
+    version: "1",
+    handle: "manager-avatar",
+    display_name: "Manager Avatar",
+    revoked: false,
+    synced_at: now,
+    avatar_url: managerAvatar,
+    avatar_source: "manager",
+    avatar_version: 2,
+    avatar_sync_version: "1:avatar-2",
+  }], [], [{
+    employee_id: employeeId,
+    tenant_id: "tenant-1",
+    member_id: "member-1",
+    version: "1",
+    snapshot_version: "snapshot-1",
+    display_name: "Manager Avatar",
+    avatar_url: managerAvatar,
+    avatar_source: "manager",
+    avatar_version: 2,
+    avatar_sync_version: "1:avatar-2",
+  }]);
+  // Manager 下发的是绝对且需要 Manager 鉴权的 URL；投影对外统一成本机同源代理路径。
+  assert.equal(fixture.store.listLoadedExperts("tenant-1", "member-1")[0]!.avatar_url, `/api/agent/employees/${employeeId}/avatar/content`);
+  assert.equal(fixture.store.listSnapshots("tenant-1", "member-1")[0]!.avatar_url, `/api/agent/employees/${employeeId}/avatar/content`);
+
+  const managerData = pngBytes(32);
+  let managerCalls = 0;
+  const managerClient = {
+    getEmployeeAvatar: async () => {
+      managerCalls += 1;
+      return { data: managerData, mimeType: "image/png" };
+    },
+  } as any;
+  const http = new AgentHttpServer({
+    host: fixture.host,
+    store: fixture.store,
+    managerClient,
+    authenticate: () => ({ callerId: "member-1", userId: "member-1", tenantId: "tenant-1", roles: ["member"] }),
+  });
+  await http.listen(0);
+  const address = http.server.address();
+  assert(address && typeof address === "object");
+  const base = `http://127.0.0.1:${address.port}`;
+  try {
+    const first = await fetch(`${base}/api/agent/employees/${employeeId}/avatar/content`, { headers: { Authorization: "Bearer test" } });
+    assert.equal(first.status, 200, await first.clone().text());
+    assert.equal(first.headers.get("content-type"), "image/png");
+    assert.deepEqual(Buffer.from(await first.arrayBuffer()), managerData);
+    assert.equal(managerCalls, 1);
+
+    // 第二次直接读本机缓存，不再回源 Manager。
+    const second = await fetch(`${base}/api/agent/employees/${employeeId}/avatar/content`, { headers: { Authorization: "Bearer test" } });
+    assert.equal(second.status, 200);
+    assert.equal(managerCalls, 1);
+
+    // 成员本地上传覆盖后，即使 Manager 版本更新也不再回源。
+    const localData = pngBytes(40);
+    const uploaded = await fetch(`${base}/api/agent/employees/${employeeId}/avatar`, {
+      method: "POST",
+      headers: { Authorization: "Bearer test", "Content-Type": "application/json" },
+      body: JSON.stringify({ filename: "local.png", mime_type: "image/png", data: localData.toString("base64") }),
+    });
+    assert.equal(uploaded.status, 200, await uploaded.clone().text());
+    const afterLocal = await fetch(`${base}/api/agent/employees/${employeeId}/avatar/content`, { headers: { Authorization: "Bearer test" } });
+    assert.deepEqual(Buffer.from(await afterLocal.arrayBuffer()), localData);
+    assert.equal(managerCalls, 1);
+  } finally {
+    await http.close();
+    await fixture.close();
+  }
+});
+
 test("Agent speech transcription pulls Manager config and forwards only a local audio file", async () => {
   const fixture = await createFixture();
   const managerRequests: { url: string; init: RequestInit }[] = [];

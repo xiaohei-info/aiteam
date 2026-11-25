@@ -206,6 +206,21 @@ const LOCAL_AVATAR_MIME_FIELD = "local_avatar_mime_type";
 const LOCAL_AVATAR_VERSION_FIELD = "local_avatar_version";
 const LOCAL_AVATAR_URL_FIELD = "local_avatar_url";
 const AVATAR_SOURCE_FIELD = "avatar_source";
+// Manager 侧头像字节在 Agent 本地的受控缓存：路径 / 类型 / 对应的 Manager avatar_version。
+// 单独一套字段，避免与用户本地上传（local_*）的「覆盖 Manager」语义混在一起。
+const MANAGER_AVATAR_PATH_FIELD = "manager_avatar_cache_path";
+const MANAGER_AVATAR_MIME_FIELD = "manager_avatar_cache_mime_type";
+const MANAGER_AVATAR_VERSION_FIELD = "manager_avatar_cache_version";
+
+/** 三端统一从本机同源路径取图，前端才能带 Bearer 拿到字节。 */
+function agentAvatarUrl(employeeId: string): string {
+  return `/api/agent/employees/${encodeURIComponent(employeeId)}/avatar/content`;
+}
+
+function projectionEmployeeId(incoming: Record<string, unknown>, existing: Record<string, unknown>): string {
+  if (typeof incoming.employee_id === "string" && incoming.employee_id) return incoming.employee_id;
+  return typeof existing.employee_id === "string" ? existing.employee_id : "";
+}
 
 function avatarSyncVersion(value: Record<string, unknown>): string {
   if (typeof value.avatar_sync_version === "string" && value.avatar_sync_version.length > 0) return value.avatar_sync_version;
@@ -230,6 +245,14 @@ function mergeAvatarProjection(existingJson: string | undefined, incoming: Recor
   const localPath = typeof existing[LOCAL_AVATAR_PATH_FIELD] === "string" ? existing[LOCAL_AVATAR_PATH_FIELD] : undefined;
   const localUrl = typeof existing[LOCAL_AVATAR_URL_FIELD] === "string" ? existing[LOCAL_AVATAR_URL_FIELD] : undefined;
   const hasLocalOverride = Boolean(localPath && localUrl && existing[AVATAR_SOURCE_FIELD] === "local");
+  const cachedPath = typeof existing[MANAGER_AVATAR_PATH_FIELD] === "string" ? existing[MANAGER_AVATAR_PATH_FIELD] : undefined;
+  const cachedMime = typeof existing[MANAGER_AVATAR_MIME_FIELD] === "string" ? existing[MANAGER_AVATAR_MIME_FIELD] : undefined;
+  const cachedVersion = Number.isInteger(existing[MANAGER_AVATAR_VERSION_FIELD]) ? Number(existing[MANAGER_AVATAR_VERSION_FIELD]) : -1;
+  // Manager 头像统一走「本机同源代理路径」：客户端带自己的 Agent Bearer 取图，
+  // 首次访问由 Agent 用成员自己的 Manager 会话拉一次并缓存在本机。Manager 直接下发
+  // 的 URL 通常是绝对地址且要 Manager 鉴权，web/desktop 都加载不了，三端会各自回退插画。
+  const hasManagerAvatar = Boolean(managerAvatarUrl);
+  const cacheUsable = Boolean(cachedPath && cachedMime) && cachedVersion === managerAvatarVersion;
   const merged: Record<string, unknown> = {
     ...incoming,
     manager_avatar_url: managerAvatarUrl,
@@ -243,6 +266,9 @@ function mergeAvatarProjection(existingJson: string | undefined, incoming: Recor
   delete merged[LOCAL_AVATAR_MIME_FIELD];
   delete merged[LOCAL_AVATAR_VERSION_FIELD];
   delete merged[LOCAL_AVATAR_URL_FIELD];
+  delete merged[MANAGER_AVATAR_PATH_FIELD];
+  delete merged[MANAGER_AVATAR_MIME_FIELD];
+  delete merged[MANAGER_AVATAR_VERSION_FIELD];
   if (hasLocalOverride) {
     merged.avatar_url = localUrl;
     merged[AVATAR_SOURCE_FIELD] = "local";
@@ -250,8 +276,16 @@ function mergeAvatarProjection(existingJson: string | undefined, incoming: Recor
     merged[LOCAL_AVATAR_URL_FIELD] = localUrl;
     merged[LOCAL_AVATAR_MIME_FIELD] = existing[LOCAL_AVATAR_MIME_FIELD];
     merged[LOCAL_AVATAR_VERSION_FIELD] = existing[LOCAL_AVATAR_VERSION_FIELD];
+  } else if (hasManagerAvatar) {
+    merged.avatar_url = agentAvatarUrl(projectionEmployeeId(incoming, existing));
+    merged[AVATAR_SOURCE_FIELD] = "manager";
+    if (cacheUsable) {
+      merged[MANAGER_AVATAR_PATH_FIELD] = cachedPath;
+      merged[MANAGER_AVATAR_MIME_FIELD] = cachedMime;
+      merged[MANAGER_AVATAR_VERSION_FIELD] = cachedVersion;
+    }
   } else {
-    merged[AVATAR_SOURCE_FIELD] = managerAvatarUrl ? "manager" : "template";
+    merged[AVATAR_SOURCE_FIELD] = "template";
   }
   return merged;
 }
@@ -262,6 +296,9 @@ function publicAvatarProjection<T extends Record<string, unknown>>(value: T): T 
   delete result[LOCAL_AVATAR_MIME_FIELD];
   delete result[LOCAL_AVATAR_VERSION_FIELD];
   delete result[LOCAL_AVATAR_URL_FIELD];
+  delete result[MANAGER_AVATAR_PATH_FIELD];
+  delete result[MANAGER_AVATAR_MIME_FIELD];
+  delete result[MANAGER_AVATAR_VERSION_FIELD];
   return result;
 }
 
@@ -1466,7 +1503,7 @@ export class AgentSqliteStore {
     for (const row of rows) {
       try {
         const projection = JSON.parse(row.projection_json) as Record<string, unknown>;
-        const pathValue = projection[LOCAL_AVATAR_PATH_FIELD];
+        const pathValue = projection[LOCAL_AVATAR_PATH_FIELD] ?? projection[MANAGER_AVATAR_PATH_FIELD];
         if (typeof pathValue !== "string") continue;
         const resolved = this.managedAvatarPath(pathValue);
         if (resolved) referenced.add(resolved);
@@ -1528,12 +1565,8 @@ export class AgentSqliteStore {
     return versions;
   }
 
-  updateEmployeeAvatar(tenantId: string, memberId: string, employeeId: string, data: Buffer, mimeType: string): LocalEmployeeAvatarUpdate {
-    if (!IMAGE_MIMES.has(mimeType) || !hasImageSignature(mimeType, data) || data.byteLength === 0 || data.byteLength > MAX_LOCAL_FILE_BYTES) return { state: "not_found" };
-    const lookup = this.db.prepare("SELECT projection_json FROM loaded_employee_projection WHERE employee_id = ? AND tenant_id = ? AND member_id = ? AND revoked = 0").get(employeeId, tenantId, memberId) as { projection_json: string } | undefined;
-    if (!lookup) return { state: "not_found" };
-    const previous = JSON.parse(lookup.projection_json) as Record<string, unknown>;
-    const previousPath = typeof previous[LOCAL_AVATAR_PATH_FIELD] === "string" ? previous[LOCAL_AVATAR_PATH_FIELD] : undefined;
+  /** 原子写一份头像对象到 managed avatar root，返回相对路径与最终绝对路径。 */
+  private writeAvatarFile(data: Buffer): { relativePath: string; finalPath: string } {
     const avatarId = randomUUID();
     const relativePath = `${avatarId}.img`;
     const finalPath = join(this.avatarRoot, relativePath);
@@ -1553,8 +1586,19 @@ export class AgentSqliteStore {
       rmSync(temporaryPath, { force: true });
       throw error;
     }
+    return { relativePath, finalPath };
+  }
 
-    const avatarUrl = `/api/agent/employees/${encodeURIComponent(employeeId)}/avatar/content`;
+  updateEmployeeAvatar(tenantId: string, memberId: string, employeeId: string, data: Buffer, mimeType: string): LocalEmployeeAvatarUpdate {
+    if (!IMAGE_MIMES.has(mimeType) || !hasImageSignature(mimeType, data) || data.byteLength === 0 || data.byteLength > MAX_LOCAL_FILE_BYTES) return { state: "not_found" };
+    const lookup = this.db.prepare("SELECT projection_json FROM loaded_employee_projection WHERE employee_id = ? AND tenant_id = ? AND member_id = ? AND revoked = 0").get(employeeId, tenantId, memberId) as { projection_json: string } | undefined;
+    if (!lookup) return { state: "not_found" };
+    const previous = JSON.parse(lookup.projection_json) as Record<string, unknown>;
+    const previousLocalPath = typeof previous[LOCAL_AVATAR_PATH_FIELD] === "string" ? previous[LOCAL_AVATAR_PATH_FIELD] : undefined;
+    const previousCachePath = typeof previous[MANAGER_AVATAR_PATH_FIELD] === "string" ? previous[MANAGER_AVATAR_PATH_FIELD] : undefined;
+    const { relativePath, finalPath } = this.writeAvatarFile(data);
+
+    const avatarUrl = agentAvatarUrl(employeeId);
     const now = new Date().toISOString();
     let localVersion = 0;
     try {
@@ -1584,22 +1628,89 @@ export class AgentSqliteStore {
       rmSync(finalPath, { force: true });
       throw error;
     }
-    if (previousPath && previousPath !== relativePath) {
-      try { const oldPath = this.managedAvatarPath(previousPath); if (oldPath) rmSync(oldPath, { force: true }); } catch { /* startup cleanup retries unreferenced files */ }
+    if (previousLocalPath && previousLocalPath !== relativePath) {
+      try { const oldPath = this.managedAvatarPath(previousLocalPath); if (oldPath) rmSync(oldPath, { force: true }); } catch { /* startup cleanup retries unreferenced files */ }
+    }
+    if (previousCachePath && previousCachePath !== relativePath) {
+      try { const oldPath = this.managedAvatarPath(previousCachePath); if (oldPath) rmSync(oldPath, { force: true }); } catch { /* startup cleanup retries unreferenced files */ }
     }
     return { state: "updated", avatar_url: avatarUrl, version: localVersion, updated_at: now };
+  }
+
+  /**
+   * 缓存 Manager 下发的头像字节，让三端都从本机同源路径取图。
+   * 用户本地覆盖（avatar_source = "local"）优先，缓存永远不夺回控制权。
+   */
+  cacheManagerAvatar(tenantId: string, memberId: string, employeeId: string, data: Buffer, mimeType: string, avatarVersion: number): { data: Buffer; mimeType: string } | undefined {
+    if (!IMAGE_MIMES.has(mimeType) || !hasImageSignature(mimeType, data) || data.byteLength === 0 || data.byteLength > MAX_LOCAL_FILE_BYTES) return undefined;
+    const lookup = this.db.prepare("SELECT projection_json FROM loaded_employee_projection WHERE employee_id = ? AND tenant_id = ? AND member_id = ? AND revoked = 0").get(employeeId, tenantId, memberId) as { projection_json: string } | undefined;
+    if (!lookup) return undefined;
+    const previous = JSON.parse(lookup.projection_json) as Record<string, unknown>;
+    if (previous[AVATAR_SOURCE_FIELD] === "local") return undefined;
+    const previousCachePath = typeof previous[MANAGER_AVATAR_PATH_FIELD] === "string" ? previous[MANAGER_AVATAR_PATH_FIELD] : undefined;
+    const { relativePath, finalPath } = this.writeAvatarFile(data);
+    const avatarUrl = agentAvatarUrl(employeeId);
+    const now = new Date().toISOString();
+    const patch = {
+      avatar_url: avatarUrl,
+      [AVATAR_SOURCE_FIELD]: "manager",
+      [MANAGER_AVATAR_PATH_FIELD]: relativePath,
+      [MANAGER_AVATAR_MIME_FIELD]: mimeType,
+      [MANAGER_AVATAR_VERSION_FIELD]: avatarVersion,
+    };
+    try {
+      this.db.exec("BEGIN IMMEDIATE");
+      const currentRow = this.db.prepare("SELECT projection_json FROM loaded_employee_projection WHERE employee_id = ? AND tenant_id = ? AND member_id = ? AND revoked = 0").get(employeeId, tenantId, memberId) as { projection_json: string } | undefined;
+      if (!currentRow) { this.db.exec("ROLLBACK"); rmSync(finalPath, { force: true }); return undefined; }
+      const current = JSON.parse(currentRow.projection_json) as Record<string, unknown>;
+      // A local upload may have landed while Manager was being called; it always wins.
+      if (current[AVATAR_SOURCE_FIELD] === "local") { this.db.exec("ROLLBACK"); rmSync(finalPath, { force: true }); return undefined; }
+      this.db.prepare("UPDATE loaded_employee_projection SET projection_json = ?, synced_at = ? WHERE employee_id = ? AND tenant_id = ? AND member_id = ? AND revoked = 0").run(JSON.stringify({ ...current, ...patch }), now, employeeId, tenantId, memberId);
+      const snapshot = this.db.prepare("SELECT projection_json FROM frozen_snapshot WHERE employee_id = ? AND tenant_id = ? AND member_id = ?").get(employeeId, tenantId, memberId) as { projection_json: string } | undefined;
+      if (snapshot) {
+        const snapshotProjection = JSON.parse(snapshot.projection_json) as Record<string, unknown>;
+        this.db.prepare("UPDATE frozen_snapshot SET projection_json = ?, synced_at = ? WHERE employee_id = ? AND tenant_id = ? AND member_id = ?").run(JSON.stringify({ ...snapshotProjection, ...patch }), now, employeeId, tenantId, memberId);
+      }
+      this.db.exec("COMMIT");
+    } catch (error) {
+      try { this.db.exec("ROLLBACK"); } catch { /* transaction may already be closed */ }
+      rmSync(finalPath, { force: true });
+      throw error;
+    }
+    if (previousCachePath && previousCachePath !== relativePath) {
+      try { const oldPath = this.managedAvatarPath(previousCachePath); if (oldPath) rmSync(oldPath, { force: true }); } catch { /* startup cleanup retries unreferenced files */ }
+    }
+    return { data, mimeType };
+  }
+
+  /** 本机尚无可用 Avatar 字节、且 Manager 侧有头像时，返回待拉取的 Manager avatar_version。 */
+  managerAvatarSource(tenantId: string, memberId: string, employeeId: string): { version: number } | undefined {
+    const row = this.db.prepare("SELECT projection_json FROM loaded_employee_projection WHERE employee_id = ? AND tenant_id = ? AND member_id = ? AND revoked = 0").get(employeeId, tenantId, memberId) as { projection_json: string } | undefined;
+    if (!row) return undefined;
+    const projection = JSON.parse(row.projection_json) as Record<string, unknown>;
+    if (projection[AVATAR_SOURCE_FIELD] === "local") return undefined;
+    const url = projection.manager_avatar_url;
+    if (typeof url !== "string" || url.length === 0) return undefined;
+    const version = Number.isInteger(projection.manager_avatar_version) ? Number(projection.manager_avatar_version) : 0;
+    return { version };
   }
 
   readEmployeeAvatar(tenantId: string, memberId: string, employeeId: string): { data: Buffer; mimeType: string } | undefined {
     const row = this.db.prepare("SELECT projection_json FROM loaded_employee_projection WHERE employee_id = ? AND tenant_id = ? AND member_id = ? AND revoked = 0").get(employeeId, tenantId, memberId) as { projection_json: string } | undefined;
     if (!row) return undefined;
     const projection = JSON.parse(row.projection_json) as Record<string, unknown>;
-    const pathValue = projection[LOCAL_AVATAR_PATH_FIELD];
-    const mimeType = projection[LOCAL_AVATAR_MIME_FIELD];
+    const pathValue = typeof projection[LOCAL_AVATAR_PATH_FIELD] === "string" ? projection[LOCAL_AVATAR_PATH_FIELD] : projection[MANAGER_AVATAR_PATH_FIELD];
+    const mimeType = typeof projection[LOCAL_AVATAR_MIME_FIELD] === "string" ? projection[LOCAL_AVATAR_MIME_FIELD] : projection[MANAGER_AVATAR_MIME_FIELD];
     if (typeof pathValue !== "string" || typeof mimeType !== "string" || !IMAGE_MIMES.has(mimeType)) return undefined;
     const path = this.managedAvatarPath(pathValue);
     if (!path) return undefined;
-    const data = readFileSync(path);
+    // 文件可能被外部清理/迁移掉：读取失败视为“本机没有头像”，交给上层按需回源。
+    let data: Buffer;
+    try {
+      data = readFileSync(path);
+    } catch {
+      return undefined;
+    }
     if (!hasImageSignature(mimeType, data)) return undefined;
     return { data, mimeType };
   }

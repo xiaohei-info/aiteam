@@ -7,12 +7,14 @@ from pathlib import Path
 import pytest
 
 from manager_service.employee_avatar_service import decode_avatar
+from manager_service.employee_avatar_service import parse_catalog_avatar_url
 from manager_service.employee_avatar_service import EmployeeAvatarService
 from manager_service.employee_avatar_repository import EmployeeAvatarRepository
 from ._fake_router import FakeCursor, FakeRouter, ctx
 from shared.errors import RequestTooLarge
 
 
+GIF = base64.b64decode("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7")
 PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
 JPEG = base64.b64decode("/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAUDBAQEAwUEBAQFBQUGBwwIBwcHBw8LCwkMEQ8SEhEPERETFhwXExQaFRERGCEYGh0dHx8fExciJCIeJBweHx7/2wBDAQUFBQcGBw4ICA4eFBEUHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh7/wAARCAABAAEDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGJqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDyyiiivzo/ss//2Q==")
 
@@ -73,3 +75,32 @@ def test_update_removes_object_when_metadata_write_fails(tmp_path: Path):
         )
     assert list((tmp_path / "avatars").rglob("*.webp")) == []
     assert list((tmp_path / "avatars").rglob("*.tmp")) == []
+
+
+def test_parse_catalog_avatar_url_accepts_only_raster_data_urls():
+    encoded = base64.b64encode(PNG).decode()
+    assert parse_catalog_avatar_url(f"data:image/png;base64,{encoded}") == ("image/png", encoded)
+    assert parse_catalog_avatar_url("  data:image/webp;base64,AAAA  ") == ("image/webp", "AAAA")
+
+
+def test_parse_catalog_avatar_url_converts_animated_gif_to_static_png():
+    # Operator 允许 gif；企业头像只存静态栅格图，取首帧转 PNG。
+    gif = base64.b64encode(GIF).decode()
+    parsed = parse_catalog_avatar_url(f"data:image/gif;base64,{gif}")
+    assert parsed is not None
+    mime_type, encoded = parsed
+    assert mime_type == "image/png"
+    assert decode_avatar(mime_type, encoded).startswith(b"\x89PNG\r\n\x1a\n")
+
+
+@pytest.mark.parametrize("value", [
+    "",
+    None,
+    "https://legacy.example/avatar.png",
+    "/api/manager/employees/x/avatar/content",
+    "data:image/gif;base64,****",
+    "data:image/png;base64,****",
+    "javascript:alert(1)",
+])
+def test_parse_catalog_avatar_url_rejects_legacy_or_unsupported_values(value):
+    assert parse_catalog_avatar_url(value) is None

@@ -1586,7 +1586,7 @@ export class AgentHttpServer {
     }, routeSchema("logout", { summary: "注销本地执行身份", description: "请求 Manager 撤销服务端会话，同时清理当前进程的执行身份和运行材料。", response: { 200: jsonResponse(Type.Object({ data: Type.Object({ signed_out: Type.Boolean({ const: true }) }, { additionalProperties: false }) }, { additionalProperties: false })) }, hide: true }));
     this.registerRoute("POST", "/api/agent/audio/transcriptions", (request, response, caller) => this.transcribeAudio(request, response, caller!), routeSchema("transcribeAudio", { summary: "语音转文字", description: "使用当前成员所属企业已开放的 ASR 模型，把本地录音转换为文本；不绑定 employee。", body: Type.Ref("AudioTranscriptionRequest"), response: { 200: jsonResponse(Type.Ref("AudioTranscriptionEnvelope")), 400: problemResponse("BadRequest"), 401: problemResponse("Unauthorized"), 413: problemResponse("TooLarge"), 422: problemResponse("ValidationError"), 502: problemResponse("BadGateway"), 503: problemResponse("ManagerUnavailable") } }));
     this.registerRoute("POST", "/api/agent/employees/:employee_id/avatar", (request, response, caller, fastifyRequest) => this.updateEmployeeAvatar(request, response, (fastifyRequest?.params as { employee_id: string }).employee_id, caller!), routeSchema("updateEmployeeAvatar", { summary: "更新本地员工头像", description: "只将头像保存到本机 Agent managed data root，并原子更新本地员工投影和冻结快照；不会上传头像字节或改写 Manager 主数据。", params: ExpertParams, body: Type.Ref("EmployeeAvatarRequest"), response: { 200: jsonResponse(Type.Object({ data: Type.Ref("EmployeeAvatarResponse") })), 400: problemResponse("BadRequest"), 401: problemResponse("Unauthorized"), 403: problemResponse("Forbidden"), 404: problemResponse("NotFound"), 413: problemResponse("TooLarge"), 415: problemResponse("ValidationError") } }));
-    this.registerRoute("GET", "/api/agent/employees/:employee_id/avatar/content", (_request, response, caller, fastifyRequest) => this.getEmployeeAvatar(response, (fastifyRequest?.params as { employee_id: string }).employee_id, caller!), routeSchema("getEmployeeAvatar", { summary: "读取本地员工头像", description: "读取当前成员本机 projection 中的员工头像；只返回本地 managed data root 内的图片对象。", params: ExpertParams, response: { 200: { description: "本地员工头像二进制内容。", content: LOCAL_AVATAR_DOWNLOAD_CONTENT }, 404: problemResponse("NotFound") } }));
+    this.registerRoute("GET", "/api/agent/employees/:employee_id/avatar/content", (_request, response, caller, fastifyRequest) => this.getEmployeeAvatar(response, (fastifyRequest?.params as { employee_id: string }).employee_id, caller!), routeSchema("getEmployeeAvatar", { summary: "读取员工头像", description: "读取当前成员可见的员工头像：本机有头像对象时直接返回；企业侧头像首次访问时用成员自己的 Manager 会话拉取并缓存在本机 managed data root，Manager 不可达时返回 404。", params: ExpertParams, response: { 200: { description: "员工头像二进制内容。", content: LOCAL_AVATAR_DOWNLOAD_CONTENT }, 404: problemResponse("NotFound") } }));
 
     this.registerRoute("GET", "/api/agent/ping", (_request, response) => this.writeJson(response, 200, { data: { pong: true } }), routeSchema("ping", { summary: "Agent 存活探针", description: "返回当前本地 Agent 的固定存活结果。", response: { 200: jsonResponse(Type.Ref("PingEnvelope")) } }), false);
     this.registerRoute("GET", "/api/agent/whoami", (_request, response, caller) => this.writeJson(response, 200, { data: caller!.claims ?? { user_id: caller!.userId ?? caller!.callerId, tenant_id: caller!.tenantId!, roles: caller!.roles ?? [] } }), routeSchema("whoami", { summary: "查看当前身份", description: "返回通过 JWT 与 Manager 服务端会话校验的当前成员身份声明。", response: { 200: jsonResponse(Type.Ref("ClaimsEnvelope")) } }));
@@ -2469,9 +2469,10 @@ export class AgentHttpServer {
     this.writeJson(response, 200, { data: { employee_id: employeeId, avatar_url: result.avatar_url, version: result.version, updated_at: result.updated_at } });
   }
 
-  private getEmployeeAvatar(response: ServerResponse, employeeId: string, caller: AuthenticatedCaller): void {
+  private async getEmployeeAvatar(response: ServerResponse, employeeId: string, caller: AuthenticatedCaller): Promise<void> {
     this.requireAuthorizedEmployee(employeeId, caller);
-    const avatar = this.options.store.readEmployeeAvatar(caller.tenantId!, caller.userId ?? caller.callerId, employeeId);
+    const avatar = this.options.store.readEmployeeAvatar(caller.tenantId!, caller.userId ?? caller.callerId, employeeId)
+      ?? await this.cacheManagerAvatar(caller, employeeId);
     if (!avatar) throw new HttpProblem(404, "employee_avatar_not_found", "Local employee avatar not found");
     response.writeHead(200, {
       "Cache-Control": "private, max-age=300",
@@ -2479,6 +2480,27 @@ export class AgentHttpServer {
       "Content-Length": avatar.data.byteLength,
     });
     response.end(avatar.data);
+  }
+
+  /**
+   * 本机没有头像字节时，用成员自己的 Manager 会话拉一次并缓存到本机 managed root，
+   * 让三端都通过同一个同源路径取图；企业端不可达时保持 404，客户端回退插画。
+   */
+  private async cacheManagerAvatar(caller: AuthenticatedCaller, employeeId: string): Promise<{ data: Buffer; mimeType: string } | undefined> {
+    const managerClient = this.options.managerClient;
+    if (!managerClient?.getEmployeeAvatar) return undefined;
+    const tenantId = caller.tenantId!;
+    const memberId = caller.userId ?? caller.callerId;
+    const source = this.options.store.managerAvatarSource(tenantId, memberId, employeeId);
+    if (!source) return undefined;
+    try {
+      const fetched = await managerClient.getEmployeeAvatar(caller, employeeId);
+      return this.options.store.cacheManagerAvatar(tenantId, memberId, employeeId, fetched.data, fetched.mimeType, source.version);
+    } catch (error) {
+      // 头像不在主链上：Manager 不可达或无权限时保持 404，不把头像请求变成页面级错误。
+      if (error instanceof ManagerAuthorizationError || error instanceof ManagerUnavailableError || error instanceof ManagerPolicyDeniedError) return undefined;
+      throw error;
+    }
   }
   private listSolutions(response: ServerResponse, caller: AuthenticatedCaller): void { this.writeJson(response, 200, { data: this.options.store.listSolutions(caller.tenantId, caller.userId ?? caller.callerId), page: { next_cursor: null, has_more: false } }); }
   private async listInstallableSkills(response: ServerResponse, caller: AuthenticatedCaller): Promise<void> {

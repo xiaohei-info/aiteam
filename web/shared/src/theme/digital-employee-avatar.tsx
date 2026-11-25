@@ -84,11 +84,15 @@ export function DigitalEmployeeAvatar({
   const seedValue = seed == null ? label : String(seed);
   const traits = avatarTraitsFor(`${variant}:${seedValue}`, variant);
   const candidate = src?.trim();
+  // `/api/...` 同源路径、内联 data URL、以及前端用受保护接口取图后生成的 blob objectURL；
+  // 外部 http(s) URL 仍然回退插画（不带第三方追踪/失效链接）。
   const imageSrc = candidate?.startsWith("/") && !candidate.startsWith("//")
     ? candidate
-    : candidate && candidate.length <= MAX_INLINE_AVATAR_LENGTH && SAFE_INLINE_AVATAR.test(candidate)
+    : candidate?.startsWith("blob:")
       ? candidate
-      : undefined;
+      : candidate && candidate.length <= MAX_INLINE_AVATAR_LENGTH && SAFE_INLINE_AVATAR.test(candidate)
+        ? candidate
+        : undefined;
 
   return (
     <span

@@ -24,6 +24,9 @@ from shared.db import PgTenantRouter
 from shared.errors import AppError, ValidationProblem
 
 from .catalog_scope_wiring import reconcile_for_admin
+from .employee_avatar_repository import EmployeeAvatarRepository
+from .employee_avatar_service import EmployeeAvatarService
+from .knowledge_intake_service import ensure_storage_root, manager_storage_root
 from .operator_catalog import OperatorCatalogPort
 from .recruit_service import RecruitService, build_recruit_service
 from .segment_outcome_repository import (
@@ -131,7 +134,14 @@ def _service(request: Request) -> RecruitService:
     catalog: OperatorCatalogPort = request.app.state._operator_catalog
     cache = getattr(request.app.state, "_recruit_service", None)
     if cache is None:
-        cache = build_recruit_service(catalog=catalog, router=PgTenantRouter(dsn))
+        # 招募成功后按模板布种企业头像：模板头像是 Operator 持有的本地 data URL，
+        # 不注入则新招募的员工永远没有头像可显示（三端只能回退插画）。
+        avatars = EmployeeAvatarService(
+            EmployeeAvatarRepository(PgTenantRouter(dsn)),
+            ensure_storage_root(manager_storage_root(request.app.state.settings)),
+            str(request.base_url).rstrip("/"),
+        )
+        cache = build_recruit_service(catalog=catalog, router=PgTenantRouter(dsn), avatars=avatars)
         request.app.state._recruit_service = cache
     return cache
 

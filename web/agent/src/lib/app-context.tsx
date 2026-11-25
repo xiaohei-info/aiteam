@@ -93,6 +93,11 @@ export function useApp(): AppContextValue {
   return ctx;
 }
 
+/** 非页面级组件（如头像取图适配）使用：无 Provider 时返回 null，而不是抛错。 */
+export function useOptionalApp(): AppContextValue | null {
+  return useContext(AppContext);
+}
+
 /** 把任意错误归一为可展示文案（对齐 ApiError 的 status 分支）。 */
 export function useApiError(): (err: unknown) => string {
   const { i18n } = useApp();

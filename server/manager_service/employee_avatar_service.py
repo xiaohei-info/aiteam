@@ -6,6 +6,7 @@ import base64
 import binascii
 import hashlib
 import os
+import re
 import secrets
 import shutil
 import tempfile
@@ -21,6 +22,45 @@ from .employee_avatar_repository import EmployeeAvatarRepository
 
 MAX_AVATAR_BYTES = 5 * 1024 * 1024
 ALLOWED_MIMES = frozenset({"image/jpeg", "image/png", "image/webp"})
+# Operator 目录模板的 avatar_url 是规范化的本地 data URL；这里只解析本端能落盘的格式。
+_CATALOG_AVATAR_DATA_URL = re.compile(
+    r"^data:(image/(?:jpeg|png|webp|gif));base64,([A-Za-z0-9+/]+={0,2})$"
+)
+
+
+def _gif_first_frame_as_png(encoded: str) -> tuple[str, str] | None:
+    """动图头像转静态 PNG：企业头像只收静态栅格图（DB 约束 + 展示稳定性）。"""
+    try:
+        from PIL import Image
+    except ImportError:
+        return None
+    try:
+        with Image.open(BytesIO(base64.b64decode(encoded, validate=True))) as image:
+            frame = image.convert("RGBA")
+        out = BytesIO()
+        frame.save(out, format="PNG")
+        return "image/png", base64.b64encode(out.getvalue()).decode("ascii")
+    except Exception:
+        return None
+
+
+def parse_catalog_avatar_url(value: str) -> tuple[str, str] | None:
+    """把 Operator 模板头像 data URL 解析成 ``(mime_type, base64)``。
+
+    - jpeg / png / webp 原样返回；
+    - gif 取首帧转 PNG（Operator 允许 gif，企业侧只存静态栅格图）；
+    - 旧模板可能存 HTTP/相对路径（本端拿不到字节），一律返回 ``None``，由企业管理员
+      在员工配置页自行上传，而不是把外部 URL 当成头像写进企业库。
+    """
+    if not isinstance(value, str):
+        return None
+    match = _CATALOG_AVATAR_DATA_URL.fullmatch(value.strip())
+    if match is None:
+        return None
+    mime_type, encoded = match.group(1), match.group(2)
+    if mime_type == "image/gif":
+        return _gif_first_frame_as_png(encoded)
+    return (mime_type, encoded) if mime_type in ALLOWED_MIMES else None
 
 
 def normalize_employee_id(value: str) -> str:
