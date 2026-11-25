@@ -18,7 +18,7 @@ def test_internal_newapi_is_pinned_private_and_persistent():
     # Keep the client network first: taiyi's Docker backend attaches the host
     # publish to the primary endpoint while NewAPI also needs its DB/Redis net.
     assert "networks: [operation-newapi, newapi-internal]" in relay
-    assert "${NEWAPI_IMAGE:-calciumion/new-api:v1.0.0-rc.25@sha256:54a0b10924aa75fa5b5947208b820ced66b6ef4b445b35f122b31d80676aba2b}" in relay
+    assert "${NEWAPI_IMAGE:-calciumion/new-api:v1.0.0-rc.51@sha256:d6effcdbc58175494765c0cc5954bdacb2300516eec79ba1a9c61f9b9fae7b49}" in relay
     assert "latest" not in relay
     assert '"127.0.0.1:${NEWAPI_PORT:-9300}:3000"' in relay
     assert "newapi-postgres:" in relay and "newapi-redis:" in relay
@@ -104,7 +104,7 @@ def test_console_credentials_bootstrap_is_local_and_reused():
 def test_newapi_examples_never_contain_real_credentials():
     for name in (".env.example", ".env.test.example"):
         text = (ROOT / name).read_text(encoding="utf-8")
-        assert "NEWAPI_IMAGE=calciumion/new-api:v1.0.0-rc.25@sha256:54a0b10924aa75fa5b5947208b820ced66b6ef4b445b35f122b31d80676aba2b" in text
+        assert "NEWAPI_IMAGE=calciumion/new-api:v1.0.0-rc.51@sha256:d6effcdbc58175494765c0cc5954bdacb2300516eec79ba1a9c61f9b9fae7b49" in text
         assert "NEWAPI_URL=" in text
         assert "NEWAPI_ADMIN_TOKEN=" in text
         assert "MODEL_PRICING_URL=" in text
