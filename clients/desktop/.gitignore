@@ -36,6 +36,7 @@ src-tauri/gen/schemas/
 /output/knowledge-create-smoke/
 /output/group-detail-smoke/
 /output/composer-footer-smoke/
+/output/chat-paste-smoke/
 
 # 本地代码索引
 .codegraph/
