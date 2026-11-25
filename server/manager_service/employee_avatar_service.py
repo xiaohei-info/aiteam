@@ -18,7 +18,7 @@ from uuid import UUID
 from shared.contracts.tenancy import TenantContext
 from shared.errors import AppError, NotFound, RequestTooLarge
 
-from .employee_avatar_repository import EmployeeAvatarRepository
+from .employee_avatar_repository import EmployeeAvatarRepository, EmployeeAvatarRow
 
 MAX_AVATAR_BYTES = 5 * 1024 * 1024
 ALLOWED_MIMES = frozenset({"image/jpeg", "image/png", "image/webp"})
@@ -61,6 +61,44 @@ def parse_catalog_avatar_url(value: str) -> tuple[str, str] | None:
     if mime_type == "image/gif":
         return _gif_first_frame_as_png(encoded)
     return (mime_type, encoded) if mime_type in ALLOWED_MIMES else None
+
+
+def avatar_content_url(employee_id: str, public_base_url: str | None) -> str:
+    """员工头像对象的 URL；配置了对外地址时用绝对地址，否则用同源相对路径。"""
+    base = (public_base_url or "").rstrip("/")
+    return f"{base}/api/manager/employees/{employee_id}/avatar/content"
+
+
+def avatar_projection(
+    *,
+    employee_id: str,
+    config_version: str | int,
+    avatar: EmployeeAvatarRow | None,
+    source_template_id: str | None,
+    source_template_version: str | None,
+    public_base_url: str | None,
+) -> tuple[str | None, int, str]:
+    """快照/增量下发的 ``(avatar_url, avatar_version, avatar_sync_version)``。
+
+    - 企业上传/复制的头像优先（`employee_avatar` 行存在即用行）；
+    - 没有行但员工来自人才市场模板 → 继承模板头像：仍下发本企业头像 URL，内容接口
+      按需到 Operator 目录取模板头像并缓存（不改写企业主数据，也不产生行）；
+    - 都不是 → 不下发 URL，由前端回退插画。
+
+    继承态用独立的 sync 标记（`avatar-template-<版本>`），保证已经同步过旧快照的
+    Agent 会再拉一次并开始走头像代理；企业上传覆盖后标记变成 `avatar-<版本>`，再变一次。
+    """
+    prefix = str(config_version)
+    if avatar is not None:
+        return avatar.avatar_url, avatar.version, f"{prefix}:avatar-{avatar.version}"
+    if source_template_id:
+        marker = source_template_version or "latest"
+        return (
+            avatar_content_url(employee_id, public_base_url),
+            0,
+            f"{prefix}:avatar-template-{marker}",
+        )
+    return None, 0, f"{prefix}:avatar-0"
 
 
 def normalize_employee_id(value: str) -> str:
@@ -174,7 +212,7 @@ class EmployeeAvatarService:
             except Exception:
                 temporary.unlink(missing_ok=True)
                 raise
-            url = f"{self._public_base}/api/manager/employees/{employee_id}/avatar/content" if self._public_base else f"/api/manager/employees/{employee_id}/avatar/content"
+            url = avatar_content_url(employee_id, self._public_base)
             try:
                 row = self._repo.upsert(ctx, employee_id=employee_id, avatar_url=url, storage_key=key, mime_type=stored_mime, byte_size=len(raw), sha256=digest)
             except Exception:
@@ -202,7 +240,7 @@ class EmployeeAvatarService:
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         shutil.copyfile(src, path)
         os.chmod(path, 0o600)
-        url = f"{self._public_base}/api/manager/employees/{target_id}/avatar/content"
+        url = avatar_content_url(target_id, self._public_base)
         try:
             self._repo.upsert(ctx, employee_id=target_id, avatar_url=url, storage_key=key, mime_type=row.mime_type,
                               byte_size=row.byte_size, sha256=row.sha256)

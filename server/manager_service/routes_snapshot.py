@@ -55,6 +55,7 @@ def _service(request: Request) -> SnapshotService:
             knowledge_binding=EmployeeKnowledgeBindingRepository(router),
             platform_catalog=getattr(request.app.state, "_operator_catalog", None),
             avatar_repository=EmployeeAvatarRepository(router),
+            avatar_public_base=str(request.base_url).rstrip("/"),
         )
         request.app.state._snapshot_service = cache
     return cache

@@ -275,7 +275,8 @@ def test_expert_provenance_backfill_uses_config_revision(with_avatar_repository,
     assert expert["version"] == recruited.version + 1
     assert expert["source_template_id"] == "tpl-hr"
     assert expert["source_template_version"] == "v3"
-    assert expert["avatar_sync_version"] == f"{recruited.version + 1}:avatar-0"
+    # 模板来源员工没有企业头像行时继承模板头像，同步标记带上模板版本。
+    assert expert["avatar_sync_version"] == f"{recruited.version + 1}:avatar-template-v3"
     before[recruited.employee_id] = expert["avatar_sync_version"]
     again = svc.pull(ctx, AuthorizedConfigPullRequest(
         tenant_id="t-a", member_id="admin-1", known_versions=before,
