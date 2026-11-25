@@ -182,9 +182,10 @@ Agent 创建方案群聊时只提交 `solution_instance_id`；Agent 根据本地
 
 - `approval_task_id`、任务 snapshot version、流程绑定 revision 和当前映射状态作为受保护的 conversation context。
 - 用户可以在群聊中追问、补充信息和 `@` 已有 participant。消息只进入当前任务的白名单上下文。
-- 负责员工可以提交 `ApprovalProposal`，其他 participant 只能返回协作意见。任何 participant 都不能获得第三方 Secret 或外部写工具。
-- 用户在群聊中说出「同意」或「拒绝」时，只生成本地 Review Gate 卡片。外部写操作仍由 UI/Hub 在状态复查、身份校验和幂等检查后执行。
-- 外部平台机器人消息先由 Adapter 去重、鉴权和裁剪，再通过同一 delivery seam 投递给本地 participant Session。回复回外部平台前必须脱敏。
+- 负责员工可以提交 `ApprovalProposal`，其他 participant 只能返回协作意见。任何 participant 都不能获得第三方 Secret 或外部写工具（仅暴露 9 个审批只读/建议/附件请求工具）。
+- 审批会话的记忆与知识库出口受控：习惯类偏好走本地 User Prompt，跨任务经验摘要走脱敏记忆；严禁将审批表单正文和附件内容写入 Manager 托管的 Hindsight 记忆，记忆写入必须经字段白名单脱敏过滤；`knowledge_search` 查询文本必须裁剪为纯制度主题词，或按企业/绑定策略禁用。
+- 用户在群聊中说出「同意」或「拒绝」时，只生成本地 Review Gate 卡片。外部写操作仍由 UI/Hub 在状态复查、身份校验和幂等检查后执行；有条件自动放行同样由 Hub 在确定性规则与模型建议一致且复查外部状态未变后触发，Agent 不直接发起外部写。
+- 外部平台机器人消息先由 Adapter 去重、鉴权和裁剪，再通过同一 delivery seam（内部 `source: external_bot`，非前端可传枚举）投递给本地 participant Session。回复回外部平台前必须脱敏。
 - 任务进入 `stale`、`mapping_failed`、`canceled` 或 `expired` 后，群聊保留历史并停止新的审批建议和外部回复。
 
 ### 7.8 审批、幂等与取消
