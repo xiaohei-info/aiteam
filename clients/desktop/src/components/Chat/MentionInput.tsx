@@ -5,7 +5,7 @@ import { useAnchoredPopover } from '../Popover/useAnchoredPopover'
 import { useGlobalShortcutClose } from '../../hooks/useGlobalShortcut'
 import type { GroupMember } from '../../stores/chat'
 import { isImeKeyboardEvent } from '../../lib/imeKeyboard'
-import { extractMentionText } from './mentionRichText'
+import { extractMentionText, type RichTextNodeLike } from './mentionRichText'
 
 export interface MentionInputHandle {
   clear: () => void
@@ -32,7 +32,20 @@ interface Props {
 }
 
 /** 粘贴/换行会插入 <div>、<p>、<br> 等结构，展开逻辑见 mentionRichText（递归遍历子树）。 */
-const extract = (el: HTMLDivElement) => extractMentionText(el)
+function toRichTextNode(node: Node): RichTextNodeLike {
+  const element = node instanceof HTMLElement ? node : null
+  return {
+    nodeType: node.nodeType,
+    childNodes: Array.from(node.childNodes, toRichTextNode),
+    textContent: node.textContent,
+    tagName: element?.tagName,
+    dataset: element
+      ? { mentionId: element.dataset.mentionId, mentionName: element.dataset.mentionName }
+      : undefined,
+  }
+}
+
+const extract = (el: HTMLDivElement) => extractMentionText(toRichTextNode(el))
 
 const MentionInput = forwardRef<MentionInputHandle, Props>(({
   members, placeholder, disabled, style, className, autoFocus, onEnter, onChange,
