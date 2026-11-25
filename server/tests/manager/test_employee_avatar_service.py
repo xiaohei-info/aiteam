@@ -104,3 +104,20 @@ def test_parse_catalog_avatar_url_converts_animated_gif_to_static_png():
 ])
 def test_parse_catalog_avatar_url_rejects_legacy_or_unsupported_values(value):
     assert parse_catalog_avatar_url(value) is None
+
+
+def test_exists_reports_presence_without_touching_storage(tmp_path: Path):
+    employee_id = "11111111-1111-1111-1111-111111111111"
+    avatar_row = (employee_id, "http://manager/avatar", "avatars/key.webp", "image/webp", len(PNG), "hash", 1, datetime.now(timezone.utc))
+    present = EmployeeAvatarService(EmployeeAvatarRepository(FakeRouter().queue(FakeCursor(fetchone=avatar_row))), tmp_path)
+    missing = EmployeeAvatarService(EmployeeAvatarRepository(FakeRouter().queue(FakeCursor(fetchone=None))), tmp_path)
+
+    assert present.exists(ctx(), employee_id) is True
+    assert missing.exists(ctx(), employee_id) is False
+    assert not list(tmp_path.rglob("*"))
+
+
+def test_exists_rejects_unsafe_employee_id(tmp_path: Path):
+    service = EmployeeAvatarService(EmployeeAvatarRepository(FakeRouter()), tmp_path)
+    with pytest.raises(Exception, match="valid UUID"):
+        service.exists(ctx(), "../../escape")

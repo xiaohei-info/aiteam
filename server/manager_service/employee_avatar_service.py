@@ -143,6 +143,10 @@ class EmployeeAvatarService:
             return None
         return path
 
+    def exists(self, ctx: TenantContext, employee_id: str) -> bool:
+        """员工是否已有头像行（回填工具用它做幂等判断，不读文件字节）。"""
+        return self._repo.get(ctx, normalize_employee_id(employee_id)) is not None
+
     def update(self, ctx: TenantContext, *, employee_id: str, filename: str, mime_type: str, data: str) -> dict[str, Any]:
         employee_id = normalize_employee_id(employee_id)
         raw = decode_avatar(mime_type, data)
