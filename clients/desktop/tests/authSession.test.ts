@@ -301,4 +301,17 @@ test('按企业标识与账号匹配多用户本地加密档案', () => {
     parseSavedLoginCredentials('{"enterprise":" acme ","account":" alice@acme.com ","password":"Secret!"}'),
     { enterprise: 'acme', account: 'alice@acme.com', password: 'Secret!' },
   )
+  // 选过的企业随记录保存；空值与非字符串一律忽略，旧记录（没有该字段）照常读取。
+  assert.deepEqual(
+    parseSavedLoginCredentials('{"enterprise":"","account":"a","password":"p","tenantId":" t-1 "}'),
+    { enterprise: '', account: 'a', password: 'p', tenantId: 't-1' },
+  )
+  assert.deepEqual(
+    parseSavedLoginCredentials('{"enterprise":"","account":"a","password":"p","tenantId":"  "}'),
+    { enterprise: '', account: 'a', password: 'p' },
+  )
+  assert.deepEqual(
+    parseSavedLoginCredentials('{"enterprise":"","account":"a","password":"p","tenantId":7}'),
+    { enterprise: '', account: 'a', password: 'p' },
+  )
 })

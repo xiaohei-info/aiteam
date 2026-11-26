@@ -57,6 +57,8 @@ interface AgentAuthState {
   connectingAccount: string | null
   // 自动登录失败的原始错误，由登录页转成提示文案。
   autoLoginFailure: unknown
+  // 失败的自动登录用的是上次保存的企业（tenant_id）：登录页提示重新选择企业。
+  autoLoginTenantRejected: boolean
   // 最近一次授权同步中未更新的员工（Agent partial 同步）；空数组表示完整同步或无结果。
   grantsSyncSkipped: string[]
   sessionGeneration: number
@@ -210,8 +212,9 @@ async function syncGrantsWithoutBlocking(
 
 async function attemptPendingAutoLogin(): Promise<void> {
   const store = useAgentAuthStore
+  let saved: Awaited<ReturnType<typeof readSavedLoginCredentials>> = null
   try {
-    const saved = canAttemptAutoLogin() ? await readSavedLoginCredentials().catch(() => null) : null
+    saved = canAttemptAutoLogin() ? await readSavedLoginCredentials().catch(() => null) : null
     const eligible = shouldAutoLogin({
       enabled: readAutoLoginPreference(),
       hasSavedCredentials: Boolean(saved),
@@ -219,9 +222,10 @@ async function attemptPendingAutoLogin(): Promise<void> {
     })
     if (!saved || !eligible) return
     store.setState({ connectingAccount: saved.account })
-    await store.getState().login(saved.enterprise, saved.account, saved.password)
+    // 带上次实际登录的企业；没有时（旧记录）按企业标识或账号密码匹配。
+    await store.getState().login(saved.enterprise, saved.account, saved.password, saved.tenantId)
   } catch (error) {
-    store.setState({ autoLoginFailure: error })
+    store.setState({ autoLoginFailure: error, autoLoginTenantRejected: Boolean(saved?.tenantId) })
   } finally {
     store.setState({ isConnecting: false, connectingAccount: null })
   }
@@ -240,6 +244,7 @@ function clearRuntimeSession(set: (partial: Partial<AgentAuthState>) => void): v
     isRestoring: false,
     restoreError: null,
     autoLoginFailure: null,
+    autoLoginTenantRejected: false,
     grantsSyncSkipped: [],
   })
 }
@@ -257,13 +262,14 @@ export const useAgentAuthStore = create<AgentAuthState>((set, get) => ({
   isConnecting: false,
   connectingAccount: null,
   autoLoginFailure: null,
+  autoLoginTenantRejected: false,
   grantsSyncSkipped: [],
   sessionGeneration: 0,
 
   restoreSession: async () => {
     if (restorePromise) return restorePromise
     // 将要自动登录时从一开始就进入连接中；否则读到已保存会话才进入，没有会话的用户直接去登录页。
-    const generation = beginSessionOperation({ isRestoring: true, restoreError: null, autoLoginFailure: null, isConnecting: canAttemptAutoLogin() })
+    const generation = beginSessionOperation({ isRestoring: true, restoreError: null, autoLoginFailure: null, autoLoginTenantRejected: false, isConnecting: canAttemptAutoLogin() })
     recordAuthDiagnostic({ reason: 'restore_started', source: 'restore' })
     const task = enqueueStorage(async () => {
       if (!isCurrentSession(generation)) return
@@ -472,6 +478,7 @@ export const useAgentAuthStore = create<AgentAuthState>((set, get) => ({
       isConnecting: false,
       connectingAccount: null,
       autoLoginFailure: null,
+      autoLoginTenantRejected: false,
       grantsSyncSkipped,
     })
     recordAuthDiagnostic({ reason: 'login_succeeded', source: 'login', expiresInSeconds: sessionRemainingSeconds(validatedSession.claims.exp) })

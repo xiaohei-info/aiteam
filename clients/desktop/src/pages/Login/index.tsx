@@ -56,8 +56,12 @@ export default function Login() {
   const [tenantChoice, setTenantChoice] = useState<{ input: LoginInput; candidates: TenantCandidate[] } | null>(null)
   // 自动登录在内部页进行，失败后才来到这里，第一屏就要说明原因。
   const [error, setError] = useState<string | null>(() => {
-    const failure = useAgentAuthStore.getState().autoLoginFailure
-    return failure ? describeLoginFailure(failure, false) : null
+    const { autoLoginFailure: failure, autoLoginTenantRejected } = useAgentAuthStore.getState()
+    if (!failure) return null
+    // 上次选择的企业登不上（停用、删除、密码已改等）：表单不带该企业，再点登录会重新弹出选择。
+    return autoLoginTenantRejected
+      ? `上次登录的企业无法自动登录：${describeLoginFailure(failure, false)}。请重新登录并选择企业。`
+      : describeLoginFailure(failure, false)
   })
   const login = useAgentAuthStore((s) => s.login)
   const resetPassword = useAgentAuthStore((s) => s.resetPassword)
@@ -166,7 +170,9 @@ export default function Login() {
       writeAutoLoginPreference(rememberCredentials && autoLogin)
       try {
         if (rememberCredentials) {
-          await saveLoginCredentials({ enterprise: loginEnterprise, account: loginAccount, password: loginPassword })
+          // 记下本次实际登录的企业，供自动登录直接使用（弹窗选择或企业服务匹配的结果）。
+          const tenantId = useAgentAuthStore.getState().tenantId ?? undefined
+          await saveLoginCredentials({ enterprise: loginEnterprise, account: loginAccount, password: loginPassword, tenantId })
         } else {
           await deleteSavedLoginCredentials({ enterprise: loginEnterprise, account: loginAccount })
         }

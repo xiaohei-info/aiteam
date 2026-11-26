@@ -10,6 +10,11 @@ export interface SavedLoginCredentials {
   enterprise: string
   account: string
   password: string
+  // 本次实际登录的企业（内部 tenant_id，不回填企业标识输入框）。自动登录按它直接登录，
+  // 多企业账号留空企业标识时不会再被要求选择。旧版保存的记录没有该字段。
+  // 存储索引仍是 (enterprise, account)：企业标识留空时同一账号换企业登录会覆盖同一条记录，
+  // 自动登录跟随最后一次登录的企业，这是「记住上次登录」的预期行为，不是丢数据。
+  tenantId?: string
 }
 
 export interface SavedCredentialProfileSummary {
@@ -30,10 +35,12 @@ export function parseSavedLoginCredentials(raw: string | null): SavedLoginCreden
     if (!value || typeof value !== 'object') return null
     if (typeof value.enterprise !== 'string' || typeof value.account !== 'string' || typeof value.password !== 'string') return null
     if (!value.account.trim() || !value.password) return null
+    const tenantId = typeof value.tenantId === 'string' ? value.tenantId.trim() : ''
     return {
       enterprise: value.enterprise.trim(),
       account: value.account.trim(),
       password: value.password,
+      ...(tenantId ? { tenantId } : {}),
     }
   } catch {
     return null
@@ -105,10 +112,12 @@ export async function saveLoginCredentials(credentials: SavedLoginCredentials): 
   if (!isTauriRuntime()) return
   const enterprise = credentials.enterprise.trim()
   const account = credentials.account.trim()
+  const tenantId = credentials.tenantId?.trim()
   const value = JSON.stringify({
     enterprise,
     account,
     password: credentials.password,
+    ...(tenantId ? { tenantId } : {}),
   })
   await persistVerifiedCredential(
     value,
