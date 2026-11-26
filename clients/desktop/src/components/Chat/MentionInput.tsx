@@ -91,6 +91,21 @@ function carriesFiles(data: DataTransfer | null | undefined): boolean {
   return Array.from(data.items ?? []).some((item) => item.kind === 'file')
 }
 
+/** 松手位置对应的插入点；WebKit 提供 caretRangeFromPoint，标准实现是 caretPositionFromPoint。 */
+function dropRange(x: number, y: number): Range | null {
+  const doc = document as Document & {
+    caretRangeFromPoint?: (x: number, y: number) => Range | null
+    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null
+  }
+  if (typeof doc.caretRangeFromPoint === 'function') return doc.caretRangeFromPoint(x, y)
+  const pos = typeof doc.caretPositionFromPoint === 'function' ? doc.caretPositionFromPoint(x, y) : null
+  if (!pos) return null
+  const range = document.createRange()
+  range.setStart(pos.offsetNode, pos.offset)
+  range.collapse(true)
+  return range
+}
+
 const MentionInput = forwardRef<MentionInputHandle, Props>(({
   members, placeholder, disabled, style, className, autoFocus, onEnter, onChange, onFiles,
 }, ref) => {
@@ -214,12 +229,19 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
 
   // 只接收纯文本：浏览器默认粘贴会把富文本结构（<div>/<p>/<span>/style）和 <img> 塞进 contenteditable，
   // 既污染输入内容，也让 extract 拿到与用户所见不一致的文本——图片会显示在框里却永远发不出去。
-  const insertPlainText = useCallback((el: HTMLDivElement, pasted: string) => {
+  const insertPlainText = useCallback((el: HTMLDivElement, pasted: string, at?: Range | null) => {
     closeMenu()
     el.focus()
     const sel = window.getSelection()
-    // 焦点不在输入框内时插到末尾，避免文本落到不可见位置。
-    if (!sel || !sel.rangeCount || !el.contains(sel.anchorNode)) caretToEnd(el)
+    if (at && sel && el.contains(at.startContainer)) {
+      // 拖入：落在松手位置，且只插入不替换——原来选中的内容保持不动。
+      at.collapse(true)
+      sel.removeAllRanges()
+      sel.addRange(at)
+    } else if (!sel || !sel.rangeCount || !el.contains(sel.anchorNode)) {
+      // 焦点不在输入框内时插到末尾，避免文本落到不可见位置。
+      caretToEnd(el)
+    }
     const inserted = document.execCommand('insertText', false, pasted)
     if (!inserted) {
       const activeSel = window.getSelection()
@@ -256,9 +278,13 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
     if (!el || disabled) return
     // 无论剪贴板里是什么都先拦掉浏览器默认粘贴：文本由我们插入，图片/文件走附件。
     e.preventDefault()
-    takeFiles(e.clipboardData, 'paste')
+    // 同时带文字和图片（如从网页/文档复制的一段图文）时只贴文字；只有图片/文件时才作附件。
     const pasted = e.clipboardData?.getData('text/plain') ?? ''
-    if (pasted) insertPlainText(el, pasted)
+    if (pasted) {
+      insertPlainText(el, pasted)
+      return
+    }
+    takeFiles(e.clipboardData, 'paste')
   }, [disabled, insertPlainText, takeFiles])
 
   // 拖入同理：默认行为会把图片/文件/富文本直接落进 contenteditable。
@@ -269,7 +295,7 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
     if (takeFiles(e.dataTransfer, 'drop')) return
     const dropped = e.dataTransfer?.getData('text/plain') ?? ''
     if (!dropped) return
-    insertPlainText(el, dropped)
+    insertPlainText(el, dropped, dropRange(e.clientX, e.clientY))
   }, [disabled, insertPlainText, takeFiles])
 
   /** Without this the browser refuses the drop and shows a “no entry” cursor over the box. */

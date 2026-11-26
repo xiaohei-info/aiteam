@@ -60,11 +60,12 @@ test('粘贴的图片/文件交给 onFiles，而不是丢掉', () => {
   assert.ok(source.includes('onFiles?: (files: File[]) => void'), 'MentionInput 缺少 onFiles 入参')
 })
 
-test('文本和文件同时存在时两者都不丢', () => {
-  const take = pasteBody.indexOf('takeFiles(')
+test('文本和图片同时存在时只贴文字，没有文字时才作附件', () => {
   const insert = pasteBody.indexOf('insertPlainText(el, pasted)')
-  assert.ok(take > 0 && insert > take, '文件应走附件、纯文本仍然插入输入框')
-  assert.equal(pasteBody.includes('if (!pasted) {'), false, '没有纯文本时不应提前 return，否则不带文字的图片会被丢掉')
+  const take = pasteBody.indexOf('takeFiles(')
+  assert.ok(insert > 0 && take > insert, '应先判断文字：有文字只插入文字，之后才轮到附件')
+  const textBranch = pasteBody.slice(pasteBody.indexOf('if (pasted) {'), take)
+  assert.ok(textBranch.includes('return'), '有文字时应直接返回，不能把同一次粘贴里的图片也加成附件')
 })
 
 test('没有 onFiles（宿主未接附件）时才提示改用附件按钮', () => {
@@ -79,6 +80,10 @@ test('拖入图片/文件走同一条附件路径', () => {
   assert.ok(dropBody.includes('e.preventDefault()'), 'handleDrop 缺少 preventDefault')
   assert.ok(dropBody.includes("takeFiles(e.dataTransfer, 'drop')"), 'handleDrop 未把拖入的文件交给附件导入')
   assert.ok(source.includes('onDrop={handleDrop}'), 'handleDrop 未挂到输入框上')
+  // 拖入的文字落在松手位置，不替换当前选中内容。
+  assert.ok(dropBody.includes('dropRange(e.clientX, e.clientY)'), '拖入的文字应插到松手位置')
+  assert.ok(source.includes('caretRangeFromPoint'), '缺少 WebKit 的落点计算')
+  assert.ok(source.includes('at.collapse(true)'), '落点应折叠成插入点，不能替换选中的文字')
   // 不阻止 dragover 的默认行为，浏览器根本不会触发 drop。
   assert.ok(source.includes('onDragOver={handleDragOver}'), '缺少 onDragOver，拖入会被浏览器直接拒掉')
 })

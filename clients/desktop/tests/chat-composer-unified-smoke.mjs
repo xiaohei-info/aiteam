@@ -292,6 +292,49 @@ for (const mode of ['single', 'group']) {
   await evaluate(`document.querySelectorAll('.chat-file-chip-remove').forEach(b => b.click())`)
   await pause(150)
 
+  // 11c. 图文混合粘贴（网页/文档复制）：只贴文字，不额外收图片附件
+  await evaluate(`document.querySelector('[role="textbox"]').focus()`)
+  await clearAll()
+  await evaluate(`(async () => {
+    const canvas = document.createElement('canvas')
+    canvas.width = canvas.height = 8
+    const blob = await new Promise(r => canvas.toBlob(r, 'image/png'))
+    await navigator.clipboard.write([new ClipboardItem({
+      'text/plain': new Blob(['图文混合'], { type: 'text/plain' }),
+      'image/png': blob,
+    })])
+  })()`)
+  const importedBeforeMixed = (await read()).imported.length
+  await command('paste', 'v', 'KeyV', 86)
+  await pause(200)
+  s = await read()
+  assert.equal(s.text, '图文混合', `${mode}: 图文混合粘贴应只贴文字，实际 ${JSON.stringify(s.text)}`)
+  assert.equal(s.imported.length, importedBeforeMixed, `${mode}: 图文混合粘贴不应再导入图片附件，实际 ${JSON.stringify(s.imported)}`)
+  await screenshot(`${mode}-mixed-paste-text-only`)
+
+  // 11d. 拖入文字：落在松手位置，不替换当前选中内容
+  await clearAll()
+  await type('甲乙丙丁')
+  await evaluate(`(() => {
+    const box = document.querySelector('[role="textbox"]')
+    const walker = document.createTreeWalker(box, NodeFilter.SHOW_TEXT)
+    let text = null
+    while (walker.nextNode()) if (walker.currentNode.textContent.includes('甲乙丙丁')) { text = walker.currentNode; break }
+    // 选中「丙丁」，再把文字拖到「甲」和「乙」之间
+    const sel = getSelection(); const selRange = document.createRange()
+    selRange.setStart(text, 2); selRange.setEnd(text, 4); sel.removeAllRanges(); sel.addRange(selRange)
+    const probe = document.createRange(); probe.setStart(text, 1); probe.setEnd(text, 2)
+    const rect = probe.getBoundingClientRect()
+    const dt = new DataTransfer()
+    dt.setData('text/plain', 'X')
+    box.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt, clientX: rect.left + 1, clientY: rect.top + rect.height / 2 }))
+  })()`)
+  await pause(150)
+  s = await read()
+  assert.equal(s.text, '甲X乙丙丁', `${mode}: 拖入文字应落在松手位置且不替换选区，实际 ${JSON.stringify(s.text)}`)
+  await screenshot(`${mode}-text-drop-at-point`)
+  await clearAll()
+
   // 12. 恢复草稿后光标在末尾（旧行为：新输入的字插在草稿前面）
   await clearAll()
   await type('草稿头')

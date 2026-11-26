@@ -11,6 +11,18 @@ const PREVIEW_MAX_CHARS: usize = 30_000;
 /// IPC bridge in one piece, unlike files the native picker copies straight from disk.
 const MAX_PASTED_FILE_BYTES: u64 = 64 * 1024 * 1024;
 
+/// Longest base64 text that can still decode to `MAX_PASTED_FILE_BYTES` or less: standard
+/// base64 emits 4 characters per 3 bytes, plus padding. Slack of 8 keeps an exactly-limit
+/// payload acceptable while rejecting anything clearly over it before decoding.
+const MAX_PASTED_BASE64_CHARS: u64 = MAX_PASTED_FILE_BYTES / 3 * 4 + 8;
+
+fn too_large_payload_error() -> String {
+    format!(
+        "File is larger than {} MB",
+        MAX_PASTED_FILE_BYTES / (1024 * 1024)
+    )
+}
+
 fn canonicalize_existing(path: &Path, description: &str) -> Result<PathBuf, String> {
     path.canonicalize()
         .map_err(|error| crate::file_access::io_error(Path::new(description), error))
@@ -234,14 +246,16 @@ pub fn cache_file_bytes(
     validate_path_segment(&user_id, "user id")?;
     validate_path_segment(&chat_id, "chat id")?;
     validate_path_segment(&file_name, "file name")?;
+    // Reject by encoded length first: decoding a malformed oversized payload would
+    // materialise the whole thing in memory before the size check could reject it.
+    if data_base64.len() as u64 > MAX_PASTED_BASE64_CHARS {
+        return Err(too_large_payload_error());
+    }
     let data = base64::engine::general_purpose::STANDARD
         .decode(data_base64.as_bytes())
         .map_err(|error| format!("Invalid file payload: {error}"))?;
     if data.len() as u64 > MAX_PASTED_FILE_BYTES {
-        return Err(format!(
-            "File is larger than {} MB",
-            MAX_PASTED_FILE_BYTES / (1024 * 1024)
-        ));
+        return Err(too_large_payload_error());
     }
 
     let mime = mime_for_file_name(&file_name);
@@ -1091,6 +1105,7 @@ mod tests {
     use super::{
         conversation_cache_name, mime_for_file_name, resolve_cached_path_from_root,
         validate_cached_relative_path, validate_path_segment, write_conversation_copy,
+        MAX_PASTED_BASE64_CHARS, MAX_PASTED_FILE_BYTES,
     };
     use std::path::Path;
 
@@ -1101,6 +1116,17 @@ mod tests {
         ));
         std::fs::create_dir_all(&directory).expect("create test directory");
         directory
+    }
+
+    #[test]
+    fn pasted_payload_limit_rejects_before_decoding_without_rejecting_an_exact_limit_file() {
+        // 4 characters per 3 bytes, rounded up, plus padding: the exact encoded length of a
+        // file at the limit must still fit, or legitimate 64 MB pastes would be refused.
+        let exact = 4 * MAX_PASTED_FILE_BYTES.div_ceil(3);
+        assert!(exact <= MAX_PASTED_BASE64_CHARS);
+        // One extra byte of payload must not fit, so the guard cannot be bypassed by padding.
+        let over = 4 * (MAX_PASTED_FILE_BYTES + 1).div_ceil(3) + 8;
+        assert!(over > MAX_PASTED_BASE64_CHARS);
     }
 
     #[test]
