@@ -88,6 +88,7 @@ const state = `(() => {
     focused: document.activeElement === el,
     listbox: !!document.querySelector('[role="listbox"]'),
     chips: el ? el.querySelectorAll('.mention-chip').length : 0,
+    hint: document.querySelector('.mention-input-hint')?.textContent ?? null,
     ariaAutocomplete: el?.getAttribute('aria-autocomplete') ?? null,
     sent: window.__sent,
     drafts: window.__drafts,
@@ -238,6 +239,43 @@ for (const mode of ['single', 'group']) {
   assert.equal(s.text, '第一行\n第二行 汇总', `${mode}: 粘贴应得到两行纯文本，实际 ${JSON.stringify(s.text)}`)
   assert.equal(s.sendDisabled, false, `${mode}: 粘贴后发送键可用`)
   await screenshot(`${mode}-pasted`)
+
+  // 11. 粘贴图片：不进输入框（旧行为是图片显示在框里、发送键仍然为灰，永远发不出去）
+  await evaluate(`document.querySelector('[role="textbox"]').focus()`)
+  await clearAll()
+  await evaluate(`(async () => {
+    const canvas = document.createElement('canvas')
+    canvas.width = canvas.height = 8
+    const ctx = canvas.getContext('2d')
+    ctx.fillStyle = '#e89a2e'
+    ctx.fillRect(0, 0, 8, 8)
+    const blob = await new Promise(r => canvas.toBlob(r, 'image/png'))
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
+  })()`)
+  await command('paste', 'v', 'KeyV', 86)
+  await pause(200)
+  s = await read()
+  const pastedImages = await evaluate(`document.querySelector('[role="textbox"]').querySelectorAll('img').length`)
+  assert.equal(pastedImages, 0, `${mode}: 粘贴图片不应进输入框`)
+  assert.equal(s.text.trim(), '', `${mode}: 粘贴图片后输入框应仍为空，实际 ${JSON.stringify(s.text)}`)
+  assert.equal(s.sendDisabled, true, `${mode}: 粘贴图片后发送键应仍禁用`)
+  assert.equal(s.hint, '输入框不支持粘贴图片或文件，请用附件按钮上传', `${mode}: 应提示改用附件按钮，实际 ${JSON.stringify(s.hint)}`)
+  await screenshot(`${mode}-image-paste-blocked`)
+
+  // 12. 恢复草稿后光标在末尾（旧行为：新输入的字插在草稿前面）
+  await clearAll()
+  await type('草稿头')
+  await evaluate(`window.__setConv('conversation-2')`)
+  await pause(150)
+  await evaluate(`window.__setConv('conversation-1')`)
+  await pause(150)
+  await evaluate(`document.querySelector('[role="textbox"]').focus()`)
+  await type('尾')
+  s = await read()
+  assert.equal(s.text, '草稿头尾', `${mode}: 草稿恢复后光标应在末尾，实际 ${JSON.stringify(s.text)}`)
+  await clearAll()
+  await evaluate(`window.__drafts['conversation-1'] = undefined`)
+
   r.sent = s.sent
 }
 

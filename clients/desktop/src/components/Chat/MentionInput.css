@@ -36,6 +36,23 @@
   pointer-events: none;
 }
 
+/* ─── 粘贴/拖入图片的提示 ─── */
+
+/* 输入框只收纯文本，图片与文件被忽略时在输入框上方短暂提示改用附件按钮。 */
+.mention-input-hint {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 4px);
+  max-width: 100%;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-secondary);
+  pointer-events: none;
+}
+
 /* ─── @提及 chip ─── */
 
 .mention-chip {

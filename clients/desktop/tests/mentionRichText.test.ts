@@ -55,8 +55,10 @@ test('空输入框展开为空文本（发送键仍应禁用）', () => {
 
 // MentionInput 侧的结构断言：粘贴必须只取纯文本，避免富文本/脏结构进入 contentEditable。
 const source = readFileSync(new URL('../src/components/Chat/MentionInput.tsx', import.meta.url), 'utf8')
-const pasteStart = source.indexOf('const handlePaste = useCallback')
-assert.ok(pasteStart > 0, '找不到 MentionInput.handlePaste')
+// 粘贴与拖入共用 insertPlainText（插入 + emit），从它开始截取到 handleKeyDown 覆盖整条粘贴链路。
+const pasteStart = source.indexOf('const insertPlainText = useCallback')
+assert.ok(pasteStart > 0, '找不到 MentionInput.insertPlainText')
+assert.ok(source.indexOf('const handlePaste = useCallback') > pasteStart, '找不到 MentionInput.handlePaste')
 const pasteBody = source.slice(pasteStart, source.indexOf('const handleKeyDown = useCallback', pasteStart))
 
 test('contentEditable 绑定了 onPaste 处理器', () => {

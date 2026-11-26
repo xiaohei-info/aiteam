@@ -56,6 +56,23 @@ function markEmpty(el: HTMLDivElement, value: { text: string; mentions: string[]
   el.dataset.empty = String(value.text === '' && value.mentions.length === 0)
 }
 
+/** 把光标放到输入框内容末尾。contentEditable 被程序改写内容或被 focus() 时，Chrome 会把光标留在开头。 */
+function caretToEnd(el: HTMLDivElement): void {
+  const range = document.createRange()
+  range.selectNodeContents(el)
+  range.collapse(false)
+  const sel = window.getSelection()
+  sel?.removeAllRanges()
+  sel?.addRange(range)
+}
+
+/** 剪贴板/拖拽里带文件（图片、文档）时一律拒收：输入框只提交纯文本，收下只会显示出来却发不出去。 */
+function carriesFiles(data: DataTransfer | null | undefined): boolean {
+  if (!data) return false
+  if (data.files && data.files.length > 0) return true
+  return Array.from(data.items ?? []).some((item) => item.kind === 'file')
+}
+
 const MentionInput = forwardRef<MentionInputHandle, Props>(({
   members, placeholder, disabled, style, className, autoFocus, onEnter, onChange,
 }, ref) => {
@@ -67,6 +84,15 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
   const [selectedIdx, setSelectedIdx] = useState(0)
   const isComposingRef = useRef(false)
   const menuId = useId()
+  // 图片/文件粘贴被忽略时的短暂提示（静静丢掉会让用户以为程序卡住）。
+  const [hint, setHint] = useState<string | null>(null)
+  const hintTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  const showHint = useCallback((message: string) => {
+    setHint(message)
+    clearTimeout(hintTimer.current)
+    hintTimer.current = setTimeout(() => setHint(null), 2600)
+  }, [])
+  useEffect(() => () => clearTimeout(hintTimer.current), [])
 
   const emit = useCallback((el: HTMLDivElement) => {
     const value = extract(el)
@@ -168,25 +194,14 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
     emit(el)
   }, [closeMenu, emit])
 
-  // 只接收纯文本：浏览器默认粘贴会把富文本结构（<div>/<p>/<span>/style）塞进 contenteditable，
-  // 既污染输入内容，也让 extract 拿到与用户所见不一致的文本。
-  const handlePaste = useCallback((e: React.ClipboardEvent<HTMLDivElement>) => {
-    const el = editRef.current
-    if (!el || disabled) return
-    const pasted = e.clipboardData?.getData('text/plain') ?? ''
-    if (!pasted) return
-    e.preventDefault()
+  // 只接收纯文本：浏览器默认粘贴会把富文本结构（<div>/<p>/<span>/style）和 <img> 塞进 contenteditable，
+  // 既污染输入内容，也让 extract 拿到与用户所见不一致的文本——图片会显示在框里却永远发不出去。
+  const insertPlainText = useCallback((el: HTMLDivElement, pasted: string) => {
     closeMenu()
     el.focus()
     const sel = window.getSelection()
     // 焦点不在输入框内时插到末尾，避免文本落到不可见位置。
-    if (!sel || !sel.rangeCount || !el.contains(sel.anchorNode)) {
-      const end = document.createRange()
-      end.selectNodeContents(el)
-      end.collapse(false)
-      sel?.removeAllRanges()
-      sel?.addRange(end)
-    }
+    if (!sel || !sel.rangeCount || !el.contains(sel.anchorNode)) caretToEnd(el)
     const inserted = document.execCommand('insertText', false, pasted)
     if (!inserted) {
       const activeSel = window.getSelection()
@@ -202,7 +217,34 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
       activeSel.addRange(after)
     }
     emit(el)
-  }, [closeMenu, disabled, emit])
+  }, [closeMenu, emit])
+
+  const handlePaste = useCallback((e: React.ClipboardEvent<HTMLDivElement>) => {
+    const el = editRef.current
+    if (!el || disabled) return
+    // 无论剪贴板里是什么都先拦掉浏览器默认粘贴：只有纯文本会被我们插入，图片/文件直接忽略。
+    e.preventDefault()
+    const pasted = e.clipboardData?.getData('text/plain') ?? ''
+    if (!pasted) {
+      if (carriesFiles(e.clipboardData)) showHint('输入框不支持粘贴图片或文件，请用附件按钮上传')
+      return
+    }
+    insertPlainText(el, pasted)
+  }, [disabled, insertPlainText, showHint])
+
+  // 拖入同理：默认行为会把图片/文件/富文本直接落进 contenteditable。
+  const handleDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    const el = editRef.current
+    if (!el || disabled) return
+    e.preventDefault()
+    if (carriesFiles(e.dataTransfer)) {
+      showHint('输入框不支持拖入图片或文件，请用附件按钮上传')
+      return
+    }
+    const dropped = e.dataTransfer?.getData('text/plain') ?? ''
+    if (!dropped) return
+    insertPlainText(el, dropped)
+  }, [disabled, insertPlainText, showHint])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
     // 组词期间让输入法处理回车、方向键和删除键，不选择 @ 成员或发送。
@@ -250,12 +292,25 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
       el.replaceChildren()
       emit(el)
     },
-    focus: () => editRef.current?.focus(),
+    focus: () => {
+      const el = editRef.current
+      if (!el) return
+      el.focus()
+      // 程序化聚焦时 Chrome 把光标留在开头，新输入的字会插到已有草稿前面。
+      const sel = window.getSelection()
+      if (!sel || !sel.rangeCount || !el.contains(sel.anchorNode)) caretToEnd(el)
+    },
     setText: (text: string) => {
-      if (!editRef.current) return
+      const el = editRef.current
+      if (!el) return
       // 草稿恢复只写纯文本，不把持久化内容当 HTML 注入。
-      editRef.current.textContent = text
-      emit(editRef.current)
+      el.textContent = text
+      // 改写内容会让光标回到开头（草稿恢复后输入的字会插在草稿前面）；
+      // 焦点在别的控件上时不抢选区，等 focus() 再把光标放到末尾。
+      if (document.activeElement === el || !document.activeElement || document.activeElement === document.body) {
+        caretToEnd(el)
+      }
+      emit(el)
     },
     snapshot: () => Array.from(editRef.current?.childNodes ?? [], (node) => node.cloneNode(true)),
     restore: (snapshot: MentionInputSnapshot) => {
@@ -267,12 +322,7 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
       // 发送期间输入框被禁用、焦点落到 body；用户点了别处就不抢焦点。
       if (document.activeElement && document.activeElement !== document.body) return
       el.focus()
-      const range = document.createRange()
-      range.selectNodeContents(el)
-      range.collapse(false)
-      const sel = window.getSelection()
-      sel?.removeAllRanges()
-      sel?.addRange(range)
+      caretToEnd(el)
     },
     insertText: (text: string) => {
       const el = editRef.current
@@ -280,13 +330,7 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
       el.focus()
       // 光标不在输入框内时移到末尾，保证插入位置可预期
       const sel = window.getSelection()
-      if (!sel || !sel.rangeCount || !el.contains(sel.anchorNode)) {
-        const range = document.createRange()
-        range.selectNodeContents(el)
-        range.collapse(false)
-        sel?.removeAllRanges()
-        sel?.addRange(range)
-      }
+      if (!sel || !sel.rangeCount || !el.contains(sel.anchorNode)) caretToEnd(el)
       // 前面已有内容且非空白时补一个空格分隔
       const needsSpace = el.textContent !== '' && !/\s$/.test(el.textContent ?? '')
       const inserted = document.execCommand('insertText', false, (needsSpace ? ' ' : '') + text)
@@ -323,6 +367,7 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
 
   return (
     <div className="mention-input-wrapper" ref={wrapperRef}>
+      {hint && <div className="mention-input-hint" role="status" aria-live="polite">{hint}</div>}
       <div
         ref={editRef}
         contentEditable={!disabled}
@@ -332,6 +377,7 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
         data-placeholder={placeholder ?? '输入消息…'}
         onInput={handleInput}
         onPaste={handlePaste}
+        onDrop={handleDrop}
         onCompositionStart={() => { isComposingRef.current = true }}
         onCompositionEnd={() => { isComposingRef.current = false }}
         onKeyDown={handleKeyDown}
