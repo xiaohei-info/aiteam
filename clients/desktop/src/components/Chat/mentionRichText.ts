@@ -30,6 +30,9 @@ export function extractMentionText(root: RichTextNodeLike): ExtractedMentionText
   const mentions: string[] = []
   let text = ''
 
+  // 块的边界只在「当前行还没结束」时补一个换行；<br> 本身就是一个换行，必须原样保留，
+  // 否则 `a<br><br>b` 的空行会被吞掉。块末尾的 <br> 只是占位（如 `<div>a<br></div>`），
+  // 它产生的换行同时充当块结束，不会再多出一行。
   const appendBreak = (): void => {
     if (text.length > 0 && !text.endsWith('\n')) text += '\n'
   }
@@ -49,7 +52,7 @@ export function extractMentionText(root: RichTextNodeLike): ExtractedMentionText
         continue
       }
       if (tagName === 'BR') {
-        appendBreak()
+        text += '\n'
         continue
       }
       const isBlock = BLOCK_TAGS.has(tagName)
@@ -60,5 +63,6 @@ export function extractMentionText(root: RichTextNodeLike): ExtractedMentionText
   }
 
   walk(root)
-  return { text, mentions }
+  // 末尾的换行来自块结束或 contentEditable 的占位 <br>，不是用户内容。
+  return { text: text.replace(/\n+$/u, ''), mentions }
 }

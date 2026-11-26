@@ -77,3 +77,13 @@ test('展开逻辑已抽到可测的纯函数（递归遍历子树）', () => {
     '仍存在只遍历顶层 childNodes 的展开实现',
   )
 })
+
+test('连续 <br> 保留空行，块末尾占位 <br> 不多出一行', () => {
+  const br = () => el('BR', [])
+  assert.equal(extractMentionText(root(text('a'), br(), br(), text('b'))).text, 'a\n\nb')
+  assert.equal(extractMentionText(root(text('a'), el('DIV', [br()]), el('DIV', [text('b')]))).text, 'a\n\nb')
+  assert.equal(extractMentionText(root(el('DIV', [text('a'), br()]), el('DIV', [text('b')]))).text, 'a\nb')
+  assert.equal(extractMentionText(root(el('DIV', [text('a')]), el('DIV', [text('b')]))).text, 'a\nb')
+  assert.equal(extractMentionText(root(el('DIV', [br()]), el('DIV', [text('b')]))).text, '\nb')
+  assert.equal(extractMentionText(root(text('a'), br())).text, 'a')
+})
