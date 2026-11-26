@@ -257,27 +257,25 @@ test('sync failure is recorded without blocking login or restoration', async () 
   await store.getState().logout()
 })
 
-for (const inputTenantId of ['', '   ']) {
-  test(`login resolves the enterprise by account when the input is ${JSON.stringify(inputTenantId)}`, async () => {
+for (const inputEnterprise of ['', '   ']) {
+  // 留空企业时不再预先按账号查企业（resolve-tenant-by-account 已固定返回 410），
+  // 只把账号和密码交给登录，由企业服务在密码通过后定位企业并写进 claims。
+  test(`login leaves enterprise resolution to the password check when the input is ${JSON.stringify(inputEnterprise)}`, async () => {
     const claims = { tenant_id: 'resolved-tenant', user_id: 'member', roles: ['member'] }
     const env = environment({ responses: {
-      '/api/auth/resolve-tenant-by-account': { tenant_id: 'resolved-tenant' },
       '/api/agent/login': { token: 'login-token', claims },
       '/api/agent/whoami': claims,
-    '/api/agent/grants/sync': { ok: true },
-    '/api/agent/grants/readiness': { runtime: 'ready', experts: [] },
+      '/api/agent/grants/sync': { ok: true },
+      '/api/agent/grants/readiness': { runtime: 'ready', experts: [] },
     } })
     const store = env.load('../../stores/agentAuth').useAgentAuthStore
     await store.getState().logout()
-    assert.equal(await store.getState().login(inputTenantId, 'account', 'password'), 'authenticated')
+    assert.equal(await store.getState().login(inputEnterprise, 'account', 'password'), 'authenticated')
     assert.deepEqual(env.calls.map(({ url }) => urlPathname(url)), [
-      '/api/auth/resolve-tenant-by-account', '/api/agent/login', '/api/agent/whoami',
+      '/api/agent/login', '/api/agent/whoami',
       '/api/agent/grants/sync', '/api/agent/grants/readiness',
     ])
-    assert.deepEqual(parseJson(env.calls[0].options.body), { account: 'account' })
-    assert.deepEqual(parseJson(env.calls[1].options.body), {
-      tenant_id: 'resolved-tenant', account: 'account', password: 'password',
-    })
+    assert.deepEqual(parseJson(env.calls[0].options.body), { account: 'account', password: 'password' })
     assert.equal(store.getState().tenantId, 'resolved-tenant')
     await store.getState().logout()
   })
