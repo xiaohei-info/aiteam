@@ -266,6 +266,10 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
     }
     if (composed.text) insertPlainText(el, composed.text, at)
     if (composed.files.length > 0) onFiles?.(composed.files)
+    // 飞书等应用复制时只把内部图片引用放进剪贴板，图片本身没带过来，谁都取不到。
+    if (composed.unavailable > 0) {
+      showHint(`有 ${composed.unavailable} 张图片没有随复制带过来，请在原应用里单独复制图片再粘贴`)
+    }
     if (composed.pending.length > 0 && onFiles) {
       void Promise.all(composed.pending.map(({ name, src }) => fetchImage(src, name))).then((fetched) => {
         const ok = fetched.filter((file): file is File => file !== null)

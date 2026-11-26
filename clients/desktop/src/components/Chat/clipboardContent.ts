@@ -23,6 +23,12 @@ export interface ComposedPaste {
    * the caller fetches `src` afterwards and attaches it, or tells the user it could not.
    */
   pending: Array<{ name: string; src: string }>
+  /**
+   * Pictures the source app did not put on the clipboard at all: only a private reference such as
+   * Feishu's `native-resource://…`. Nothing can fetch them, so they get no placeholder; the caller
+   * tells the user to copy the picture on its own.
+   */
+  unavailable: number
 }
 
 /**
@@ -92,14 +98,15 @@ function isJustFileNames(plain: string, files: File[]): boolean {
 export function composePaste(input: { plain: string; parts: PastePart[]; files: File[] }): ComposedPaste {
   const { plain, parts, files } = input
   const hasHtmlImage = parts.some((part) => part.kind === 'image')
-  if (files.length === 0 && !hasHtmlImage) return { text: plain, files: [], pending: [] }
+  if (files.length === 0 && !hasHtmlImage) return { text: plain, files: [], pending: [], unavailable: 0 }
   if (!hasHtmlImage && (!plain.trim() || isJustFileNames(plain, files))) {
-    return { text: '', files: uniqueFiles(files), pending: [] }
+    return { text: '', files: uniqueFiles(files), pending: [], unavailable: 0 }
   }
 
   const taken = new Set<string>()
   const attachments: File[] = []
   const pending: ComposedPaste['pending'] = []
+  let unavailable = 0
   const attach = (file: File): string => {
     const named = renamed(file, uniqueName(file.name, taken))
     attachments.push(named)
@@ -124,6 +131,8 @@ export function composePaste(input: { plain: string; parts: PastePart[]; files: 
       const file = part.file ?? takeSpareImage()
       if (file) {
         text += attach(file)
+      } else if (!/^https?:/i.test(part.src ?? '')) {
+        unavailable += 1
       } else {
         const name = uniqueName(part.name, taken)
         pending.push({ name, src: part.src ?? '' })
@@ -139,8 +148,8 @@ export function composePaste(input: { plain: string; parts: PastePart[]; files: 
   if (rest.length > 0) text = text ? `${text}\n${rest.join('\n')}` : rest.join('\n')
 
   const words = text.replace(/\[(?:图片|文件)：[^\]]*\]/g, '').trim()
-  if (!words && pending.length === 0) return { text: '', files: attachments, pending }
-  return { text, files: attachments, pending }
+  if (!words && pending.length === 0) return { text: '', files: attachments, pending, unavailable }
+  return { text, files: attachments, pending, unavailable }
 }
 
 function uniqueFiles(files: File[]): File[] {

@@ -6,7 +6,7 @@ const png = (name: string) => new File([new Uint8Array([1, 2, 3])], name, { type
 const pdf = (name: string) => new File([new Uint8Array([4])], name, { type: 'application/pdf' })
 
 test('纯文字原样插入，不产生附件', () => {
-  assert.deepEqual(composePaste({ plain: '你好', parts: [], files: [] }), { text: '你好', files: [], pending: [] })
+  assert.deepEqual(composePaste({ plain: '你好', parts: [], files: [] }), { text: '你好', files: [], pending: [], unavailable: 0 })
 })
 
 test('只有截图时只作附件，不插占位文字', () => {
@@ -60,4 +60,16 @@ test('文字 + 不知道位置的文件：文件占位排在文字后面', () =>
 test('占位文字区分图片与文件', () => {
   assert.equal(placeholderFor('a.png', 'image/png'), '[图片：a.png]')
   assert.equal(placeholderFor('a.pdf', 'application/pdf'), '[文件：a.pdf]')
+})
+
+test('飞书输入框复制：图片只有 native-resource 内部引用，不留占位，只计数', () => {
+  const parts: PastePart[] = [
+    { kind: 'image', name: 'image.png', src: 'native-resource://sdk/image?resource_type=image&key=img_t0_x' },
+    { kind: 'text', text: '\n打工皇帝发had\n' },
+  ]
+  const result = composePaste({ plain: '\n打工皇帝发had', parts, files: [] })
+  assert.equal(result.text, '打工皇帝发had')
+  assert.equal(result.files.length, 0)
+  assert.deepEqual(result.pending, [])
+  assert.equal(result.unavailable, 1)
 })

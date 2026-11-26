@@ -63,6 +63,10 @@ test('图文一起进来：文字（含占位）插入输入框，图片/文件�
   assert.ok(source.includes('onFiles?: (files: File[]) => void'), 'MentionInput 缺少 onFiles 入参')
 })
 
+test('源应用没把图片放进剪贴板（飞书）时要提示单独复制图片', () => {
+  assert.ok(takeBody.includes('if (composed.unavailable > 0)'))
+})
+
 test('只有网址的图片会去取，取不到要提示', () => {
   assert.ok(takeBody.includes('fetchImage(src, name)'))
   assert.ok(takeBody.includes('showHint(`有 ${missed} 张图片'), '取不到的图片不能静默丢掉')
