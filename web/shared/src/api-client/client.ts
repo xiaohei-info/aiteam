@@ -140,7 +140,8 @@ export class ApiClient {
     assertOwnTierPath(this.tier, path);
     const url = `${this.baseUrl}${path}${buildQuery(options.query)}`;
     const headers = await this.buildHeaders(options);
-    if (!headers.has("Accept")) headers.set("Accept", "text/event-stream");
+    // buildHeaders 统一写死 Accept: application/json；流式默认 SSE，调用方显式传入的 Accept（如头像 image/webp）优先。
+    headers.set("Accept", options.headers?.Accept ?? "text/event-stream");
     let response: Response;
     try {
       response = await this.fetchImpl(url, { method: "GET", headers, signal: options.signal });

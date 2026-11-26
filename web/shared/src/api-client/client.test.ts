@@ -116,6 +116,19 @@ describe("ApiClient request shaping", () => {
   });
 });
 
+describe("ApiClient stream", () => {
+  it("defaults Accept to SSE but keeps a caller override (binary avatar GET)", async () => {
+    const fetchMock = vi.fn(async () => new Response("x", { status: 200 }));
+    const client = makeClient(fetchMock as unknown as typeof fetch, { getToken: () => "tok_abc" });
+    await client.stream("/api/manager/events");
+    await client.stream("/api/manager/employees/e1/avatar/content", { headers: { Accept: "image/webp" } });
+    const accepts = fetchMock.mock.calls.map(([, init]) => ((init as RequestInit).headers as Headers).get("Accept"));
+    expect(accepts).toEqual(["text/event-stream", "image/webp"]);
+    const auth = ((fetchMock.mock.calls[1]![1] as RequestInit).headers as Headers).get("Authorization");
+    expect(auth).toBe("Bearer tok_abc");
+  });
+});
+
 describe("ApiClient cross-tier guard (02 §10.1)", () => {
   it("rejects calling another tier prefix", async () => {
     const fetchMock = vi.fn();
