@@ -322,6 +322,7 @@ export function ExpertsPage(): ReactNode {
           onClose={() => setDetailId(null)}
           onSaved={onSaved}
           onAvatarChanged={onAvatarChanged}
+          avatarUrl={avatarOverrides[detailId]}
         />
       )}
     </VStack>
