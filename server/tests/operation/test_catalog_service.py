@@ -19,6 +19,7 @@ from operation_service.catalog_avatar import (
     parse_avatar_upload,
     validate_avatar_value,
 )
+from operation_service.template_avatar_convert import convert
 from operation_service.template_avatar_store import TemplateAvatarStore
 from shared.avatar_image import MAX_AVATAR_BYTES
 from operation_service.catalog_gateway import CatalogManagerGateway
@@ -900,3 +901,33 @@ def test_removing_an_expert_still_referenced_by_rules_is_refused(service):
     entry = service._repo.get(CatalogType.SOLUTION_TEMPLATE, "sol-growth")
     assert [b["template_id"] for b in entry.payload["expert_bindings"]] == ["tpl-cmo", "tpl-data", "tpl-ops"]
 
+
+
+def test_upload_clears_legacy_inline_avatar_url_from_payload(service, tmp_path):
+    """旧模板 payload 里残留的内联 avatar_url 必须在换头像时清掉，否则转换脚本会用旧图覆盖新图。"""
+    service.register_expert_template(_expert())
+    repo = service._repo
+    legacy = repo.get(CatalogType.EXPERT_TEMPLATE, "tpl-cmo")
+    repo.update(legacy, payload={**legacy.payload, "avatar_url": _image_data_url(color=(9, 9, 9))})
+
+    uploaded = service.update_entry(CatalogType.EXPERT_TEMPLATE, "tpl-cmo", {"avatar_url": _image_data_url(color=(250, 2, 3))})
+
+    assert uploaded.avatar_version == 1
+    stored = repo.get(CatalogType.EXPERT_TEMPLATE, "tpl-cmo")
+    assert "avatar_url" not in stored.payload
+    report = convert(repo, TemplateAvatarStore(tmp_path))
+    assert report == {"converted": [], "dropped": [], "kept": [], "failed": [], "dry_run": False}
+    data, version, _ = service.read_template_avatar("tpl-cmo")
+    assert version == 1 and data == (tmp_path / "template-avatars" / "tpl-cmo.webp").read_bytes()
+
+
+def test_delete_avatar_also_clears_legacy_inline_avatar_url(service):
+    service.register_expert_template(_expert())
+    repo = service._repo
+    legacy = repo.get(CatalogType.EXPERT_TEMPLATE, "tpl-cmo")
+    repo.update(legacy, payload={**legacy.payload, "avatar_url": _image_data_url()})
+
+    cleared = service.update_entry(CatalogType.EXPERT_TEMPLATE, "tpl-cmo", {"avatar_url": ""})
+
+    assert cleared.avatar_url == "" and cleared.avatar_version is None
+    assert "avatar_url" not in repo.get(CatalogType.EXPERT_TEMPLATE, "tpl-cmo").payload

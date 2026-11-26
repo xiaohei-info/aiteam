@@ -292,6 +292,8 @@ def _derive_snapshot_version(
             "origin", "copied_from_employee_id",
             # 目录状态是管理端的只读视图，目录变化不能让员工配置指纹变动。
             "skill_status", "connector_status",
+            # 头像是只读投影，有独立的 avatar_sync_version 通道；换头像不该触发配置重新同步。
+            "avatar_url",
         },
     )
     payload["knowledge_refs"] = sorted(knowledge_refs)

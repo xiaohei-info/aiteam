@@ -441,10 +441,12 @@ class CatalogService:
             raise ValidationProblem("talent market profile fields apply to expert templates only")
         avatar_write: AvatarFile | None = None
         avatar_delete = False
+        avatar_touched = False
         if catalog_type == CatalogType.EXPERT_TEMPLATE and "avatar_url" in changes:
             changes = dict(changes)
             avatar = self._prepare_avatar(changes.pop("avatar_url"))
             current = entry.payload or {}
+            avatar_touched = isinstance(avatar, AvatarFile) or avatar is None
             if avatar is None and avatar_version(current):
                 changes.update(avatar_version=None, avatar_sha256=None)
                 avatar_delete = True
@@ -472,8 +474,12 @@ class CatalogService:
                 for idx, tid in enumerate(payload_updates["expert_template_ids"], start=1)
             ]
         top_updates = {k: v for k, v in changes.items() if k in _top_fields}
-        if payload_updates:
+        if payload_updates or avatar_touched:
             new_payload = {**(entry.payload or {}), **payload_updates, "updated_at": _now_iso()}
+            # 旧模板 payload 里的内联 avatar_url（data URL）已被文件存储取代，换/删头像时必须一并清掉：
+            # 否则转换脚本（template_avatar_convert）还会把这个旧图写回文件并把版本号再加一，覆盖新头像。
+            if avatar_touched:
+                new_payload.pop("avatar_url", None)
             top_updates['payload'] = new_payload
         # 行业方案编辑后重新校验协调专家完整性。
         if (

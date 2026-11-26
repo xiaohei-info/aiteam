@@ -45,3 +45,19 @@ def test_convert_moves_data_url_to_file_and_drops_legacy_values(tmp_path):
 
     again = convert(repo, store)
     assert again["converted"] == [] and again["dropped"] == []
+
+
+def test_convert_keeps_newer_uploaded_avatar_and_only_drops_stale_key(tmp_path):
+    """部署后运营先上传了新头像，再跑脚本：必须保留当前头像，不被 payload 里的旧 data URL 覆盖。"""
+    repo = CatalogRepository()
+    repo.create(_entry("uploaded", {"avatar_url": _png(), "avatar_version": 3, "avatar_sha256": "sha-new"}))
+    store = TemplateAvatarStore(tmp_path)
+    store.write("uploaded", b"RIFFnew-avatar-bytes")
+
+    report = convert(repo, store)
+
+    assert report["kept"] == ["uploaded"] and report["converted"] == [] and not report["failed"]
+    payload = repo.get(CatalogType.EXPERT_TEMPLATE, "uploaded").payload
+    assert "avatar_url" not in payload
+    assert payload["avatar_version"] == 3 and payload["avatar_sha256"] == "sha-new"
+    assert store.read("uploaded") == b"RIFFnew-avatar-bytes"
