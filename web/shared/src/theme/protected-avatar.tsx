@@ -54,10 +54,16 @@ function acquireAvatar(client: AvatarStreamClient, src: string): AvatarEntry {
       const response = await client.stream(src, { headers: { Accept: "image/webp" } });
       const blob = await response.blob();
       // 使用者在取图期间全部卸载了：不再造 objectURL，省掉一次没人 revoke 的泄漏。
-      if (entry.refs <= 0) return undefined;
+      if (entry.refs <= 0) {
+        forgetAvatar(client, src, entry);
+        return undefined;
+      }
       entry.objectUrl = URL.createObjectURL(blob);
       return entry.objectUrl;
     } catch {
+      // 失败不进缓存：401、网络抖动、Manager 502 都会被整页记成「这个头像不存在」，
+      // 只要还有一个实例挂着就再也不重试。删掉后下次挂载自然重取。
+      forgetAvatar(client, src, entry);
       return undefined;
     }
   })();
@@ -65,11 +71,16 @@ function acquireAvatar(client: AvatarStreamClient, src: string): AvatarEntry {
   return entry;
 }
 
+/** 只删自己那一条：期间可能已经有新的 entry 顶上来（失败后重挂载）。 */
+function forgetAvatar(client: AvatarStreamClient, src: string, entry: AvatarEntry): void {
+  const entries = avatarCaches.get(client);
+  if (entries?.get(src) === entry) entries.delete(src);
+}
+
 function releaseAvatar(client: AvatarStreamClient, src: string, entry: AvatarEntry): void {
   entry.refs -= 1;
   if (entry.refs > 0) return;
-  const entries = avatarCaches.get(client);
-  if (entries?.get(src) === entry) entries.delete(src);
+  forgetAvatar(client, src, entry);
   if (entry.objectUrl) {
     URL.revokeObjectURL(entry.objectUrl);
     entry.objectUrl = undefined;
