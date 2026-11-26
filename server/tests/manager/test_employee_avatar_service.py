@@ -1,106 +1,161 @@
+"""员工头像：每员工一个固定文件，表只存元数据；版本只在内容变化时 +1。"""
+
 from __future__ import annotations
 
 import base64
+from dataclasses import replace
 from datetime import datetime, timezone
+from io import BytesIO
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
-from manager_service.employee_avatar_service import decode_avatar
-from manager_service.employee_avatar_service import parse_catalog_avatar_url
-from manager_service.employee_avatar_service import EmployeeAvatarService
-from manager_service.employee_avatar_repository import EmployeeAvatarRepository
-from ._fake_router import FakeCursor, FakeRouter, ctx
-from shared.errors import RequestTooLarge
+from manager_service.employee_avatar_repository import EmployeeAvatarRow
+from manager_service.employee_avatar_service import (
+    EmployeeAvatarService,
+    TemplateAvatarLocked,
+    avatar_content_path,
+    avatar_projection,
+)
+from shared.errors import NotFound
 
+from ._fake_router import ctx
 
-GIF = base64.b64decode("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7")
-PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
-JPEG = base64.b64decode("/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAUDBAQEAwUEBAQFBQUGBwwIBwcHBw8LCwkMEQ8SEhEPERETFhwXExQaFRERGCEYGh0dHx8fExciJCIeJBweHx7/2wBDAQUFBQcGBw4ICA4eFBEUHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh7/wAARCAABAAEDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGJqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDyyiiivzo/ss//2Q==")
-
-
-def test_decode_avatar_accepts_allowed_signature():
-    assert decode_avatar("image/png", base64.b64encode(PNG).decode()) == PNG
-    assert decode_avatar("image/jpeg", base64.b64encode(JPEG).decode()) == JPEG
+EMPLOYEE = "11111111-1111-1111-1111-111111111111"
+OTHER = "22222222-2222-2222-2222-222222222222"
 
 
-def test_decode_avatar_rejects_mime_spoofing():
+def _image(fmt: str = "PNG", color=(10, 20, 30), frames: int = 1) -> bytes:
+    out = BytesIO()
+    images = [Image.new("RGB", (6, 6), (color[0], color[1], (color[2] + i * 70) % 256)) for i in range(frames)]
+    images[0].save(out, format=fmt, save_all=frames > 1, append_images=images[1:])
+    return out.getvalue()
+
+
+class MemoryRepository:
+    """In-memory stand-in for EmployeeAvatarRepository (same upsert/version semantics)."""
+
+    def __init__(self, origins: dict[str, str]):
+        self.origins = origins
+        self.rows: dict[str, EmployeeAvatarRow] = {}
+        self.fail_upsert = False
+
+    def get(self, _ctx, employee_id):
+        return self.rows.get(employee_id)
+
+    def employee_origin(self, _ctx, employee_id):
+        return self.origins.get(employee_id)
+
+    def upsert(self, _ctx, *, employee_id, storage_key, mime_type, byte_size, sha256):
+        if self.fail_upsert:
+            raise RuntimeError("metadata unavailable")
+        previous = self.rows.get(employee_id)
+        version = 1 if previous is None else previous.version + (previous.sha256 != sha256)
+        row = EmployeeAvatarRow(employee_id, storage_key, mime_type, byte_size, sha256, version, datetime.now(timezone.utc))
+        self.rows[employee_id] = row
+        return row
+
+
+@pytest.fixture
+def repo():
+    return MemoryRepository({EMPLOYEE: "custom", OTHER: "recruited"})
+
+
+@pytest.fixture
+def service(repo, tmp_path):
+    return EmployeeAvatarService(repo, tmp_path)
+
+
+def _file(tmp_path: Path, employee_id: str = EMPLOYEE) -> Path:
+    return tmp_path / "avatars" / ctx().tenant_id / f"{employee_id}.webp"
+
+
+def _upload(service, employee_id=EMPLOYEE, fmt="PNG", color=(10, 20, 30)):
+    mime = {"PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "image/webp", "GIF": "image/gif"}[fmt]
+    return service.update(ctx(), employee_id=employee_id, mime_type=mime,
+                          data=base64.b64encode(_image(fmt, color)).decode())
+
+
+def test_upload_writes_one_fixed_file_and_bumps_version_only_on_change(service, tmp_path):
+    first = _upload(service)
+    assert first.version == 1
+    assert _file(tmp_path).read_bytes()[:4] == b"RIFF"
+    assert _upload(service).version == 1  # same bytes → same version
+    second = _upload(service, color=(200, 0, 0))
+    assert second.version == 2
+    assert [p.name for p in (tmp_path / "avatars").rglob("*") if p.is_file()] == [f"{EMPLOYEE}.webp"]
+    content = service.content(ctx(), EMPLOYEE)
+    assert content.version == 2 and content.mime_type == "image/webp" and content.sha256 == second.sha256
+
+
+def test_template_employees_cannot_upload(service, tmp_path):
+    with pytest.raises(TemplateAvatarLocked) as exc:
+        _upload(service, employee_id=OTHER)
+    assert exc.value.status == 409
+    assert not _file(tmp_path, OTHER).exists()
+
+
+def test_upload_unknown_employee_and_unsafe_id(service, tmp_path):
+    with pytest.raises(NotFound):
+        _upload(service, employee_id="33333333-3333-3333-3333-333333333333")
+    with pytest.raises(Exception, match="valid UUID"):
+        service.update(ctx(), employee_id="../../escape", mime_type="image/png", data="AAAA")
+    assert not list(tmp_path.rglob("*.webp"))
+
+
+def test_upload_rejects_spoofed_and_unsupported_input(service):
+    jpeg = base64.b64encode(_image("JPEG")).decode()
     with pytest.raises(Exception) as exc:
-        decode_avatar("image/png", base64.b64encode(JPEG).decode())
+        service.update(ctx(), employee_id=EMPLOYEE, mime_type="image/png", data=jpeg)
+    assert exc.value.code == "invalid_avatar"
+    with pytest.raises(Exception) as exc:
+        service.update(ctx(), employee_id=EMPLOYEE, mime_type="image/svg+xml", data=jpeg)
     assert exc.value.code == "invalid_avatar"
 
 
-def test_decode_avatar_rejects_oversized_payload():
-    with pytest.raises(RequestTooLarge):
-        decode_avatar("image/png", base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"x" * (5 * 1024 * 1024)).decode())
+def test_seed_from_template_converts_gif_to_static_webp(service, tmp_path):
+    row = service.seed_from_template(ctx(), employee_id=OTHER, data=_image("GIF", frames=3))
+    assert row.version == 1
+    with Image.open(_file(tmp_path, OTHER)) as image:
+        assert image.format == "WEBP" and getattr(image, "n_frames", 1) == 1
 
 
-def test_update_stores_random_key_and_increments_metadata(tmp_path: Path):
-    employee_id = "11111111-1111-1111-1111-111111111111"
-    avatar_row = (employee_id, "http://manager/avatar", "avatars/key.webp", "image/webp", len(PNG), "hash", 2, datetime.now(timezone.utc))
-    router = FakeRouter().queue(FakeCursor(fetchone=(1,))).queue(FakeCursor(fetchone=avatar_row)).queue(FakeCursor(fetchone=avatar_row))
-    service = EmployeeAvatarService(EmployeeAvatarRepository(router), tmp_path, "http://manager")
-    result = service.update(ctx(), employee_id=employee_id, filename="avatar.png", mime_type="image/png", data=base64.b64encode(PNG).decode())
-    assert result["version"] == 2
-    assert (tmp_path / "avatars" / ctx().tenant_id / employee_id).exists()
-
-
-def test_update_rejects_unsafe_employee_id_before_storage(tmp_path: Path):
-    router = FakeRouter()
-    service = EmployeeAvatarService(EmployeeAvatarRepository(router), tmp_path, "http://manager")
-    with pytest.raises(Exception, match="valid UUID"):
-        service.update(ctx(), employee_id="../../escape", filename="avatar.png", mime_type="image/png", data=base64.b64encode(PNG).decode())
-    assert not list(tmp_path.rglob("*"))
-
-
-def test_update_removes_object_when_metadata_write_fails(tmp_path: Path):
-    class FailingRepository:
-        def employee_exists(self, _ctx, _employee_id):
-            return True
-
-        def get(self, _ctx, _employee_id):
-            return None
-
-        def upsert(self, _ctx, **_kwargs):
-            raise RuntimeError("metadata unavailable")
-
-    service = EmployeeAvatarService(FailingRepository(), tmp_path, "http://manager")
+def test_metadata_failure_restores_previous_file(service, repo, tmp_path):
+    _upload(service)
+    before = _file(tmp_path).read_bytes()
+    repo.fail_upsert = True
     with pytest.raises(RuntimeError, match="metadata unavailable"):
-        service.update(
-            ctx(),
-            employee_id="11111111-1111-1111-1111-111111111111",
-            filename="avatar.png",
-            mime_type="image/png",
-            data=base64.b64encode(PNG).decode(),
-        )
-    assert list((tmp_path / "avatars").rglob("*.webp")) == []
-    assert list((tmp_path / "avatars").rglob("*.tmp")) == []
+        _upload(service, color=(0, 255, 0))
+    assert _file(tmp_path).read_bytes() == before
+    assert not list(tmp_path.rglob("*.tmp"))
 
 
-def test_parse_catalog_avatar_url_accepts_only_raster_data_urls():
-    encoded = base64.b64encode(PNG).decode()
-    assert parse_catalog_avatar_url(f"data:image/png;base64,{encoded}") == ("image/png", encoded)
-    assert parse_catalog_avatar_url("  data:image/webp;base64,AAAA  ") == ("image/webp", "AAAA")
+def test_metadata_failure_on_first_write_removes_file(service, repo, tmp_path):
+    repo.fail_upsert = True
+    with pytest.raises(RuntimeError):
+        _upload(service)
+    assert not _file(tmp_path).exists()
 
 
-def test_parse_catalog_avatar_url_converts_animated_gif_to_static_png():
-    # Operator 允许 gif；企业头像只存静态栅格图，取首帧转 PNG。
-    gif = base64.b64encode(GIF).decode()
-    parsed = parse_catalog_avatar_url(f"data:image/gif;base64,{gif}")
-    assert parsed is not None
-    mime_type, encoded = parsed
-    assert mime_type == "image/png"
-    assert decode_avatar(mime_type, encoded).startswith(b"\x89PNG\r\n\x1a\n")
+def test_copy_gives_target_its_own_file(service, repo, tmp_path):
+    _upload(service)
+    service.copy(ctx(), source_id=EMPLOYEE, target_id=OTHER)
+    assert _file(tmp_path, OTHER).read_bytes() == _file(tmp_path).read_bytes()
+    assert repo.rows[OTHER].version == 1
+    service.copy(ctx(), source_id="33333333-3333-3333-3333-333333333333", target_id=EMPLOYEE)  # no avatar: no-op
 
 
-@pytest.mark.parametrize("value", [
-    "",
-    None,
-    "https://legacy.example/avatar.png",
-    "/api/manager/employees/x/avatar/content",
-    "data:image/gif;base64,****",
-    "data:image/png;base64,****",
-    "javascript:alert(1)",
-])
-def test_parse_catalog_avatar_url_rejects_legacy_or_unsupported_values(value):
-    assert parse_catalog_avatar_url(value) is None
+def test_content_missing_file_is_none(service, repo, tmp_path):
+    _upload(service)
+    _file(tmp_path).unlink()
+    assert service.content(ctx(), EMPLOYEE) is None
+    assert service.content(ctx(), OTHER) is None
+
+
+def test_projection_is_relative_path_with_version(repo):
+    assert avatar_projection(None) == (None, 0)
+    row = EmployeeAvatarRow(EMPLOYEE, "k", "image/webp", 1, "s", 3, datetime.now(timezone.utc))
+    assert avatar_projection(row) == (f"/api/manager/employees/{EMPLOYEE}/avatar/content?v=3", 3)
+    assert avatar_content_path(EMPLOYEE, 3).startswith("/api/manager/")
+    assert replace(row, version=4).version == 4

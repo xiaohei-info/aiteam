@@ -102,3 +102,24 @@ def test_post_idempotency_header_sent():
     client.post("/write", json={"a": 1}, idempotency_key="key-123")
     assert seen["idem"] == "key-123"
     client.close()
+
+
+def test_get_bytes_streams_with_a_hard_size_limit():
+    from shared.errors import AppError
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/img":
+            return httpx.Response(200, content=b"abc", headers={"x-avatar-version": "2"})
+        if request.url.path == "/big":
+            return httpx.Response(200, content=b"x" * 20)
+        return httpx.Response(404, json={"type": "t", "title": "Not Found", "status": 404, "code": "not_found"},
+                              headers={"content-type": "application/problem+json"})
+
+    client = ServiceClient("https://upstream.local", transport=httpx.MockTransport(handler))
+    data, headers = client.get_bytes("/img", max_bytes=10)
+    assert data == b"abc" and headers["x-avatar-version"] == "2"
+    with pytest.raises(AppError, match="exceeds"):
+        client.get_bytes("/big", max_bytes=10)
+    with pytest.raises(NotFound):
+        client.get_bytes("/gone", max_bytes=10)
+    client.close()

@@ -21,6 +21,7 @@ import logging
 from dataclasses import dataclass
 
 from shared.contracts.enums import EnterpriseRole
+from shared.contracts.crosstier import ExpertTemplateDetail
 from shared.contracts.tenancy import TenantContext
 from shared.db import PgTenantRouter
 from shared.errors import Conflict, Forbidden, NotFound
@@ -30,7 +31,6 @@ from shared.solution_authoring.orchestration import (
     validate_member_refs,
 )
 
-from .employee_avatar_service import parse_catalog_avatar_url
 from .employee_config_repository import EmployeeConfigRepository, EmployeeConfigRow
 from .operator_catalog import OperatorCatalogPort
 from .platform_skill_service import PlatformSkillService
@@ -217,9 +217,7 @@ class RecruitService:
             self._orders.update(ctx, failed)
             raise
 
-        _seed_template_avatars(
-            self._avatars, ctx, [(row.employee_id, getattr(template, "avatar_url", ""))],
-        )
+        _seed_template_avatars(self._catalog, self._avatars, ctx, [(row.employee_id, template)])
 
         return RecruitExpertResult(
             employee_id=row.employee_id,
@@ -366,7 +364,7 @@ class RecruitService:
             )
             result, avatar_seeds = writer._publish_solution(ctx, req, package, prepared, coordinator_template_id)
         # 头像布种放在发布事务之外：失败/超时不影响已提交的招募与方案应用结果。
-        _seed_template_avatars(self._avatars, ctx, avatar_seeds)
+        _seed_template_avatars(self._catalog, self._avatars, ctx, avatar_seeds)
         return result
 
     def _publish_solution(self, ctx, req, package, prepared, coordinator_template_id):
@@ -380,7 +378,7 @@ class RecruitService:
             raise Conflict("solution instance already applied in this tenant")
         expert_results = []
         employee_ids = []
-        avatar_seeds: list[tuple[str, str]] = []
+        avatar_seeds: list[tuple[str, ExpertTemplateDetail]] = []
         match_audits = []
         coordinator_employee_id = None
         template_employees: dict[str, str] = {}
@@ -413,7 +411,7 @@ class RecruitService:
                 )
                 row = self._employees.transition_status(ctx, employee_id=row.employee_id, from_status="draft", to_status="active") or row
                 order_out = _order_out(self._orders.update(ctx, order.mark_succeeded(row.employee_id)))
-                avatar_seeds.append((row.employee_id, getattr(template, "avatar_url", "")))
+                avatar_seeds.append((row.employee_id, template))
                 match_audits.append(_match_detail(recommended, match))
             employee_ids.append(row.employee_id)
             template_employees[template.template_id] = row.employee_id
@@ -788,27 +786,25 @@ def _track_provision(
     )
 
 
-def _seed_template_avatars(avatars, ctx: TenantContext, seeds: list[tuple[str, str]]) -> None:
-    """把 Operator 模板头像布种成企业侧员工头像（best-effort）。
+def _seed_template_avatars(catalog, avatars, ctx: TenantContext, seeds) -> None:
+    """招募/方案应用新建员工后，把 Operator 模板头像复制成员工自己的头像文件（初始一致）。
 
-    模板头像是规范化的本地 data URL；招募/方案应用成功后按模板写一份企业头像，
-    三端才有图可显示。任何失败只记 warning：员工已建好，头像可由管理员后补。
+    只在新建员工时复制一次；之后模板换头像不影响已招募员工。best-effort：员工已建好，
+    拉取/写入失败只记 warning（该员工显示首字占位）。
     """
     if avatars is None:
         return
-    for employee_id, avatar_url in seeds:
-        parsed = parse_catalog_avatar_url(avatar_url)
-        if parsed is None:
+    for employee_id, template in seeds:
+        if not getattr(template, "avatar_version", None):
             continue
-        mime_type, encoded = parsed
         try:
-            avatars.update(
-                ctx, employee_id=employee_id, filename="template-avatar",
-                mime_type=mime_type, data=encoded,
-            )
+            pulled = catalog.pull_expert_template_avatar(template_id=template.template_id, tenant_id=ctx.tenant_id)
+            if pulled is not None:
+                avatars.seed_from_template(ctx, employee_id=employee_id, data=pulled[0])
         except Exception:
             logger.warning(
-                "recruit template avatar seeding failed", extra={"employee_id": employee_id},
+                "recruit template avatar copy failed",
+                extra={"employee_id": employee_id, "template_id": template.template_id},
             )
 
 

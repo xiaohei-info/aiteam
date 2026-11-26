@@ -26,19 +26,15 @@ def _request(db_url="postgresql://fake/business"):
 
 
 def test_copy_avatar_rejects_a_target_key_that_escapes_the_storage_root(tmp_path):
-    source_key = f"avatars/{T}/{SRC}/a.webp"
     row = EmployeeAvatarRow(
-        employee_id=SRC, avatar_url="http://m/a", storage_key=source_key, mime_type="image/webp",
+        employee_id=SRC, storage_key=f"avatars/{T}/{SRC}.webp", mime_type="image/webp",
         byte_size=3, sha256="h", version=1, updated_at=datetime(2026, 11, 13, tzinfo=UTC),
     )
     repo = SimpleNamespace(get=lambda ctx, employee_id: row, upsert=lambda *a, **k: pytest.fail("不应写入"))
-    # 源文件在根目录之内；租户 id 带 ".." 使目标 key 解析到根目录之外。
-    root = tmp_path / "root"
-    (root / source_key).parent.mkdir(parents=True)
-    (root / source_key).write_bytes(b"img")
+    # 租户 id 带 ".." 使头像路径解析到存储根目录之外。
     evil = TenantContext(tenant_id="../../escape", user_id="u1", roles=["owner"])
     with pytest.raises(InvalidAvatar):
-        EmployeeAvatarService(repo, root, "http://manager").copy(evil, source_id=SRC, target_id=DST)  # type: ignore[arg-type]
+        EmployeeAvatarService(repo, tmp_path / "root").copy(evil, source_id=SRC, target_id=DST)  # type: ignore[arg-type]
 
 
 def test_unique_slug_falls_back_to_a_random_suffix_when_candidates_run_out():
@@ -65,14 +61,15 @@ def test_avatar_service_requires_business_db():
     assert "DB_URL" in str(exc.value)
 
 
-def test_avatar_service_is_built_once_with_the_request_base_url(tmp_path):
+def test_avatar_service_is_built_once_per_app(tmp_path):
     request = _request()
     with patch.object(routes_employee, "PgTenantRouter"), \
             patch.object(routes_employee, "manager_storage_root", return_value=tmp_path), \
             patch.object(routes_employee, "ensure_storage_root", return_value=tmp_path):
         first = routes_employee._avatar_service(request)
         second = routes_employee._avatar_service(request)
-    assert first is second and first._public_base == "http://manager"
+    # 不再从请求 Host 头推导公网地址：投影只发同源相对路径。
+    assert first is second and not hasattr(first, "_public_base")
 
 
 def test_copy_service_is_built_once_from_the_shared_services():

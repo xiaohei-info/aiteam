@@ -17,12 +17,18 @@ from __future__ import annotations
 import re
 
 from shared.avatar_image import MAX_AVATAR_DATA_URL_LENGTH, AvatarImageError, decode_data_url
-from shared.errors import ValidationProblem
+from shared.errors import NotFound, ValidationProblem
 
 from .template_avatar_store import template_avatar_path
 
 AVATAR_MAX_DATA_URL_LENGTH = MAX_AVATAR_DATA_URL_LENGTH
 _OWN_CONTENT_PATH = re.compile(r"^/api/operation/catalog/expert-templates/[^/?#]+/avatar/content(?:\?v=\d+)?$")
+
+
+class TemplateAvatarNotFound(NotFound):
+    """The template exists (and is visible) but has no avatar. Stable code for service callers."""
+
+    code = "template_avatar_not_found"
 
 
 class KeepAvatar:

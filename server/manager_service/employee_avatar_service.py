@@ -1,66 +1,43 @@
-"""Validated employee avatar upload orchestration."""
+"""Employee avatar files: one file per employee, metadata (version/sha256) in ``employee_avatar``.
+
+- File path is fixed: ``avatars/{tenant_id}/{employee_id}.webp`` under the Manager storage root;
+  it is overwritten in place, never one random file per upload.
+- ``version`` starts at 1 and increases only when the bytes actually change; every tier caches
+  avatar bytes by (employee_id, version).
+- Recruit / solution apply copy the Operator template avatar once (initial consistency).
+  Employees that come from a template (recruited / solution / copied) keep that avatar; uploads
+  are only for employees the enterprise created itself (``origin = 'custom'``).
+"""
 
 from __future__ import annotations
 
-import base64
-import binascii
-import hashlib
-import os
-import re
-import secrets
-import shutil
-import tempfile
-from io import BytesIO
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 from uuid import UUID
 
-from shared.contracts.tenancy import TenantContext
-from shared.errors import AppError, NotFound, RequestTooLarge
-
-from .employee_avatar_repository import EmployeeAvatarRepository
-
-MAX_AVATAR_BYTES = 5 * 1024 * 1024
-ALLOWED_MIMES = frozenset({"image/jpeg", "image/png", "image/webp"})
-# Operator 目录模板的 avatar_url 是规范化的本地 data URL；这里只解析本端能落盘的格式。
-_CATALOG_AVATAR_DATA_URL = re.compile(
-    r"^data:(image/(?:jpeg|png|webp|gif));base64,([A-Za-z0-9+/]+={0,2})$"
+from shared.avatar_image import (
+    AVATAR_MIME_TYPE,
+    AvatarFile,
+    AvatarImageError,
+    contained_path,
+    decode_base64_image,
+    normalize_avatar,
+    write_private_file,
 )
+from shared.contracts.tenancy import TenantContext
+from shared.errors import AppError, Conflict, NotFound
+
+from .employee_avatar_repository import EmployeeAvatarRepository, EmployeeAvatarRow
 
 
-def _gif_first_frame_as_png(encoded: str) -> tuple[str, str] | None:
-    """动图头像转静态 PNG：企业头像只收静态栅格图（DB 约束 + 展示稳定性）。"""
-    try:
-        from PIL import Image
-    except ImportError:
-        return None
-    try:
-        with Image.open(BytesIO(base64.b64decode(encoded, validate=True))) as image:
-            frame = image.convert("RGBA")
-        out = BytesIO()
-        frame.save(out, format="PNG")
-        return "image/png", base64.b64encode(out.getvalue()).decode("ascii")
-    except Exception:
-        return None
+class InvalidAvatar(AppError):
+    status, code, title = 400, "invalid_avatar", "Invalid Avatar"
 
 
-def parse_catalog_avatar_url(value: str) -> tuple[str, str] | None:
-    """把 Operator 模板头像 data URL 解析成 ``(mime_type, base64)``。
+class TemplateAvatarLocked(Conflict):
+    """Employees recruited from a template keep the template avatar (one avatar per expert)."""
 
-    - jpeg / png / webp 原样返回；
-    - gif 取首帧转 PNG（Operator 允许 gif，企业侧只存静态栅格图）；
-    - 旧模板可能存 HTTP/相对路径（本端拿不到字节），一律返回 ``None``，由企业管理员
-      在员工配置页自行上传，而不是把外部 URL 当成头像写进企业库。
-    """
-    if not isinstance(value, str):
-        return None
-    match = _CATALOG_AVATAR_DATA_URL.fullmatch(value.strip())
-    if match is None:
-        return None
-    mime_type, encoded = match.group(1), match.group(2)
-    if mime_type == "image/gif":
-        return _gif_first_frame_as_png(encoded)
-    return (mime_type, encoded) if mime_type in ALLOWED_MIMES else None
+    code = "employee_avatar_locked"
 
 
 def normalize_employee_id(value: str) -> str:
@@ -70,148 +47,96 @@ def normalize_employee_id(value: str) -> str:
         raise InvalidAvatar("employee_id must be a valid UUID") from exc
 
 
-class InvalidAvatar(AppError):
-    status, code, title = 400, "invalid_avatar", "Invalid Avatar"
+def avatar_content_path(employee_id: str, version: int) -> str:
+    """Same-origin relative content path; ``v`` changes whenever the avatar bytes change."""
+    return f"/api/manager/employees/{employee_id}/avatar/content?v={version}"
 
 
-class UnsupportedAvatarType(AppError):
-    status, code, title = 415, "unsupported_avatar_type", "Unsupported Avatar Type"
+def avatar_projection(row: EmployeeAvatarRow | None) -> tuple[str | None, int]:
+    """(avatar_url, avatar_version) for snapshots / authorized config; (None, 0) = no avatar."""
+    if row is None:
+        return None, 0
+    return avatar_content_path(row.employee_id, row.version), row.version
 
 
-def _signature_matches(mime: str, raw: bytes) -> bool:
-    return {
-        "image/jpeg": raw.startswith(b"\xff\xd8\xff"),
-        "image/png": raw.startswith(b"\x89PNG\r\n\x1a\n"),
-        "image/webp": len(raw) >= 12 and raw[:4] == b"RIFF" and raw[8:12] == b"WEBP",
-    }.get(mime, False)
-
-
-def decode_avatar(mime_type: str, encoded: str) -> bytes:
-    if mime_type not in ALLOWED_MIMES:
-        raise UnsupportedAvatarType("only JPEG, PNG and WebP avatars are supported")
-    if not isinstance(encoded, str) or not encoded:
-        raise InvalidAvatar("avatar data is required")
-    try:
-        raw = base64.b64decode(encoded, validate=True)
-    except (ValueError, binascii.Error) as exc:
-        raise InvalidAvatar("avatar data must be valid base64") from exc
-    if not raw:
-        raise InvalidAvatar("avatar data is empty")
-    if len(raw) > MAX_AVATAR_BYTES:
-        raise RequestTooLarge("avatar must be 5 MB or smaller")
-    if not _signature_matches(mime_type, raw):
-        raise InvalidAvatar("avatar content does not match mime_type")
-    return raw
-
-
-def normalize_image(mime_type: str, raw: bytes) -> tuple[bytes, str]:
-    """Decode and normalize with Pillow when available.
-
-    Pillow is an optional runtime acceleration for minimal test installations;
-    signature validation remains enforced when it is unavailable.
-    """
-    try:
-        from PIL import Image
-    except ImportError:
-        return raw, mime_type
-    try:
-        with Image.open(BytesIO(raw)) as image:
-            image.verify()
-        with Image.open(BytesIO(raw)) as image:
-            image = image.convert("RGBA")
-            out = BytesIO()
-            image.save(out, format="WEBP", quality=85, method=6)
-            normalized = out.getvalue()
-    except Exception as exc:
-        raise InvalidAvatar("avatar image cannot be decoded") from exc
-    if not normalized or len(normalized) > MAX_AVATAR_BYTES:
-        raise RequestTooLarge("normalized avatar must be 5 MB or smaller")
-    return normalized, "image/webp"
+@dataclass(frozen=True)
+class AvatarContent:
+    data: bytes
+    version: int
+    sha256: str
+    mime_type: str = AVATAR_MIME_TYPE
 
 
 class EmployeeAvatarService:
-    def __init__(self, repository: EmployeeAvatarRepository, storage_root: Path, public_base_url: str | None = None):
+    def __init__(self, repository: EmployeeAvatarRepository, storage_root: Path):
         self._repo = repository
-        self._root = storage_root.resolve()
-        self._public_base = (public_base_url or "").rstrip("/")
+        self._root = Path(storage_root).resolve()
 
-    def _managed_path(self, storage_key: str) -> Path | None:
-        path = (self._root / storage_key).resolve()
+    def _path(self, ctx: TenantContext, employee_id: str) -> Path:
         try:
-            path.relative_to(self._root)
-        except ValueError:
-            return None
-        return path
+            return contained_path(self._root, f"avatars/{ctx.tenant_id}/{employee_id}.webp")
+        except ValueError as exc:
+            raise InvalidAvatar("avatar path escapes the storage root") from exc
 
-    def update(self, ctx: TenantContext, *, employee_id: str, filename: str, mime_type: str, data: str) -> dict[str, Any]:
-        employee_id = normalize_employee_id(employee_id)
-        raw = decode_avatar(mime_type, data)
-        raw, stored_mime = normalize_image(mime_type, raw)
-        if not self._repo.employee_exists(ctx, employee_id):
-            raise NotFound("employee not found in this tenant")
+    def _store(self, ctx: TenantContext, employee_id: str, avatar: AvatarFile) -> EmployeeAvatarRow:
+        """Write the file first, then the metadata: whoever reads a new version finds its bytes."""
         previous = self._repo.get(ctx, employee_id)
-        digest = hashlib.sha256(raw).hexdigest()
-        key = f"avatars/{ctx.tenant_id}/{employee_id}/{secrets.token_urlsafe(24)}.webp"
-        path = self._managed_path(key)
-        if path is None:
-            raise InvalidAvatar("avatar storage path is invalid")
-        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        fd, temporary_name = tempfile.mkstemp(prefix=".avatar-", suffix=".tmp", dir=path.parent)
-        os.close(fd)
-        temporary = Path(temporary_name)
+        if previous is not None and previous.sha256 == avatar.sha256:
+            return previous
+        path = self._path(ctx, employee_id)
+        old_bytes = path.read_bytes() if path.is_file() else None
+        write_private_file(path, avatar.data)
         try:
-            try:
-                with temporary.open("wb") as handle:
-                    handle.write(raw)
-                    handle.flush()
-                    os.fsync(handle.fileno())
-                os.chmod(temporary, 0o600)
-                os.replace(temporary, path)
-            except Exception:
-                temporary.unlink(missing_ok=True)
-                raise
-            url = f"{self._public_base}/api/manager/employees/{employee_id}/avatar/content" if self._public_base else f"/api/manager/employees/{employee_id}/avatar/content"
-            try:
-                row = self._repo.upsert(ctx, employee_id=employee_id, avatar_url=url, storage_key=key, mime_type=stored_mime, byte_size=len(raw), sha256=digest)
-            except Exception:
-                path.unlink(missing_ok=True)
-                raise
-        finally:
-            temporary.unlink(missing_ok=True)
-        if previous is not None and previous.storage_key != key:
-            old_path = self._managed_path(previous.storage_key)
-            if old_path is not None:
-                old_path.unlink(missing_ok=True)
-        return {"employee_id": row.employee_id, "avatar_url": row.avatar_url, "version": row.version, "updated_at": row.updated_at, "byte_size": row.byte_size}
-
-    def copy(self, ctx: TenantContext, *, source_id: str, target_id: str) -> None:
-        """把源专家头像复制为目标专家自己的文件与记录（不共用路径）；源无头像则什么也不做。"""
-        source_id, target_id = normalize_employee_id(source_id), normalize_employee_id(target_id)
-        row = self._repo.get(ctx, source_id)
-        src = self._managed_path(row.storage_key) if row else None
-        if row is None or src is None or not src.is_file():
-            return
-        key = f"avatars/{ctx.tenant_id}/{target_id}/{secrets.token_urlsafe(24)}.webp"
-        path = self._managed_path(key)
-        if path is None:
-            raise InvalidAvatar("avatar storage path is invalid")
-        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        shutil.copyfile(src, path)
-        os.chmod(path, 0o600)
-        url = f"{self._public_base}/api/manager/employees/{target_id}/avatar/content"
-        try:
-            self._repo.upsert(ctx, employee_id=target_id, avatar_url=url, storage_key=key, mime_type=row.mime_type,
-                              byte_size=row.byte_size, sha256=row.sha256)
+            return self._repo.upsert(
+                ctx, employee_id=employee_id, storage_key=str(path.relative_to(self._root)),
+                mime_type=AVATAR_MIME_TYPE, byte_size=len(avatar.data), sha256=avatar.sha256,
+            )
         except Exception:
-            path.unlink(missing_ok=True)
+            # Metadata did not move: put the file back so bytes and version stay consistent.
+            if old_bytes is None:
+                path.unlink(missing_ok=True)
+            else:
+                write_private_file(path, old_bytes)
             raise
 
-    def content(self, ctx: TenantContext, employee_id: str) -> tuple[bytes, str] | None:
+    def update(self, ctx: TenantContext, *, employee_id: str, mime_type: str, data: str) -> EmployeeAvatarRow:
+        """Enterprise admin upload, only for enterprise-created employees."""
+        employee_id = normalize_employee_id(employee_id)
+        origin = self._repo.employee_origin(ctx, employee_id)
+        if origin is None:
+            raise NotFound("employee not found in this tenant")
+        if origin != "custom":
+            raise TemplateAvatarLocked("this employee uses its expert template avatar and cannot change it")
+        try:
+            avatar = normalize_avatar(decode_base64_image(mime_type, data))
+        except AvatarImageError as exc:
+            raise InvalidAvatar(str(exc)) from exc
+        return self._store(ctx, employee_id, avatar)
+
+    def seed_from_template(self, ctx: TenantContext, *, employee_id: str, data: bytes) -> EmployeeAvatarRow:
+        """Recruit / solution apply: copy the template avatar bytes as the employee's own file."""
+        employee_id = normalize_employee_id(employee_id)
+        try:
+            avatar = normalize_avatar(data)
+        except AvatarImageError as exc:
+            raise InvalidAvatar(str(exc)) from exc
+        return self._store(ctx, employee_id, avatar)
+
+    def copy(self, ctx: TenantContext, *, source_id: str, target_id: str) -> None:
+        """Employee copy: the copy gets its own file with the source avatar; no avatar → no-op."""
+        target_id = normalize_employee_id(target_id)
+        content = self.content(ctx, source_id)
+        if content is None:
+            return
+        # Already a normalized WebP: copy the bytes as-is (re-encoding would change them).
+        self._store(ctx, target_id, AvatarFile(data=content.data, sha256=content.sha256))
+
+    def content(self, ctx: TenantContext, employee_id: str) -> AvatarContent | None:
         employee_id = normalize_employee_id(employee_id)
         row = self._repo.get(ctx, employee_id)
-        if not row:
+        if row is None:
             return None
-        path = self._managed_path(row.storage_key)
-        if path is None or not path.is_file():
+        path = self._path(ctx, employee_id)
+        if not path.is_file():
             return None
-        return path.read_bytes(), row.mime_type
+        return AvatarContent(data=path.read_bytes(), version=row.version, sha256=row.sha256)

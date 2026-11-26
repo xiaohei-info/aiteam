@@ -68,6 +68,10 @@ class OperatorCatalogPort(ABC):
     def list_platform_skills(self) -> list[dict]:
         return []
 
+    def pull_expert_template_avatar(self, *, template_id: str, tenant_id: str) -> tuple[bytes, int] | None:
+        """拉模板头像文件字节与版本；模板无头像返回 None。范围外/未发布抛 NotFound。"""
+        return None
+
     def pull_platform_skill(self, *, skill_id: str, version: str) -> PlatformSkillPackage:
         from shared.errors import NotFound
         raise NotFound(f"platform skill not found: {skill_id}@{version}")
@@ -156,6 +160,27 @@ class OperatorCatalogClient(OperatorCatalogPort):
         data_list = resp.get("data", [])
         return [SolutionPackage.model_validate(item) for item in data_list]
 
+    def pull_expert_template_avatar(self, *, template_id: str, tenant_id: str) -> tuple[bytes, int] | None:
+        """GET /api/operation/catalog/pull/expert-templates/{id}/avatar/content（服务身份，按租户发布范围）。"""
+        from shared.avatar_image import MAX_AVATAR_BYTES
+
+        path = (f"/api/operation/catalog/pull/expert-templates/{quote(template_id, safe='')}/avatar/content"
+                f"?tenant_id={quote(tenant_id, safe='')}")
+        try:
+            data, headers = self._client.get_bytes(
+                path, max_bytes=MAX_AVATAR_BYTES, service_purpose="catalog:read", service_tenant_id=tenant_id,
+            )
+        except NotFound as exc:
+            if getattr(exc, "code", "") == "template_avatar_not_found":
+                return None
+            raise
+        except AppError:
+            raise
+        except Exception as exc:
+            raise OperatorCatalogUnavailable("Operator catalog is unavailable") from exc
+        version = headers.get("x-avatar-version", "")
+        return data, int(version) if version.isdigit() else 0
+
     def pull_platform_skill(self, *, skill_id: str, version: str) -> PlatformSkillPackage:
         path = f"/api/operation/skill-market/pull/skills/{skill_id}/versions/{version}"
         data = self._get(path).get("data", {})
@@ -234,6 +259,7 @@ class FakeOperatorCatalogClient(OperatorCatalogPort):
         self._platform_catalog: dict = {"providers": [], "models": []}
         self._platform_mcp: list[dict] = []
         self.invalidated: list[tuple[str, str]] = []
+        self._avatars: dict[str, tuple[bytes, int]] = {}
         self._hidden: set[tuple[str, str]] = set()  # (tenant_id, template_id / solution_id)
 
     def hide_from(self, tenant_id: str, template_id: str) -> None:
@@ -255,6 +281,15 @@ class FakeOperatorCatalogClient(OperatorCatalogPort):
     def seed_expert(self, detail: ExpertTemplateDetail) -> None:
         self._experts[(detail.template_id, detail.version)] = detail
         self._experts_latest[detail.template_id] = detail
+
+    def seed_expert_avatar(self, template_id: str, data: bytes, version: int = 1) -> None:
+        self._avatars[template_id] = (data, version)
+
+    def pull_expert_template_avatar(self, *, template_id: str, tenant_id: str) -> tuple[bytes, int] | None:
+        self._check_scope(tenant_id, template_id)
+        if template_id not in self._experts_latest:
+            raise NotFound(f"expert template not found in operator catalog: {template_id}")
+        return self._avatars.get(template_id)
 
     def seed_solution(self, package: SolutionPackage) -> None:
         self._solutions[(package.solution_id, package.version)] = package

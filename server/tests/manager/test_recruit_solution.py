@@ -972,6 +972,7 @@ def test_operator_catalog_is_read_only_port():
         "list_solution_packages",
         "list_platform_skills",
         "pull_platform_skill",
+        "pull_expert_template_avatar",
         "list_platform_catalog",
         "list_platform_mcp_servers",
         "resolve_tenant_access",
@@ -1658,8 +1659,7 @@ def test_hidden_expert_is_named_with_its_id_in_the_apply_error():
 # ---- 模板头像布种（招募/方案应用 → 企业侧员工头像）----
 
 
-def _png_data_url(payload: bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 8) -> str:
-    return "data:image/png;base64," + base64.b64encode(payload).decode("ascii")
+AVATAR_BYTES = b"RIFF\x00\x00\x00\x00WEBPVP8 "
 
 
 class _FakeAvatarService:
@@ -1667,15 +1667,23 @@ class _FakeAvatarService:
         self.calls: list[dict] = []
         self.fail = fail
 
-    def update(self, ctx, *, employee_id, filename, mime_type, data):
+    def seed_from_template(self, ctx, *, employee_id, data):
         if self.fail:
             raise RuntimeError("avatar storage unavailable")
-        self.calls.append({"employee_id": employee_id, "filename": filename, "mime_type": mime_type, "data": data})
+        self.calls.append({"employee_id": employee_id, "data": data})
+
+
+def _with_avatar(catalog, template):
+    """模板带头像：目录详情给 avatar_version，头像字节由服务身份单独拉取。"""
+    template = template.model_copy(update={"avatar_version": 1})
+    catalog.seed_expert(template)
+    catalog.seed_expert_avatar(template.template_id, AVATAR_BYTES)
+    return template
 
 
 def test_recruit_copies_template_avatar_to_enterprise_avatar():
     catalog = _fake_catalog()
-    catalog.seed_expert(_expert_template().model_copy(update={"avatar_url": _png_data_url()}))
+    _with_avatar(catalog, _expert_template())
     svc, *_ = _build_service(catalog)
     avatars = _FakeAvatarService()
     svc._avatars = avatars
@@ -1684,20 +1692,18 @@ def test_recruit_copies_template_avatar_to_enterprise_avatar():
         _ctx("t-a"), RecruitExpertRequest(model_policy=MODEL_POLICY, template_id="tpl-1", employee_slug="avatar-expert"),
     )
 
-    assert [call["employee_id"] for call in avatars.calls] == [result.employee_id]
-    assert avatars.calls[0]["mime_type"] == "image/png"
-    assert avatars.calls[0]["data"] == _png_data_url().split(",", 1)[1]
+    assert avatars.calls == [{"employee_id": result.employee_id, "data": AVATAR_BYTES}]
 
 
-def test_recruit_skips_legacy_http_template_avatar():
+def test_recruit_skips_template_without_avatar():
     catalog = _fake_catalog()
-    catalog.seed_expert(_expert_template().model_copy(update={"avatar_url": "https://legacy.example/avatar.png"}))
+    catalog.seed_expert(_expert_template())
     svc, *_ = _build_service(catalog)
     avatars = _FakeAvatarService()
     svc._avatars = avatars
 
     svc.recruit_expert(
-        _ctx("t-a"), RecruitExpertRequest(model_policy=MODEL_POLICY, template_id="tpl-1", employee_slug="legacy-avatar"),
+        _ctx("t-a"), RecruitExpertRequest(model_policy=MODEL_POLICY, template_id="tpl-1", employee_slug="no-avatar"),
     )
 
     assert avatars.calls == []
@@ -1705,7 +1711,7 @@ def test_recruit_skips_legacy_http_template_avatar():
 
 def test_recruit_succeeds_when_avatar_seed_fails():
     catalog = _fake_catalog()
-    catalog.seed_expert(_expert_template().model_copy(update={"avatar_url": _png_data_url()}))
+    _with_avatar(catalog, _expert_template())
     svc, emp, _, _, orders = _build_service(catalog)
     svc._avatars = _FakeAvatarService(fail=True)
 
@@ -1721,11 +1727,11 @@ def test_apply_solution_seeds_avatar_only_for_newly_created_experts():
     catalog = _fake_catalog()
     package = _solution_package()
     package = package.model_copy(update={
-        "experts": [expert.model_copy(update={"avatar_url": _png_data_url()}) for expert in package.experts],
+        "experts": [expert.model_copy(update={"avatar_version": 1}) for expert in package.experts],
     })
     catalog.seed_solution(package)
     for expert in package.experts:
-        catalog.seed_expert(expert)
+        _with_avatar(catalog, expert)
     svc, *_ = _build_service(catalog)
     avatars = _FakeAvatarService()
     svc._avatars = avatars

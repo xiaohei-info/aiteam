@@ -77,17 +77,34 @@ def test_create_no_db_503():
 
 
 def test_avatar_content_returns_binary_response():
+    from manager_service.employee_avatar_service import AvatarContent
     employee_id = "11111111-1111-1111-1111-111111111111"
     client = _client("postgresql://fake/fake")
     fake = MagicMock()
-    fake.content.return_value = (b"\\x89PNG\\r\\n\\x1a\\n", "image/png")
+    fake.content.return_value = AvatarContent(data=b"RIFF\x00\x00\x00\x00WEBP", version=3, sha256="abc")
     with patch("manager_service.routes_employee._avatar_service", return_value=fake):
-        response = client.get(f"/api/manager/employees/{employee_id}/avatar/content", headers=_auth_header())
+        response = client.get(f"/api/manager/employees/{employee_id}/avatar/content?v=3", headers=_auth_header())
     assert response.status_code == 200, response.text
-    assert response.content == b"\\x89PNG\\r\\n\\x1a\\n"
-    assert response.headers["content-type"] == "image/png"
-    assert response.headers["cache-control"] == "private, max-age=300"
+    assert response.content == b"RIFF\x00\x00\x00\x00WEBP"
+    assert response.headers["content-type"] == "image/webp"
+    assert response.headers["x-avatar-version"] == "3"
+    assert response.headers["etag"] == '"abc"'
+    assert response.headers["x-content-type-options"] == "nosniff"
     fake.content.assert_called_once()
+
+
+def test_avatar_upload_for_template_employee_is_409():
+    from manager_service.employee_avatar_service import TemplateAvatarLocked
+    client = _client("postgresql://fake/fake")
+    fake = MagicMock()
+    fake.update.side_effect = TemplateAvatarLocked("locked")
+    with patch("manager_service.routes_employee._avatar_service", return_value=fake):
+        response = client.post(
+            "/api/manager/employees/11111111-1111-1111-1111-111111111111/avatar",
+            json={"mime_type": "image/png", "data": "AAAA"}, headers=_auth_header(),
+        )
+    assert response.status_code == 409, response.text
+    assert response.json()["code"] == "employee_avatar_locked"
 
 
 def test_create_extra_field_422():

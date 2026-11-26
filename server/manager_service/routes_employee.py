@@ -26,7 +26,7 @@ from .employee_copy_service import EmployeeCopyService, build_employee_copy_serv
 from .schemas import EmployeeConfigIn, EmployeeConfigOut, EmployeeCopyIn
 from .avatar_schemas import EmployeeAvatarIn, EmployeeAvatarOut
 from .employee_avatar_repository import EmployeeAvatarRepository
-from .employee_avatar_service import EmployeeAvatarService
+from .employee_avatar_service import EmployeeAvatarService, avatar_content_path
 from .knowledge_intake_service import ensure_storage_root, manager_storage_root
 
 
@@ -83,11 +83,7 @@ def _avatar_service(request: Request) -> EmployeeAvatarService:
     cache = getattr(request.app.state, "_employee_avatar_service", None)
     if cache is None:
         root = ensure_storage_root(manager_storage_root(request.app.state.settings))
-        cache = EmployeeAvatarService(
-            EmployeeAvatarRepository(PgTenantRouter(dsn)),
-            root,
-            str(request.base_url).rstrip("/"),
-        )
+        cache = EmployeeAvatarService(EmployeeAvatarRepository(PgTenantRouter(dsn)), root)
         request.app.state._employee_avatar_service = cache
     return cache
 
@@ -175,7 +171,11 @@ def build_employee_router(verifier) -> APIRouter:
 
     @router.post(
         "/{employee_id}/avatar",
-        description="上传员工头像。仅 owner/enterprise_admin 可操作；头像仅保存元数据和私有对象存储引用。",
+        description=(
+            "上传员工头像（仅企业自建员工，origin=custom；来自专家模板的员工固定使用模板头像，返回 409）。"
+            "仅 owner/enterprise_admin 可操作。服务端转静态 WebP，存为该员工唯一的头像文件；"
+            "内容变化时 version +1。"
+        ),
         summary="更新员工头像",
         operation_id="manager_employee_avatar_update",
         status_code=status.HTTP_200_OK,
@@ -189,13 +189,7 @@ def build_employee_router(verifier) -> APIRouter:
     ) -> Envelope[EmployeeAvatarOut]:
         ctx = tenant_context_from(claims)
         require_admin(ctx)
-        result = _avatar_service(request).update(
-            ctx,
-            employee_id=employee_id,
-            filename=body.filename,
-            mime_type=body.mime_type,
-            data=body.data,
-        )
+        row = _avatar_service(request).update(ctx, employee_id=employee_id, mime_type=body.mime_type, data=body.data)
         # Audit metadata only; raw image data never enters the audit log.
         try:
             from .audit_repository import AuditRepository
@@ -205,28 +199,26 @@ def build_employee_router(verifier) -> APIRouter:
                 actor_id=ctx.user_id,
                 target_type="employee",
                 target_id=employee_id,
-                detail={"version": result["version"], "mime_type": body.mime_type, "byte_size": result.get("byte_size")},
+                detail={"version": row.version, "mime_type": body.mime_type, "byte_size": row.byte_size},
             )
         except Exception:
             # The avatar write is already durable; audit failures are surfaced by
             # the service logs in deployments that install an audit sink.
             pass
-        public_result = {key: result[key] for key in ("employee_id", "avatar_url", "version", "updated_at")}
-        return Envelope[EmployeeAvatarOut](data=EmployeeAvatarOut(**public_result))
+        return Envelope[EmployeeAvatarOut](data=EmployeeAvatarOut(
+            employee_id=row.employee_id, avatar_url=avatar_content_path(row.employee_id, row.version),
+            version=row.version, updated_at=row.updated_at,
+        ))
 
     @router.get(
         "/{employee_id}/avatar/content",
-        description="读取当前租户员工头像对象。",
+        description="读取当前租户员工头像文件（静态 WebP）。响应头 X-Avatar-Version 为当前头像版本，调用方按版本缓存。",
         summary="读取员工头像对象",
         operation_id="manager_employee_avatar_content",
         response_class=Response,
         responses={
             200: {
-                "content": {
-                    "image/jpeg": {"schema": {"type": "string", "format": "binary"}},
-                    "image/png": {"schema": {"type": "string", "format": "binary"}},
-                    "image/webp": {"schema": {"type": "string", "format": "binary"}},
-                },
+                "content": {"image/webp": {"schema": {"type": "string", "format": "binary"}}},
             },
         },
     )
@@ -240,8 +232,12 @@ def build_employee_router(verifier) -> APIRouter:
         if result is None:
             from shared.errors import NotFound
             raise NotFound("employee avatar not found")
-        content, mime_type = result
-        return Response(content=content, media_type=mime_type, headers={"Cache-Control": "private, max-age=300"})
+        return Response(content=result.data, media_type=result.mime_type, headers={
+            "Cache-Control": "private, max-age=86400",
+            "ETag": f'"{result.sha256}"',
+            "X-Avatar-Version": str(result.version),
+            "X-Content-Type-Options": "nosniff",
+        })
 
     @router.put(
         "/{employee_id}", description="完整替换 employee 配置；role_title 省略或 null 清空岗位，department_ids 省略或 [] 清空全部部门。实际配置变化时 version 自增，授权增量 pull 可感知；需 owner/enterprise_admin。成功响应遵循统一 envelope，失败返回 problem+json。", summary="改写 employee 配置（version 自增）",

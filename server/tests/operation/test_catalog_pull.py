@@ -540,3 +540,44 @@ def test_pull_expert_template_avatar_content(client):
     console = client.get("/api/operation/catalog/expert-templates/tpl-av/avatar/content", headers=headers)
     assert console.status_code == 200 and console.content == r.content
     assert client.get("/api/operation/catalog/expert-templates/tpl-av/avatar/content").status_code == 401
+
+
+def _manager_catalog_over(client):
+    """Manager 侧真实 OperatorCatalogClient，HTTP 经 MockTransport 转发到 Operator 测试应用（跨端闭环）。"""
+    import httpx
+    from manager_service.operator_catalog import OperatorCatalogClient
+
+    def forward(request: httpx.Request) -> httpx.Response:
+        r = client.request(request.method, request.url.raw_path.decode(), headers=dict(request.headers),
+                           content=request.content)
+        return httpx.Response(r.status_code, headers=r.headers, content=r.content)
+
+    return OperatorCatalogClient(
+        "http://operator.test", service_token="test-service-token",
+        client_kwargs={"transport": httpx.MockTransport(forward)},
+    )
+
+
+def test_manager_pulls_template_avatar_written_by_operator(client):
+    """Operator 存文件 → Manager 以服务身份拉字节；无头像返回 None，草稿/范围外抛 NotFound。"""
+    from shared.errors import NotFound
+    from tests.operation.auth_helpers import operation_test_token
+    from operation_service.app import _auth
+    headers = {"Authorization": f"Bearer {operation_test_token(_auth, user_id='op1', role='system_operator')}"}
+    for template_id, avatar in (("tpl-av", _png_data_url()), ("tpl-none", "")):
+        body = {"template_id": template_id, "display_name": "AV", "category": "x", "avatar_url": avatar,
+                "system_prompt": "s", "description": "d"}
+        assert client.post("/api/operation/catalog/expert-templates", json=body, headers=headers).status_code == 201
+    manager = _manager_catalog_over(client)
+    with pytest.raises(NotFound):  # 草稿：不能当成「没有头像」吞掉
+        manager.pull_expert_template_avatar(template_id="tpl-av", tenant_id="t-1")
+    for template_id in ("tpl-av", "tpl-none"):
+        assert client.post(f"/api/operation/catalog/expert_template/{template_id}/publish", json={},
+                           headers=headers).status_code == 200
+    data, version = manager.pull_expert_template_avatar(template_id="tpl-av", tenant_id="t-1")
+    assert data[:4] == b"RIFF" and version == 1
+    detail = manager.pull_expert_template(template_id="tpl-av", tenant_id="t-1")
+    assert detail.avatar_version == 1
+    assert manager.pull_expert_template_avatar(template_id="tpl-none", tenant_id="t-1") is None
+    with pytest.raises(NotFound):
+        manager.pull_expert_template_avatar(template_id="tpl-missing", tenant_id="t-1")

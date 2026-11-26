@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Request, Response, status
 
 from shared.auth import require_claims, tenant_context_from
 from shared.contracts.auth import TokenClaims
@@ -21,7 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from shared.contracts.crosstier import ExpertTemplateDetail, SolutionPackage
 from shared.contracts.envelope import Envelope, ListEnvelope
 from shared.db import PgTenantRouter
-from shared.errors import AppError, ValidationProblem
+from shared.errors import AppError, NotFound, ValidationProblem
 
 from .catalog_scope_wiring import reconcile_for_admin
 from .employee_avatar_repository import EmployeeAvatarRepository
@@ -61,6 +61,21 @@ class TemplateStatsOut(BaseModel):
     evaluated_segments: int = Field(default=0, ge=0, description="本企业已评估段数。")
     resolved_segments: int = Field(default=0, ge=0, description="本企业已解决段数。")
     min_sample: int = Field(default=RESOLUTION_RATE_MIN_SAMPLE, ge=1, description="发布解决率所需的最少已评估段数。")
+
+
+def market_avatar_path(template_id: str, version: int) -> str:
+    """人才市场模板头像：Manager 同源路径（转拉 Operator），``v`` 为模板头像版本。"""
+    return f"/api/manager/recruit/catalog/experts/{template_id}/avatar/content?v={version}"
+
+
+def _with_market_avatar(detail: ExpertTemplateDetail) -> ExpertTemplateDetail:
+    """Operator 返回的是服务间拉取路径，对浏览器/Agent 无意义：改写为 Manager 同源路径。"""
+    url = market_avatar_path(detail.template_id, detail.avatar_version) if detail.avatar_version else ""
+    return detail.model_copy(update={"avatar_url": url})
+
+
+def _solution_with_market_avatars(package: SolutionPackage) -> SolutionPackage:
+    return package.model_copy(update={"experts": [_with_market_avatar(e) for e in package.experts]})
 
 
 class RecruitableExpertOut(ExpertTemplateDetail):
@@ -134,12 +149,10 @@ def _service(request: Request) -> RecruitService:
     catalog: OperatorCatalogPort = request.app.state._operator_catalog
     cache = getattr(request.app.state, "_recruit_service", None)
     if cache is None:
-        # 招募成功后按模板布种企业头像：模板头像是 Operator 持有的本地 data URL，
-        # 不注入则新招募的员工永远没有头像可显示（三端只能回退插画）。
+        # 招募/方案应用新建员工时把模板头像复制成员工头像文件（初始一致）。
         avatars = EmployeeAvatarService(
             EmployeeAvatarRepository(PgTenantRouter(dsn)),
             ensure_storage_root(manager_storage_root(request.app.state.settings)),
-            str(request.base_url).rstrip("/"),
         )
         cache = build_recruit_service(catalog=catalog, router=PgTenantRouter(dsn), avatars=avatars)
         request.app.state._recruit_service = cache
@@ -180,12 +193,45 @@ def build_recruit_router(verifier) -> APIRouter:
         return ListEnvelope[RecruitableExpertOut](
             data=[
                 RecruitableExpertOut(
-                    **item.model_dump(), is_recruited=item.template_id in recruited,
+                    **_with_market_avatar(item).model_dump(), is_recruited=item.template_id in recruited,
                     stats=stats.get(item.template_id),
                 )
                 for item in templates
             ]
         )
+
+    @router.get(
+        "/catalog/experts/{template_id}/avatar/content",
+        description=(
+            "人才市场读取专家模板头像（静态 WebP）。Manager 以服务身份向 Operator 拉取，只给对当前租户"
+            "已发布可见的模板；响应头 X-Avatar-Version 为模板头像版本，调用方按版本缓存。无头像返回 404。"
+        ),
+        summary="读取人才市场专家模板头像",
+        operation_id="manager_recruitable_expert_avatar_content",
+        response_class=Response,
+        responses={200: {"content": {"image/webp": {"schema": {"type": "string", "format": "binary"}}}}},
+    )
+    def get_recruitable_expert_avatar(
+        template_id: str,
+        request: Request,
+        claims: TokenClaims = Depends(require),
+    ) -> Response:
+        ctx = tenant_context_from(claims)
+        catalog: OperatorCatalogPort = request.app.state._operator_catalog
+        try:
+            pulled = catalog.pull_expert_template_avatar(template_id=template_id, tenant_id=ctx.tenant_id)
+        except AppError:
+            raise
+        except Exception as exc:
+            raise _OperatorUnavailable("Operator expert catalog is unavailable") from exc
+        if pulled is None:
+            raise NotFound("expert template has no avatar")
+        data, version = pulled
+        return Response(content=data, media_type="image/webp", headers={
+            "Cache-Control": "private, max-age=86400",
+            "X-Avatar-Version": str(version),
+            "X-Content-Type-Options": "nosniff",
+        })
 
     @router.get(
         "/catalog/solutions", description="F07 浏览可应用行业方案（拉 Operator 目录列表，只读）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="F07 浏览可应用行业方案（拉 Operator 目录列表，只读）",
@@ -199,7 +245,7 @@ def build_recruit_router(verifier) -> APIRouter:
             catalog: OperatorCatalogPort = request.app.state._operator_catalog
             ctx = tenant_context_from(claims)
             packages = catalog.list_solution_packages(tenant_id=ctx.tenant_id)
-            return ListEnvelope[SolutionPackage](data=packages)
+            return ListEnvelope[SolutionPackage](data=[_solution_with_market_avatars(p) for p in packages])
         except AppError:
             raise
         except Exception as exc:

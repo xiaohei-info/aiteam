@@ -22,7 +22,7 @@ from shared.solution_authoring.orchestration import (
 
 from shared.avatar_image import AvatarFile, AvatarImageError, normalize_avatar
 
-from .catalog_avatar import KEEP_AVATAR, avatar_url_for, avatar_version, parse_avatar_upload
+from .catalog_avatar import KEEP_AVATAR, TemplateAvatarNotFound, avatar_url_for, avatar_version, parse_avatar_upload
 from .template_avatar_store import TemplateAvatarStore
 from .catalog_gateway import CatalogManagerGateway
 from .catalog_repository import CatalogEntry, CatalogRepository
@@ -296,7 +296,7 @@ class CatalogService:
         version = avatar_version(payload)
         data = self._avatars.read(template_id) if (version and self._avatars is not None) else None
         if data is None:
-            raise NotFound(f"expert template has no avatar: {template_id}")
+            raise TemplateAvatarNotFound(f"expert template has no avatar: {template_id}")
         return data, version, str(payload.get("avatar_sha256") or "")
 
     def register_solution_template(

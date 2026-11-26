@@ -33,6 +33,7 @@ from .employee_config_service import EmployeeConfigService
 from .member_service import GrantService, MemberDeptService
 from .schemas import EmployeeConfigOut
 from .employee_avatar_repository import EmployeeAvatarRepository
+from .employee_avatar_service import avatar_projection
 
 logger = logging.getLogger(__name__)
 
@@ -136,11 +137,11 @@ class SnapshotService:
             ctx, employee_id=employee_id, tools=config.tools, version=current_version,
         )
         avatar = self._avatars.get(ctx, employee_id) if self._avatars is not None else None
-        avatar_version = avatar.version if avatar else 0
+        avatar_url, avatar_version = avatar_projection(avatar)
         return _to_snapshot(
             config, version=current_version, knowledge_refs=list(policy.refs), knowledge_policy=policy,
             pricing=self._resolve_pricing(config, tenant_id=ctx.tenant_id),
-            avatar_url=avatar.avatar_url if avatar else None,
+            avatar_url=avatar_url,
             avatar_version=avatar_version,
             avatar_sync_version=f"{current_version}:avatar-{avatar_version}",
         )
