@@ -2,7 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ApiError, type AuthSession } from "@aiteam/shared";
 import { SessionContext, type SessionContextValue } from "../../../auth/session";
-import { EmployeeAvatarEditor, avatarFileProblem, isEmployeeAvatar } from "../EmployeeAvatar";
+import {
+  AVATAR_FROM_TEMPLATE_HINT,
+  EmployeeAvatarEditor,
+  avatarFileProblem,
+  isEmployeeAvatar,
+} from "../EmployeeAvatar";
 import type { EmployeeConfig } from "../types";
 
 const session = {
@@ -48,7 +53,9 @@ describe("EmployeeAvatar", () => {
   it("template-origin employees cannot change their avatar", () => {
     renderEditor({ ...base, origin: "recruited" });
     expect(screen.queryByRole("button", { name: /头像/ })).toBeNull();
-    expect(screen.getByText("头像随人才市场模板，不能单独更换。")).toBeTruthy();
+    // 模板头像只复制一次，不跟随模板变更，文案要和这个实际行为一致。
+    expect(screen.getByText(AVATAR_FROM_TEMPLATE_HINT)).toBeTruthy();
+    expect(AVATAR_FROM_TEMPLATE_HINT).not.toMatch("头像随人才市场模板");
   });
 
   it("custom employees upload base64 without data-url prefix and report the new url", async () => {

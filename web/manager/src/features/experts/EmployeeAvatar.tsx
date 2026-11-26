@@ -39,6 +39,10 @@ export const AVATAR_ACCEPT = [
 ] as const;
 export const AVATAR_MAX_BYTES = 5 * 1024 * 1024;
 
+/** 非自建员工的头像说明：只在招募/复制时取一次模板头像快照，之后不跟随模板。 */
+export const AVATAR_FROM_TEMPLATE_HINT =
+  "头像在招募或复制时从人才市场模板复制一次，之后不随模板更新，也不能在这里更换。";
+
 export function EmployeeAvatar({
   name,
   src,
@@ -174,7 +178,7 @@ export function EmployeeAvatarEditor({
               </Text>
             </>
           ) : (
-            <Text type="supporting">头像随人才市场模板，不能单独更换。</Text>
+            <Text type="supporting">{AVATAR_FROM_TEMPLATE_HINT}</Text>
           )}
         </VStack>
       </HStack>
