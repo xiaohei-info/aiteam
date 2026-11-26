@@ -94,8 +94,8 @@ test('active logout clears only the current saved credential and auto-login pref
   } finally { f.close() }
 })
 
-for (const operation of ['login', 'restore']) {
-  test(`${operation}: logout during sync prevents stale token and vault writes`, async () => {
+{
+  test('logout during sync prevents a stale token', async () => {
     const f = await fixture()
     try {
       const started = deferred(), response = deferred()
@@ -104,8 +104,7 @@ for (const operation of ['login', 'restore']) {
         if (r.path.endsWith('/sync')) { started.resolve(); return response.promise }
         return { runtime: 'ready' }
       }
-      if (operation === 'restore') f.vault.value = JSON.stringify(session('A'))
-      const pending = operation === 'restore' ? f.store.getState().restoreSession() : f.store.getState().setSession(session('A'))
+      const pending = f.store.getState().setSession(session('A'))
       await started.promise
       const logout = f.store.getState().logout()
       response.resolve({ ok: true, partial: true, skipped_employee_ids: ['A-old'] })
@@ -118,7 +117,7 @@ for (const operation of ['login', 'restore']) {
   })
 }
 
-test('new login supersedes an older sync and owns the vault', async () => {
+test('new login supersedes an older sync', async () => {
   const f = await fixture()
   try {
     const started = deferred(), response = deferred()
@@ -137,7 +136,7 @@ test('new login supersedes an older sync and owns the vault', async () => {
     await old
     assert.equal(f.store.getState().token, 'B')
     assert.deepEqual(f.store.getState().grantsSyncSkipped, ['B-old'])
-    assert.equal(JSON.parse(f.vault.value!).token, 'B')
+    assert.equal(f.vault.value, null, 'the token is never written to the keychain')
   } finally { f.close() }
 })
 

@@ -2,7 +2,7 @@
 
 唯一 HTTP 契约：[8783 OpenAPI](http://121.40.78.201:8783/openapi.json)，本地副本为 [api.json](api.json)，获取日期 2026-09-10；2026-10-13 与后端分支 `feat/local-directory-knowledge` 重新同步（新增受控本地目录 6 接口，automation-tasks 操作从 `{action}` 通配改为枚举 `enable`/`pause`）。
 
-覆盖 74 组请求方法与路径；快照读取继续排除；授权同步已接入登录与会话恢复，其余 73 组均来自该文档。未调用的接口不会为了补齐列表而自动发请求。桌面端接口分流见 [本机 Agent 集成](agent-sidecar.md)。
+覆盖 74 组请求方法与路径；快照读取继续排除；授权同步已接入登录，其余 73 组均来自该文档。未调用的接口不会为了补齐列表而自动发请求。桌面端接口分流见 [本机 Agent 集成](agent-sidecar.md)。
 
 核对范围：页面、store、API 封装、SSE、附件下载、浏览器代理和原生请求。原生启动仅访问本机 healthz/readyz，并读取 openapi.json 核验包版本；openapi.json 是契约元数据。asset:// 本地文件读取、Tauri 文件和凭证命令不是服务端 HTTP 接口。分发包内部服务间通信不由 WebView 发起；本次已同步 Agent reconciliation v2、运行中消息快照和事实状态能力。
 

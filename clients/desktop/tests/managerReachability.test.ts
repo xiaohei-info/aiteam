@@ -5,7 +5,6 @@ import {
   MANAGER_UNAVAILABLE_NOTICE,
   isManagerUnavailable,
   reportManagerResponse,
-  restoreFailureMessage,
   useManagerReachability,
 } from '../src/lib/managerReachability.ts'
 
@@ -30,13 +29,6 @@ test('only an authenticated success proves Manager is reachable again', () => {
   assert.equal(unavailable(), true)
   reportManagerResponse(204, undefined, true)
   assert.equal(unavailable(), false)
-})
-
-test('restore keeps the saved login and asks to retry when Manager is unreachable', () => {
-  assert.match(restoreFailureMessage({ status: 503, code: 'manager_unavailable' }), /企业服务暂时连不上/)
-  assert.match(restoreFailureMessage({ status: 401, code: 'unauthenticated' }), /无法验证已保存身份/)
-  assert.match(restoreFailureMessage(new Error('boom')), /无法验证已保存身份/)
-  assert.match(restoreFailureMessage(null), /无法验证已保存身份/)
 })
 
 test('notice copy follows the failure tone: apology first, then one step', () => {

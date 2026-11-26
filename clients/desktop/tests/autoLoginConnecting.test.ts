@@ -18,6 +18,7 @@ const SAVED = JSON.stringify({ enterprise: 'acme', account: 'saved', password: '
 
 // Bundle the real store (a fresh launch each time); only network and keychain are replaced.
 async function launch({ autoLogin = true, saved = SAVED as string | null, storedSession = null as string | null } = {}) {
+  const credentials = { value: saved }
   const directory = mkdtempSync(join(tmpdir(), 'auto-login-store-'))
   const output = join(directory, 'store.cjs')
   await build({
@@ -32,11 +33,12 @@ async function launch({ autoLogin = true, saved = SAVED as string | null, stored
   })
   const vault = { value: storedSession }
   const logins: any[] = []
+  const sent: string[] = []
   const adapter = {
-    request: async (r: any, token: string): Promise<unknown> => r.path.endsWith('whoami') ? claims(token) : {},
+    request: async (r: any, token: string): Promise<unknown> => { sent.push(token); return r.path.endsWith('whoami') ? claims(token) : {} },
     login: async (body: any): Promise<unknown> => { logins.push(body); return { token: body.account, claims: claims(body.account) } },
     invoke: async (command: string, args?: any) => {
-      if (command === 'secure_login_credentials_read') return saved
+      if (command === 'secure_login_credentials_read') return credentials.value
       if (command.startsWith('secure_login_credentials_')) return undefined
       if (command === 'secure_session_read') return vault.value
       if (command === 'secure_session_write') vault.value = args.session
@@ -55,11 +57,11 @@ async function launch({ autoLogin = true, saved = SAVED as string | null, stored
   // What App would route to on every store update, from the moment the launch starts.
   const screens: string[] = []
   store.subscribe((state: any) => {
-    const screen = state.isAuthenticated ? 'app' : state.isConnecting ? 'connecting' : state.isRestoring ? 'restoring' : 'login'
+    const screen = state.isAuthenticated ? 'app' : state.isConnecting ? 'connecting' : 'login'
     if (screens.at(-1) !== screen) screens.push(screen)
   })
   return {
-    store, adapter, vault, logins, screens,
+    store, adapter, vault, credentials, logins, sent, screens,
     close: () => {
       rmSync(directory, { recursive: true, force: true })
       delete (globalThis as any).window
@@ -71,7 +73,7 @@ async function launch({ autoLogin = true, saved = SAVED as string | null, stored
 test('auto login: goes from connecting straight into the app, never through the login page', async () => {
   const f = await launch()
   try {
-    await f.store.getState().restoreSession()
+    await f.store.getState().initializeSession()
     assert.equal(f.store.getState().isConnecting, true, 'still connecting until App starts the attempt')
     assert.equal(f.logins.length, 0, 'the attempt must wait for App to report the local Agent ready')
 
@@ -87,7 +89,7 @@ test('auto login: goes from connecting straight into the app, never through the 
 test('auto login: the saved account is shown while connecting', async () => {
   const f = await launch()
   try {
-    await f.store.getState().restoreSession()
+    await f.store.getState().initializeSession()
     let seen: string | null = null
     f.adapter.login = async (body: any) => {
       seen = f.store.getState().connectingAccount
@@ -104,7 +106,7 @@ test('auto login: a failure lands on the login page and hands over the reason', 
   try {
     const failure = Object.assign(new Error('bad password'), { status: 401 })
     f.adapter.login = async () => { throw failure }
-    await f.store.getState().restoreSession()
+    await f.store.getState().initializeSession()
     await f.store.getState().runPendingAutoLogin()
     assert.deepEqual(f.screens, ['connecting', 'login'])
     assert.equal(f.store.getState().autoLoginFailure, failure)
@@ -123,7 +125,7 @@ test('auto login: a required password change lands on the login page without an 
     f.adapter.login = async () => {
       throw Object.assign(new Error('reset'), { status: 403, problem: { code: 'forbidden', detail: 'password reset required' } })
     }
-    await f.store.getState().restoreSession()
+    await f.store.getState().initializeSession()
     await f.store.getState().runPendingAutoLogin()
     assert.equal(f.store.getState().isConnecting, false)
     assert.equal(f.store.getState().isAuthenticated, false)
@@ -135,7 +137,7 @@ test('auto login: a required password change lands on the login page without an 
 test('auto login: concurrent triggers (React StrictMode) share a single attempt', async () => {
   const f = await launch()
   try {
-    await f.store.getState().restoreSession()
+    await f.store.getState().initializeSession()
     await Promise.all([f.store.getState().runPendingAutoLogin(), f.store.getState().runPendingAutoLogin()])
     assert.equal(f.logins.length, 1)
     assert.equal(f.store.getState().isAuthenticated, true)
@@ -145,7 +147,7 @@ test('auto login: concurrent triggers (React StrictMode) share a single attempt'
 test('opted in but nothing saved: connecting ends on the login page, without an error', async () => {
   const f = await launch({ saved: null })
   try {
-    await f.store.getState().restoreSession()
+    await f.store.getState().initializeSession()
     await f.store.getState().runPendingAutoLogin()
     assert.deepEqual(f.screens, ['connecting', 'login'])
     assert.equal(f.store.getState().autoLoginFailure, null)
@@ -153,85 +155,67 @@ test('opted in but nothing saved: connecting ends on the login page, without an 
   } finally { f.close() }
 })
 
-test('not opted in and no saved session: goes to the login page without ever connecting', async () => {
+test('not opted in: goes to the login page without ever connecting', async () => {
   const f = await launch({ autoLogin: false })
   try {
-    await f.store.getState().restoreSession()
-    assert.deepEqual(f.screens, ['restoring', 'login'])
+    await f.store.getState().initializeSession()
+    await f.store.getState().runPendingAutoLogin()
+    assert.deepEqual(f.screens, ['login'])
+    assert.equal(f.store.getState().isConnecting, false)
+    assert.equal(f.store.getState().isAuthenticated, false)
     assert.equal(f.logins.length, 0)
   } finally { f.close() }
 })
 
-test('a saved session connects silently even when auto login is off', async () => {
+test('a token saved by an older version is deleted at launch and never sent', async () => {
   const f = await launch({ autoLogin: false, storedSession: JSON.stringify(session('A')) })
   try {
-    let during: any = null
-    f.adapter.request = async (r: any, token: string) => {
-      if (r.path.endsWith('whoami')) {
-        during = f.store.getState()
-        return claims(token)
-      }
-      return {}
-    }
-    await f.store.getState().restoreSession()
-    assert.equal(during.isConnecting, true)
-    assert.equal(during.connectingAccount, 'A')
-    assert.equal(during.isAuthenticated, false, 'the session is not trusted until whoami confirms it')
-    assert.equal(during.token, null)
-    assert.deepEqual(f.screens, ['restoring', 'connecting', 'app'])
-    assert.equal(f.store.getState().isConnecting, false)
-    assert.equal(f.store.getState().connectingAccount, null)
+    await f.store.getState().initializeSession()
+    await f.store.getState().runPendingAutoLogin()
+    assert.equal(f.vault.value, null)
+    assert.deepEqual(f.sent, [])
+    assert.equal(f.store.getState().isAuthenticated, false)
+    assert.deepEqual(f.screens, ['login'])
   } finally { f.close() }
 })
 
-test('a rejected saved session falls back to auto login without showing the login page', async () => {
+test('with auto login on, a leftover token is dropped and the saved password logs in instead', async () => {
   const f = await launch({ storedSession: JSON.stringify(session('A')) })
   try {
-    f.adapter.request = async (r: any, token: string) => {
-      if (r.path.endsWith('whoami') && token === 'A') throw Object.assign(new Error('revoked'), { status: 401 })
-      return r.path.endsWith('whoami') ? claims(token) : {}
-    }
-    await f.store.getState().restoreSession()
+    await f.store.getState().initializeSession()
     await f.store.getState().runPendingAutoLogin()
     assert.deepEqual(f.screens, ['connecting', 'app'])
     assert.equal(f.store.getState().account, 'saved')
-    assert.equal(f.store.getState().restoreError, null)
-  } finally { f.close() }
-})
-
-test('a rejected saved session without auto login shows the login page with the restore error', async () => {
-  const f = await launch({ autoLogin: false, storedSession: JSON.stringify(session('A')) })
-  try {
-    f.adapter.request = async () => { throw Object.assign(new Error('revoked'), { status: 401 }) }
-    await f.store.getState().restoreSession()
-    await f.store.getState().runPendingAutoLogin()
-    assert.deepEqual(f.screens, ['restoring', 'connecting', 'login'])
-    assert.ok(f.store.getState().restoreError)
-    assert.equal(f.logins.length, 0)
+    assert.ok(!f.sent.includes('A'), 'the leftover token must never reach the Agent')
+    assert.equal(f.vault.value, null, 'the new token is kept in memory only')
   } finally { f.close() }
 })
 
 test('losing the session mid-run reconnects in place when the launch attempt is still unused', async () => {
-  const f = await launch({ storedSession: JSON.stringify(session('A')) })
+  // Auto login is on but nothing was saved at launch, so the attempt stays unused; the user logs in by hand.
+  const f = await launch({ saved: null })
   try {
-    await f.store.getState().restoreSession()
+    await f.store.getState().initializeSession()
+    await f.store.getState().runPendingAutoLogin()
+    await f.store.getState().login('acme', 'manual', 'pw')
+    f.credentials.value = SAVED
     assert.equal(f.store.getState().isAuthenticated, true)
     f.screens.length = 0
 
     await f.store.getState().logout({ reason: 'http_unauthorized', source: 'agent_http', status: 401 })
     assert.equal(f.store.getState().isConnecting, true)
-    assert.equal(f.store.getState().connectingAccount, 'A')
+    assert.equal(f.store.getState().connectingAccount, 'manual')
     await f.store.getState().runPendingAutoLogin()
 
     assert.deepEqual(f.screens, ['app', 'connecting', 'app'])
-    assert.equal(JSON.parse(f.vault.value!).token, 'saved')
+    assert.equal(f.store.getState().account, 'saved')
   } finally { f.close() }
 })
 
 test('losing the session again after the attempt was used goes to the login page', async () => {
   const f = await launch()
   try {
-    await f.store.getState().restoreSession()
+    await f.store.getState().initializeSession()
     await f.store.getState().runPendingAutoLogin()
     f.screens.length = 0
     await f.store.getState().logout({ reason: 'http_unauthorized', source: 'agent_http', status: 401 })
@@ -240,21 +224,22 @@ test('losing the session again after the attempt was used goes to the login page
 })
 
 test('an explicit logout goes straight to the login page and never reconnects', async () => {
-  const f = await launch({ storedSession: JSON.stringify(session('A')) })
+  const f = await launch()
   try {
-    await f.store.getState().restoreSession()
+    await f.store.getState().initializeSession()
+    await f.store.getState().runPendingAutoLogin()
     f.screens.length = 0
     await f.store.getState().logout()
     assert.deepEqual(f.screens, ['app', 'login'])
     assert.equal(f.store.getState().connectingAccount, null)
-    assert.equal(f.logins.length, 0)
+    assert.equal(f.logins.length, 1)
   } finally { f.close() }
 })
 
 test('an explicit logout during the attempt wins over the pending login', async () => {
   const f = await launch()
   try {
-    await f.store.getState().restoreSession()
+    await f.store.getState().initializeSession()
     let release!: () => void
     const gate = new Promise<void>(resolve => { release = resolve })
     f.adapter.login = async (body: any) => { await gate; return { token: body.account, claims: claims(body.account) } }

@@ -9,8 +9,6 @@
 import { create } from 'zustand'
 
 export const MANAGER_UNAVAILABLE_NOTICE = '抱歉，企业服务暂时连不上，请稍后再试。'
-const RESTORE_UNAVAILABLE = '抱歉，企业服务暂时连不上，请稍后重试恢复登录。'
-const RESTORE_FAILED = '无法验证已保存身份，请确认本机 Agent 和企业服务可用后重试。'
 
 interface ManagerReachabilityState {
   unavailable: boolean
@@ -30,10 +28,4 @@ export function reportManagerResponse(status: number, code: string | undefined, 
   } else if (unavailable && authenticated && status >= 200 && status < 300) {
     useManagerReachability.setState({ unavailable: false })
   }
-}
-
-/** 启动时恢复登录失败的提示；Manager 连不上时保留已保存的登录，提示稍后重试。 */
-export function restoreFailureMessage(error: unknown): string {
-  const { status, code } = (error ?? {}) as { status?: number; code?: string }
-  return isManagerUnavailable(status, code) ? RESTORE_UNAVAILABLE : RESTORE_FAILED
 }

@@ -69,8 +69,6 @@ export default function Login() {
   const resetPassword = useAgentAuthStore((s) => s.resetPassword)
   const cancelPasswordReset = useAgentAuthStore((s) => s.cancelPasswordReset)
   const pendingPasswordReset = useAgentAuthStore((s) => s.pendingPasswordReset)
-  const restoreError = useAgentAuthStore((s) => s.restoreError)
-  const restoreSession = useAgentAuthStore((s) => s.restoreSession)
   const navigate = useNavigate()
 
   useEffect(() => {
@@ -196,11 +194,6 @@ export default function Login() {
     setShowNewPassword(false)
     setShowConfirmPassword(false)
     setError(null)
-  }
-
-  const handleRestoreSession = async () => {
-    await restoreSession()
-    if (useAgentAuthStore.getState().isAuthenticated) navigate('/chat', { replace: true })
   }
 
   return (
@@ -419,15 +412,6 @@ export default function Login() {
             </>
           )}
         </div>
-
-        {restoreError && !pendingPasswordReset && (
-          <div role="alert" className="mt-4 rounded-[10px] border border-brand/20 bg-brand/[0.06] px-4 py-2.5 text-[12px] text-txt-secondary">
-            <p>{restoreError}</p>
-            <button type="button" disabled={isLoading} onClick={handleRestoreSession} className="mt-2 text-brand underline disabled:opacity-50">
-              重试恢复登录
-            </button>
-          </div>
-        )}
 
         {error && (
           <div role="alert" className="mt-4 rounded-[10px] border border-danger/20 bg-danger/[0.06] px-4 py-2.5 text-[12px] text-danger/90">

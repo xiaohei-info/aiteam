@@ -192,14 +192,13 @@ function ProtectedRoutes() {
 
 export default function App() {
   // 新栈 auth(agent JWT + tenant_id + account)是登录鉴权的事实源。
-  // Agent Bearer 会话恢复独立于后端健康检查启动；恢复时由服务端会话入口复核，离线不授权业务请求
-  // 立即迁移并清理 WebView 中的旧 JWT。
+  // 启动不恢复上次的 token（本机 Agent 每次新起，旧 token 无法复用）：只清理旧版本保存的 token，
+  // 等本机 Agent 就绪后按「自动登录」开关自动登录，否则进登录页。
   const isAuthenticated = useAgentAuthStore((s) => s.isAuthenticated)
-  const isRestoring = useAgentAuthStore((s) => s.isRestoring)
   const isConnecting = useAgentAuthStore((s) => s.isConnecting)
   const runPendingAutoLogin = useAgentAuthStore((s) => s.runPendingAutoLogin)
   const sessionGeneration = useAgentAuthStore((s) => s.sessionGeneration)
-  const restoreAgentSession = useAgentAuthStore((s) => s.restoreSession)
+  const initializeSession = useAgentAuthStore((s) => s.initializeSession)
   const isOnline = useNetworkStatus()
   useGlobalActivity()
   const [backendReady, setBackendReady] = useState(false)
@@ -209,7 +208,7 @@ export default function App() {
   const [backendCheckAttempt, setBackendCheckAttempt] = useState(0)
 
   useEffect(() => {
-    void restoreAgentSession()
+    void initializeSession()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -235,8 +234,8 @@ export default function App() {
     return () => controller.abort()
   }, [backendCheckAttempt])
 
-  // 登录请求要经过本机 Agent，必须等它就绪；恢复成功时 isConnecting 已清除，不会走到这里。
-  const autoLoginPending = backendReady && isConnecting && !isRestoring && !isAuthenticated
+  // 登录请求要经过本机 Agent，必须等它就绪。
+  const autoLoginPending = backendReady && isConnecting && !isAuthenticated
   useEffect(() => {
     if (autoLoginPending) void runPendingAutoLogin()
   }, [autoLoginPending, runPendingAutoLogin])
@@ -260,20 +259,6 @@ export default function App() {
           stageLabel={isTauri() ? '启动本地 Agent' : undefined}
         />
       </>
-    )
-  }
-
-  if (isRestoring && !isConnecting) {
-    return (
-      <div
-        data-tauri-drag-region
-        className="app-window"
-        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh' }}
-      >
-        <GlobalShortcuts />
-        <WindowsWindowControls />
-        <div style={{ fontSize: 14, opacity: 0.7 }}>正在恢复登录状态…</div>
-      </div>
     )
   }
 

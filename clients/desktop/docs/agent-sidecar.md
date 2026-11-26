@@ -115,7 +115,7 @@ AITEAM_AGENT_CONFIG=/absolute/path/to/agent.env pnpm tauri dev
 
 配置优先级：`AITEAM_AGENT_CONFIG` → 数据根目录 `agent.env` → 随包配置副本。不同包的 manifest hash 对应独立配置副本，因此升级时 env 与 JWKS 成套更新，不覆盖管理员配置或 `agent-data`。使用管理员配置时，公钥轮换由管理员同步更新配置文件并重启应用。
 
-宿主以绝对路径执行 `runtime/node --import …/tsx/dist/esm/index.mjs …/bin/start-agent.mjs --config … --host 127.0.0.1 --port 0 --data-dir …`，接管日志并保存进程句柄。它校验 `agent-port.json` 的 schema、PID、loopback 和端口范围，依次检查 `/healthz` HTTP 200、`/readyz` HTTP 200 且 `data.ready=true`，最长等待约 30 秒。随后检查 OpenAPI 中的群成员、消息搜索、工作历史及用量接口；全部通过后才恢复会话、开放业务页面。
+宿主以绝对路径执行 `runtime/node --import …/tsx/dist/esm/index.mjs …/bin/start-agent.mjs --config … --host 127.0.0.1 --port 0 --data-dir …`，接管日志并保存进程句柄。它校验 `agent-port.json` 的 schema、PID、loopback 和端口范围，依次检查 `/healthz` HTTP 200、`/readyz` HTTP 200 且 `data.ready=true`，最长等待约 30 秒。随后检查 OpenAPI 中的群成员、消息搜索、工作历史及用量接口；全部通过后才开放业务页面；开了自动登录且保存过账号密码时随即自动登录，否则进入登录页。
 
 配置缺失、异常退出或超时会显示启动错误和日志位置。宿主在启动前会先检查生效的 `agent.env`：production 模式若缺少企业公共 JWKS 或技能验签公钥，会立即以“企业公共配置不完整”的配置错误结束，而不是等 30 秒健康检查超时；客户端会把它归为 `BACKEND_CONFIGURATION_ERROR`。子进程在就绪前退出时，`desktop.jsonl` 会写入 `agent.exited_early`（含 `exit_code`），配置预检失败写入 `agent.config_incomplete`（含原因 code）。子进程的原始输出仍是隐私边界内不落盘的内容，日志中只有 `agent.unstructured_output_omitted` 提示存在非 JSON 输出；排查真实报错需手工运行随包 Node 与启动器：
 
@@ -161,7 +161,7 @@ VITE_AGENT_BASE_URL=http://127.0.0.1:53124 pnpm dev
 
 - **路由**：桌面端 `backendApi`、`agentApi` 和会话事件流都走 `resolveBackendBaseUrl()`，在桌面端返回 IPC 发现的本机 Agent 地址（`src/api/backend/config.ts`）。本机 Agent 不可用时不回退到远端。
 - **例外**：企业知识库的浏览和上传仍由客户端直连 Manager `/api/manager/knowledge-spaces`；个人知识库服务由客户端直连，见 [工作入口说明](workspace-functions.md#三类知识来源)。
-- **登录流程**：账号解析及登录 → `whoami` 身份核对 → `grants/sync` 授权同步 → `grants/readiness`，全部由本机 Agent 处理；任一步失败都不会开放工作台。登录填写企业代码或名称时直接用 `enterprise` 字段登录，留空时先按账号 resolve 出内部 `tenant_id`。登录、改密后登录和恢复会话都会同步授权；恢复失败保留凭证供重试。客户端不请求 `grants/snapshots`。`src/api/agent/index.ts` 的 `getLocalClient` 单独保留，区别只是本地目录面板的 401 不触发登出。
+- **登录流程**：账号解析及登录 → `whoami` 身份核对 → `grants/sync` 授权同步 → `grants/readiness`，全部由本机 Agent 处理；任一步失败都不会开放工作台。登录填写企业代码或名称时直接用 `enterprise` 字段登录，留空时先按账号 resolve 出内部 `tenant_id`。登录和改密后登录都会同步授权。token 只放在内存，不写钥匙串；每次启动都会新起本机 Agent，所以启动时不恢复上次的 token，只删除旧版本留在钥匙串里的 token。客户端不请求 `grants/snapshots`。`src/api/agent/index.ts` 的 `getLocalClient` 单独保留，区别只是本地目录面板的 401 不触发登出。
 - **接口白名单**：`src/api/agent/contract.ts` 校验请求方法与路径，拒绝契约外路径；新接口要先进 `server/agent_service` 的 OpenAPI，再更新客户端。`pnpm check:api-contract` 用 `docs/api.json` 核对全部调用点，`--write-report` 重新生成 [api-audit.md](api-audit.md)。**已知问题**：`docs/api.json` 仍是 2026-09-10 从 TEST 8783 抓取的副本，没有包含本机 Agent 后来新增的路由，所以该检查目前失败；应改为从 `server/agent_service` 导出 OpenAPI。
 - **浏览器开发（`pnpm dev`）**：不启动桌面宿主，经 Vite 的 `/backend-api` 代理到 `VITE_BACKEND_BASE_URL`，`/api`、`/healthz`、`/readyz` 代理到 `VITE_AGENT_BASE_URL`；未配置时都指向 TEST 8783（`src/api/agent/config.ts` 的 `TEST_AGENT_BASE_URL`）。要验证本机 Agent 的新接口，按上一节手工启动 Agent 并覆盖地址。
 - **遗留的 8783 配置**：Tauri capability（`src-tauri/capabilities/default.json`）、CSP（`tauri.conf.json`）、`scripts/check-tauri-security.mjs` 和后台入口链接（`src/lib/portals.ts`、`src-tauri/src/external_links.rs`）里仍有 TEST 8783，桌面端运行时已不访问它，待清理。

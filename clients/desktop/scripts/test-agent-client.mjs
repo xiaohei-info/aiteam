@@ -203,7 +203,7 @@ test('login goes through the local gateway Agent, verifies locally and syncs gra
   await store.getState().logout()
   assert.equal(await store.getState().login(' 企业代码 ', 'account', 'password'), 'authenticated')
   assert.equal(store.getState().isAuthenticated, true)
-  assert.equal(parseJson(env.credential()).token, 'login-token')
+  assert.equal(env.credential(), null, 'the token is kept in memory only, never in the keychain')
   assert.equal(env.token(), 'login-token')
   assert.deepEqual(env.calls.map(({ url }) => url), [
     'http://127.0.0.1:53124/api/agent/login',
@@ -217,43 +217,25 @@ test('login goes through the local gateway Agent, verifies locally and syncs gra
   })
   assert.ok(env.calls.slice(1).every(call => call.options.headers.Authorization === 'Bearer login-token'))
   assert.deepEqual(parseJson(env.calls[2].options.body), { tenant_id: 'tenant', member_id: 'member' })
-  env.calls.length = 0
-  await store.getState().restoreSession()
-  assert.equal(store.getState().isAuthenticated, true)
-  assert.deepEqual(env.calls.map(call => urlPathname(call.url)), [
-    '/api/agent/whoami', '/api/agent/grants/sync', '/api/agent/grants/readiness',
-  ])
   await store.getState().logout()
   assert.equal(env.token(), null)
   assert.equal(env.credential(), null)
 })
 
-test('sync failure is recorded without blocking login or restoration', async () => {
+test('sync failure is recorded without blocking login', async () => {
   const claims = { tenant_id: 'tenant', user_id: 'member', roles: ['member'] }
-  const responses = {
+  const env = environment({ responses: {
     '/api/agent/login': { token: 'login-token', claims },
     '/api/agent/whoami': claims,
     '/api/agent/grants/sync': { ok: false },
     '/api/agent/grants/readiness': { runtime: 'ready', experts: [] },
-  }
-  const env = environment({ responses })
+  } })
   const store = env.load('../../stores/agentAuth').useAgentAuthStore
   await store.getState().logout()
   assert.equal(await store.getState().login('tenant', 'account', 'password'), 'authenticated')
   assert.equal(store.getState().isAuthenticated, true)
-  const saved = env.credential()
-  assert.ok(saved)
-  responses['/api/agent/grants/sync'] = { ok: true }
-  await store.getState().login('tenant', 'account', 'password')
-  responses['/api/agent/grants/sync'] = { ok: false }
-  await store.getState().restoreSession()
-  assert.equal(store.getState().isAuthenticated, true)
-  assert.equal(store.getState().restoreError, null)
-  assert.equal(env.credential(), saved)
   assert.equal(env.token(), 'login-token')
-  responses['/api/agent/grants/sync'] = { ok: true }
-  await store.getState().restoreSession()
-  assert.equal(store.getState().isAuthenticated, true)
+  assert.equal(env.credential(), null)
   await store.getState().logout()
 })
 
