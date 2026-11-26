@@ -89,6 +89,8 @@ const state = `(() => {
     listbox: !!document.querySelector('[role="listbox"]'),
     chips: el ? el.querySelectorAll('.mention-chip').length : 0,
     hint: document.querySelector('.mention-input-hint')?.textContent ?? null,
+    attachments: Array.from(document.querySelectorAll('.chat-file-chip-name'), n => n.textContent),
+    imported: window.__imported,
     ariaAutocomplete: el?.getAttribute('aria-autocomplete') ?? null,
     sent: window.__sent,
     drafts: window.__drafts,
@@ -240,7 +242,7 @@ for (const mode of ['single', 'group']) {
   assert.equal(s.sendDisabled, false, `${mode}: 粘贴后发送键可用`)
   await screenshot(`${mode}-pasted`)
 
-  // 11. 粘贴图片：不进输入框（旧行为是图片显示在框里、发送键仍然为灰，永远发不出去）
+  // 11. 粘贴图片：当作附件收下（和点击「+ 导入」一样），不堆进输入框
   await evaluate(`document.querySelector('[role="textbox"]').focus()`)
   await clearAll()
   await evaluate(`(async () => {
@@ -258,9 +260,33 @@ for (const mode of ['single', 'group']) {
   const pastedImages = await evaluate(`document.querySelector('[role="textbox"]').querySelectorAll('img').length`)
   assert.equal(pastedImages, 0, `${mode}: 粘贴图片不应进输入框`)
   assert.equal(s.text.trim(), '', `${mode}: 粘贴图片后输入框应仍为空，实际 ${JSON.stringify(s.text)}`)
-  assert.equal(s.sendDisabled, true, `${mode}: 粘贴图片后发送键应仍禁用`)
-  assert.equal(s.hint, '输入框不支持粘贴图片或文件，请用附件按钮上传', `${mode}: 应提示改用附件按钮，实际 ${JSON.stringify(s.hint)}`)
-  await screenshot(`${mode}-image-paste-blocked`)
+  assert.equal(s.hint, null, `${mode}: 图片已收下为附件，不应再提示改用附件按钮，实际 ${JSON.stringify(s.hint)}`)
+  assert.equal(s.imported.length, 1, `${mode}: 粘贴的图片应走附件导入，实际 ${JSON.stringify(s.imported)}`)
+  assert.equal(s.imported[0].mime, 'image/png', `${mode}: 导入的应是 PNG，实际 ${JSON.stringify(s.imported[0])}`)
+  assert.ok(s.imported[0].size > 0, `${mode}: 导入的图片字节不应为空`)
+  assert.equal(s.attachments.length, 1, `${mode}: 附件区应出现一个文件，实际 ${JSON.stringify(s.attachments)}`)
+  assert.equal(s.sendDisabled, false, `${mode}: 只有附件没有文字时也应可发送`)
+  await screenshot(`${mode}-image-paste-attached`)
+
+  // 11b. 拖入文件：同样进附件区，不落进 contenteditable
+  await evaluate(`(() => {
+    const box = document.querySelector('[role="textbox"]')
+    const file = new File(['hello drop'], 'dropped.txt', { type: 'text/plain' })
+    const dt = new DataTransfer()
+    dt.items.add(file)
+    box.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt }))
+    box.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }))
+  })()`)
+  await pause(250)
+  s = await read()
+  assert.equal(s.imported.length, 2, `${mode}: 拖入的文件应走附件导入，实际 ${JSON.stringify(s.imported)}`)
+  assert.equal(s.imported[1].name, 'dropped.txt', `${mode}: 拖入文件名应保留，实际 ${JSON.stringify(s.imported[1])}`)
+  assert.equal(s.text.trim(), '', `${mode}: 拖入文件不应写进输入框，实际 ${JSON.stringify(s.text)}`)
+  assert.equal(s.attachments.length, 2, `${mode}: 附件区应有两个文件，实际 ${JSON.stringify(s.attachments)}`)
+  await screenshot(`${mode}-file-drop-attached`)
+  await clearAll()
+  await evaluate(`document.querySelectorAll('.chat-file-chip-remove').forEach(b => b.click())`)
+  await pause(150)
 
   // 12. 恢复草稿后光标在末尾（旧行为：新输入的字插在草稿前面）
   await clearAll()

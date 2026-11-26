@@ -7,6 +7,10 @@ use tauri::{Emitter, Manager};
 
 const PREVIEW_MAX_CHARS: usize = 30_000;
 
+/// Guard for attachments handed over as bytes (paste / drag-and-drop): they travel through the
+/// IPC bridge in one piece, unlike files the native picker copies straight from disk.
+const MAX_PASTED_FILE_BYTES: u64 = 64 * 1024 * 1024;
+
 fn canonicalize_existing(path: &Path, description: &str) -> Result<PathBuf, String> {
     path.canonicalize()
         .map_err(|error| crate::file_access::io_error(Path::new(description), error))
@@ -116,6 +120,66 @@ pub struct CachedFile {
     pub mime: String,
 }
 
+/// Reserves the on-disk copy for one chat attachment: `{app_data}/{user}/{chat}/file/{name}_{suffix}.{ext}`.
+/// Both the native picker (`cache_file`) and bytes handed over by the webview
+/// (`cache_file_bytes`, used by paste and drag-and-drop) land in the same place, so everything
+/// downstream — preview, upload, send — sees one kind of attachment.
+fn prepare_cache_destination(
+    app: &tauri::AppHandle,
+    user_id: &str,
+    chat_id: &str,
+    file_name: &str,
+) -> Result<(PathBuf, String), String> {
+    // Prepend a short UUID prefix to avoid collisions when the same filename
+    // is sent multiple times, while keeping the display name readable on disk.
+    let suffix = &uuid::Uuid::new_v4().simple().to_string()[..8];
+    let cached_name = match file_name.rfind('.') {
+        Some(i) => format!("{}_{}.{}", &file_name[..i], suffix, &file_name[i + 1..]),
+        None => format!("{file_name}_{suffix}"),
+    };
+
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Cannot resolve app data dir: {e}"))?;
+    std::fs::create_dir_all(&app_data).map_err(|e| e.to_string())?;
+    let canonical_app_data = canonicalize_existing(&app_data, "app data directory")?;
+    let dest_dir = app_data.join(user_id).join(chat_id).join("file");
+    std::fs::create_dir_all(&dest_dir).map_err(|e| e.to_string())?;
+    let canonical_dest_dir = canonicalize_existing(&dest_dir, "cache directory")?;
+    if !canonical_dest_dir.starts_with(&canonical_app_data) {
+        return Err("Cache directory escapes the app data directory".to_string());
+    }
+
+    Ok((canonical_dest_dir.join(&cached_name), cached_name))
+}
+
+fn cached_file_result(
+    dest: &Path,
+    rel_path: String,
+    file_name: String,
+    size: u64,
+    mime: String,
+) -> CachedFile {
+    let abs_path = dest.to_string_lossy().to_string();
+    CachedFile {
+        rel_path,
+        asset_url: format!("asset://localhost/{}", abs_path.replace('\\', "/")),
+        name: file_name,
+        size,
+        mime,
+    }
+}
+
+fn mime_for_file_name(file_name: &str) -> String {
+    let ext = Path::new(file_name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    mime_for_ext(&ext)
+}
+
 #[tauri::command]
 pub fn cache_file(
     app: tauri::AppHandle,
@@ -134,38 +198,9 @@ pub fn cache_file(
         .to_string();
 
     let size = src.metadata().map_err(|e| e.to_string())?.len();
+    let mime = mime_for_file_name(&file_name);
 
-    let mime = {
-        let ext = src
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_lowercase();
-        mime_for_ext(&ext)
-    };
-
-    // Prepend a short UUID prefix to avoid collisions when the same filename
-    // is sent multiple times, while keeping the display name readable on disk.
-    let suffix = &uuid::Uuid::new_v4().simple().to_string()[..8];
-    let cached_name = match file_name.rfind('.') {
-        Some(i) => format!("{}_{}.{}", &file_name[..i], suffix, &file_name[i + 1..]),
-        None => format!("{file_name}_{suffix}"),
-    };
-
-    let app_data = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Cannot resolve app data dir: {e}"))?;
-    std::fs::create_dir_all(&app_data).map_err(|e| e.to_string())?;
-    let canonical_app_data = canonicalize_existing(&app_data, "app data directory")?;
-    let dest_dir = app_data.join(&user_id).join(&chat_id).join("file");
-    std::fs::create_dir_all(&dest_dir).map_err(|e| e.to_string())?;
-    let canonical_dest_dir = canonicalize_existing(&dest_dir, "cache directory")?;
-    if !canonical_dest_dir.starts_with(&canonical_app_data) {
-        return Err("Cache directory escapes the app data directory".to_string());
-    }
-
-    let dest = canonical_dest_dir.join(&cached_name);
+    let (dest, cached_name) = prepare_cache_destination(&app, &user_id, &chat_id, &file_name)?;
     let mut source_file = File::open(&src).map_err(|e| e.to_string())?;
     let mut dest_file = OpenOptions::new()
         .write(true)
@@ -174,17 +209,57 @@ pub fn cache_file(
         .map_err(|e| e.to_string())?;
     std::io::copy(&mut source_file, &mut dest_file).map_err(|e| e.to_string())?;
 
-    let rel_path = format!("{user_id}/{chat_id}/file/{cached_name}");
-    let abs_path = dest.to_string_lossy().to_string();
-    let asset_url = format!("asset://localhost/{}", abs_path.replace('\\', "/"));
-
-    Ok(CachedFile {
-        rel_path,
-        asset_url,
-        name: file_name,
+    Ok(cached_file_result(
+        &dest,
+        format!("{user_id}/{chat_id}/file/{cached_name}"),
+        file_name,
         size,
         mime,
-    })
+    ))
+}
+
+/// Caches bytes the webview already holds: a pasted screenshot has no path on disk, and a
+/// dropped file is only handed over as bytes. The name is sanitised like any other path
+/// segment, so the webview cannot write outside this chat's attachment directory.
+#[tauri::command]
+pub fn cache_file_bytes(
+    app: tauri::AppHandle,
+    user_id: String,
+    chat_id: String,
+    file_name: String,
+    data_base64: String,
+) -> Result<CachedFile, String> {
+    use base64::Engine as _;
+
+    validate_path_segment(&user_id, "user id")?;
+    validate_path_segment(&chat_id, "chat id")?;
+    validate_path_segment(&file_name, "file name")?;
+    let data = base64::engine::general_purpose::STANDARD
+        .decode(data_base64.as_bytes())
+        .map_err(|error| format!("Invalid file payload: {error}"))?;
+    if data.len() as u64 > MAX_PASTED_FILE_BYTES {
+        return Err(format!(
+            "File is larger than {} MB",
+            MAX_PASTED_FILE_BYTES / (1024 * 1024)
+        ));
+    }
+
+    let mime = mime_for_file_name(&file_name);
+    let (dest, cached_name) = prepare_cache_destination(&app, &user_id, &chat_id, &file_name)?;
+    let mut dest_file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&dest)
+        .map_err(|e| e.to_string())?;
+    dest_file.write_all(&data).map_err(|e| e.to_string())?;
+
+    Ok(cached_file_result(
+        &dest,
+        format!("{user_id}/{chat_id}/file/{cached_name}"),
+        file_name,
+        data.len() as u64,
+        mime,
+    ))
 }
 
 /// Name of the local copy of a conversation file. With a `cache_key` (the file's stable id)
@@ -1014,8 +1089,8 @@ fn mime_for_ext(ext: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        conversation_cache_name, resolve_cached_path_from_root, validate_cached_relative_path,
-        validate_path_segment, write_conversation_copy,
+        conversation_cache_name, mime_for_file_name, resolve_cached_path_from_root,
+        validate_cached_relative_path, validate_path_segment, write_conversation_copy,
     };
     use std::path::Path;
 
@@ -1042,6 +1117,26 @@ mod tests {
                 "expected valid segment: {valid:?}"
             );
         }
+    }
+
+    /// Names for pasted and dropped attachments come from the WebView, so they go through the
+    /// same segment check as a user or chat id: no separators, no traversal, no control bytes.
+    #[test]
+    fn pasted_attachment_names_cannot_escape_the_chat_directory() {
+        for invalid in ["../../secret.txt", "a/b.png", "a\\b.png", "", ".", "..", "bad\0.png"] {
+            assert!(
+                validate_path_segment(invalid, "file name").is_err(),
+                "expected invalid attachment name: {invalid:?}"
+            );
+        }
+        assert!(validate_path_segment("粘贴图片-20261126.png", "file name").is_ok());
+    }
+
+    #[test]
+    fn attachment_mime_follows_the_file_name_extension() {
+        assert_eq!(mime_for_file_name("粘贴图片-1.png"), "image/png");
+        assert_eq!(mime_for_file_name("report.PDF"), "application/pdf");
+        assert_eq!(mime_for_file_name("archive"), "application/octet-stream");
     }
 
     #[test]

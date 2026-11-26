@@ -66,6 +66,7 @@ pub fn run() {
             secure_session::secure_login_credentials_list,
             files::save_conversation_file,
             files::cache_file,
+            files::cache_file_bytes,
             files::cache_conversation_file,
             files::resolve_cached_file,
             files::show_in_folder,

@@ -39,7 +39,7 @@ test('selection 缺失时仍关闭 @ 菜单但不丢文本', () => {
 // contenteditable；extract 只取文本，于是内容看得见却发不出去。
 const pasteStart = source.indexOf('const handlePaste = useCallback')
 assert.ok(pasteStart > 0, '找不到 MentionInput.handlePaste')
-const pasteBody = source.slice(pasteStart, source.indexOf('}, [disabled, insertPlainText, showHint])', pasteStart))
+const pasteBody = source.slice(pasteStart, source.indexOf('}, [disabled, insertPlainText, takeFiles])', pasteStart))
 
 test('handlePaste 先 preventDefault，再判断有没有纯文本', () => {
   const prevent = pasteBody.indexOf('e.preventDefault()')
@@ -49,18 +49,50 @@ test('handlePaste 先 preventDefault，再判断有没有纯文本', () => {
   assert.ok(prevent < plain, 'preventDefault 必须在读取剪贴板之前，否则图片会被默认粘贴塞进输入框')
 })
 
-test('没有纯文本时提示改用附件按钮而不是静默放行', () => {
-  assert.ok(pasteBody.includes('carriesFiles(e.clipboardData)'), '应识别剪贴板里的图片/文件')
-  assert.ok(pasteBody.includes('showHint('), '忽略图片时应给出提示')
+// 复核意见（PR #232）：图片/文件的粘贴与拖入要和点击「+ 导入」一样处理，不能无脑拦截。
+const takeStart = source.indexOf('const takeFiles = useCallback')
+assert.ok(takeStart > 0, '找不到 MentionInput.takeFiles')
+const takeBody = source.slice(takeStart, source.indexOf('}, [onFiles, showHint])', takeStart))
+
+test('粘贴的图片/文件交给 onFiles，而不是丢掉', () => {
+  assert.ok(pasteBody.includes("takeFiles(e.clipboardData, 'paste')"), 'handlePaste 未把剪贴板里的文件交给附件导入')
+  assert.ok(takeBody.includes('onFiles(files)'), 'takeFiles 未回调 onFiles')
+  assert.ok(source.includes('onFiles?: (files: File[]) => void'), 'MentionInput 缺少 onFiles 入参')
 })
 
-test('拖入图片/文件同样被拦截', () => {
+test('文本和文件同时存在时两者都不丢', () => {
+  const take = pasteBody.indexOf('takeFiles(')
+  const insert = pasteBody.indexOf('insertPlainText(el, pasted)')
+  assert.ok(take > 0 && insert > take, '文件应走附件、纯文本仍然插入输入框')
+  assert.equal(pasteBody.includes('if (!pasted) {'), false, '没有纯文本时不应提前 return，否则不带文字的图片会被丢掉')
+})
+
+test('没有 onFiles（宿主未接附件）时才提示改用附件按钮', () => {
+  assert.ok(takeBody.includes('if (onFiles && files.length > 0)'), '应优先走 onFiles')
+  assert.ok(takeBody.includes('showHint('), '宿主没接 onFiles 时应给出提示，不能静默丢弃')
+})
+
+test('拖入图片/文件走同一条附件路径', () => {
   const dropStart = source.indexOf('const handleDrop = useCallback')
   assert.ok(dropStart > 0, '缺少 onDrop 处理：拖入的图片会直接落进 contenteditable')
-  const dropBody = source.slice(dropStart, source.indexOf('}, [disabled, insertPlainText, showHint])', dropStart))
+  const dropBody = source.slice(dropStart, source.indexOf('}, [disabled, insertPlainText, takeFiles])', dropStart))
   assert.ok(dropBody.includes('e.preventDefault()'), 'handleDrop 缺少 preventDefault')
-  assert.ok(dropBody.includes('carriesFiles(e.dataTransfer)'), 'handleDrop 未拦截文件拖入')
+  assert.ok(dropBody.includes("takeFiles(e.dataTransfer, 'drop')"), 'handleDrop 未把拖入的文件交给附件导入')
   assert.ok(source.includes('onDrop={handleDrop}'), 'handleDrop 未挂到输入框上')
+  // 不阻止 dragover 的默认行为，浏览器根本不会触发 drop。
+  assert.ok(source.includes('onDragOver={handleDragOver}'), '缺少 onDragOver，拖入会被浏览器直接拒掉')
+})
+
+test('附件导入走与点击附件按钮相同的上传路径', () => {
+  const bar = readFileSync(new URL('../src/components/Chat/ChatInputBar.tsx', import.meta.url), 'utf8')
+  const importStart = bar.indexOf('const handleImportFiles = useCallback')
+  assert.ok(importStart > 0, 'ChatInputBar 缺少 handleImportFiles')
+  const importBody = bar.slice(importStart, bar.indexOf('}, [handleUploadFile, onImportFile, onUploadFile])', importStart))
+  assert.ok(importBody.includes('await onImportFile(file)'), '未把粘贴/拖入的文件缓存成 CachedFile')
+  // handlePickFile 的分支：有上传回调就上传，否则直接进待发送列表。
+  assert.ok(importBody.includes('if (onUploadFile) handleUploadFile(cached)'), '导入未复用点击附件按钮的上传路径')
+  assert.ok(importBody.includes('setPendingFiles((previous) => [...previous, cached])'), '无上传回调时应直接进待发送附件列表')
+  assert.ok(bar.includes('onFiles={onImportFile && !isInteractionDisabled ? handleImportFiles : undefined}'), '未把 onFiles 接到 MentionInput')
 })
 
 // 回归（PR #232 复核）：恢复草稿后光标在开头，新输入的字插在草稿前面。

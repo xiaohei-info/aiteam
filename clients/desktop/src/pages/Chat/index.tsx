@@ -5,7 +5,7 @@ import { useChatStore, type Message, type ConversationItem } from '../../stores/
 import { employeeSendFailure, employeeUnavailableMessage } from '../../lib/employeeAvailability'
 import { projectSendFailure } from '../../lib/projectConversation'
 import { useAgentAuthStore } from '../../stores/agentAuth'
-import { pickAndCacheFile, readCachedFileBlob, type CachedFile } from '../../lib/fileCache'
+import { pickAndCacheFile, cacheFileFromBlob, readCachedFileBlob, type CachedFile } from '../../lib/fileCache'
 import {
   uploadedAttachmentIds,
   uploadedMessageAttachments,
@@ -119,6 +119,7 @@ function isSameSendAttempt(
 interface NewSessionPageProps {
   onSend: (text: string, files: UploadableChatFile[], employeeId?: string) => boolean | Promise<boolean>
   onPickFile: () => Promise<CachedFile | null>
+  onImportFile: (file: File) => Promise<CachedFile | null>
   onUploadFile: (file: CachedFile, employeeId?: string) => Promise<string>
   onDeleteUploadedFile: (attachmentId: string) => Promise<void>
   disabled?: boolean
@@ -132,6 +133,7 @@ interface NewSessionPageProps {
 function NewSessionPage({
   onSend,
   onPickFile,
+  onImportFile,
   onUploadFile,
   onDeleteUploadedFile,
   disabled,
@@ -151,6 +153,7 @@ function NewSessionPage({
           enableKnowledgeFiles
           onSend={onSend}
           onPickFile={onPickFile}
+          onImportFile={onImportFile}
           onUploadFile={onUploadFile}
           onDeleteUploadedFile={onDeleteUploadedFile}
           disabled={disabled}
@@ -621,6 +624,12 @@ export default function Chat() {
     [userId, activeConvId]
   )
 
+  /** Paste / drag-and-drop: the WebView hands over bytes, not a path, so cache them directly. */
+  const importFileAction = useCallback(
+    (file: File) => cacheFileFromBlob(userId, activeConvId || 'new-session', file, file.name),
+    [userId, activeConvId]
+  )
+
   const handleUploadFile = useCallback(async (file: CachedFile): Promise<string> => {
     if (!activeConvId) throw new Error('请先选择会话')
     const sourceId = activeConvId
@@ -769,6 +778,7 @@ export default function Chat() {
       <NewSessionPage
         onSend={(text, files, employeeId) => startNewSession(text, files, employeeId ?? (location.state as { employeeId?: string } | null)?.employeeId)}
         onPickFile={pickFileAction}
+        onImportFile={importFileAction}
         onUploadFile={handleNewSessionUpload}
         onDeleteUploadedFile={handleDeleteNewSessionUpload}
         disabled={isGenerating}
@@ -873,6 +883,7 @@ export default function Chat() {
       <ChatInputBar
         onSend={sendMessage}
         onPickFile={pickFileAction}
+        onImportFile={importFileAction}
         onUploadFile={handleUploadFile}
         onDeleteUploadedFile={handleDeleteUploadedFile}
         disabled={activeMessagesLoading || Boolean(activeMessagesError) || Boolean(unavailableMessage)}

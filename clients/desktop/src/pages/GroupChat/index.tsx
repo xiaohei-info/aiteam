@@ -4,7 +4,7 @@ import { GitBranch } from 'lucide-react'
 import '../Chat/Chat.css'
 import { useChatStore, type Message } from '../../stores/chat'
 import { useAgentAuthStore } from '../../stores/agentAuth'
-import { pickAndCacheFile, readCachedFileBlob, type CachedFile } from '../../lib/fileCache'
+import { pickAndCacheFile, cacheFileFromBlob, readCachedFileBlob, type CachedFile } from '../../lib/fileCache'
 import {
   uploadedAttachmentIds,
   uploadedMessageAttachments,
@@ -212,6 +212,12 @@ export default function GroupChat() {
     [userId, activeGroupId],
   )
 
+  /** Paste / drag-and-drop: the WebView hands over bytes, not a path, so cache them directly. */
+  const handleImportFile = useCallback(
+    (file: File) => cacheFileFromBlob(userId, activeGroupId || 'group', file, file.name),
+    [userId, activeGroupId],
+  )
+
   const handleUploadFile = useCallback(async (file: CachedFile): Promise<string> => {
     if (!activeGroupId) throw new Error('请先选择群聊')
     const data = await blobToBase64(await readCachedFileBlob(file))
@@ -367,6 +373,7 @@ export default function GroupChat() {
       <ChatInputBar
         onSend={handleSend}
         onPickFile={handlePickFile}
+        onImportFile={handleImportFile}
         onUploadFile={handleUploadFile}
         onDeleteUploadedFile={handleDeleteUploadedFile}
         convId={activeGroupId}

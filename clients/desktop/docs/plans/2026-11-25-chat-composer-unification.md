@@ -134,9 +134,18 @@ mentionRoster?: MentionRosterExpert[]
 - 输入区下沿少 6px：textarea 是行内元素，下方有基线空隙；现在单聊与群聊间距一致。字号、行高、颜色、占位样式、宽高经计算样式对比完全一致。
 - 群聊成员异步加载（`members` 从 `[]` 变为非空）时不再切换组件，已输入内容不会被重置为草稿。
 
+### 图片 / 文件的粘贴与拖入（2026-11-26 复核后修正）
+
+粘贴和拖入的图片 / 文件**与点击附件按钮走同一条路**，不再拦截：
+
+- `MentionInput` 新增 `onFiles`：粘贴 / 拖入里的文件交给宿主，纯文本仍然插入输入框（两者同时存在时都不丢）；宿主没接 `onFiles` 时才回到「请用附件按钮」提示。
+- `ChatInputBar.onImportFile` 把 `File` 缓存成 `CachedFile`，之后复用 `handlePickFile` 的上传与待发送列表逻辑。
+- 剪贴板截图没有磁盘路径，因此新增 Tauri 命令 `cache_file_bytes`（base64 传入，文件名按路径段校验，上限 64 MB），与 `cache_file` 写入同一个会话附件目录。
+- `tauri.conf.json` 设 `dragDropEnabled: false`：Tauri 默认接管 WebView 的文件拖放，HTML5 `drop` 事件根本不会触发。
+
 ### 验证
 
 - 结构守卫：`tests/chatComposerUnified.test.ts`（无 `<textarea>`、无 `isMentionMode`、只有一个 `<MentionInput>`、取值/使能走 `useComposerValue`、`setText/clear/restore` 均回调 `onChange`、空态占位）；`mentionInputPaste` / `mentionRichText` / `chatComposerRestore` 守卫同步改为认 `emit(el)` / `composer.clear()`。
-- 浏览器冒烟：`tests/chat-composer-unified-smoke.mjs` + `tests/chat-composer-smoke.html`（Vite 1437 + Chrome CDP 9238），单聊/群聊各跑同一组：占位、发送键使能、Shift+Enter 换行 / Enter 发送、IME 合成期间回车不发送、Cmd+Z 撤销、全删后占位恢复、20 行长文本高度封顶 240 且发送键 `elementFromPoint` 命中、切会话草稿不串、发送失败原样放回（含 chip）、群聊 mentions 提交 / 单聊不弹 @ 菜单、真实剪贴板（`text/html` + `text/plain`）粘贴；另有 1440×640 小窗口与 hero 截图。
+- 浏览器冒烟：`tests/chat-composer-unified-smoke.mjs` + `tests/chat-composer-smoke.html`（Vite 1437 + Chrome CDP 9238），单聊/群聊各跑同一组：占位、发送键使能、Shift+Enter 换行 / Enter 发送、IME 合成期间回车不发送、Cmd+Z 撤销、全删后占位恢复、20 行长文本高度封顶 240 且发送键 `elementFromPoint` 命中、切会话草稿不串、发送失败原样放回（含 chip）、群聊 mentions 提交 / 单聊不弹 @ 菜单、真实剪贴板（`text/html` + `text/plain`）粘贴、真实剪贴板图片进附件区、拖入文件进附件区；另有 1440×640 小窗口与 hero 截图。
 - 原有 `tests/chat-paste-real-clipboard.mjs`（单聊断言改为 contentEditable）与 `tests/chat-paste-browser-smoke.mjs` 通过。
 - 未验证：真机 Tauri WebView（macOS WKWebView）下的输入法、撤销与粘贴；移动端软键盘（桌面端不涉及）。

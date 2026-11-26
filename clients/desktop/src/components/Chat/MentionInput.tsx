@@ -30,6 +30,12 @@ interface Props {
   autoFocus?: boolean
   onEnter: () => void
   onChange: (text: string, mentions: string[]) => void
+  /**
+   * Images and files pasted or dropped into the box. They are handed over as attachments — the
+   * same thing the attachment button produces — instead of being dropped into the text.
+   * Without this callback the input falls back to a hint telling the user to use that button.
+   */
+  onFiles?: (files: File[]) => void
 }
 
 /** 粘贴/换行会插入 <div>、<p>、<br> 等结构，展开逻辑见 mentionRichText（递归遍历子树）。 */
@@ -66,7 +72,19 @@ function caretToEnd(el: HTMLDivElement): void {
   sel?.addRange(range)
 }
 
-/** 剪贴板/拖拽里带文件（图片、文档）时一律拒收：输入框只提交纯文本，收下只会显示出来却发不出去。 */
+/**
+ * Files carried by a paste or a drop. `DataTransfer.files` is empty for a dragged file until the
+ * drop itself fires, so `items` is the one that answers "is a file coming" during dragover.
+ */
+function filesOf(data: DataTransfer | null | undefined): File[] {
+  if (!data) return []
+  if (data.files && data.files.length > 0) return Array.from(data.files)
+  return Array.from(data.items ?? [])
+    .filter((item) => item.kind === 'file')
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => file !== null)
+}
+
 function carriesFiles(data: DataTransfer | null | undefined): boolean {
   if (!data) return false
   if (data.files && data.files.length > 0) return true
@@ -74,7 +92,7 @@ function carriesFiles(data: DataTransfer | null | undefined): boolean {
 }
 
 const MentionInput = forwardRef<MentionInputHandle, Props>(({
-  members, placeholder, disabled, style, className, autoFocus, onEnter, onChange,
+  members, placeholder, disabled, style, className, autoFocus, onEnter, onChange, onFiles,
 }, ref) => {
   const editRef = useRef<HTMLDivElement>(null)
   const [query, setQuery] = useState<string | null>(null)
@@ -84,7 +102,7 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
   const [selectedIdx, setSelectedIdx] = useState(0)
   const isComposingRef = useRef(false)
   const menuId = useId()
-  // 图片/文件粘贴被忽略时的短暂提示（静静丢掉会让用户以为程序卡住）。
+  // 宿主没接附件（onFiles 缺失）时的短暂提示；静静丢掉会让用户以为程序卡住。
   const [hint, setHint] = useState<string | null>(null)
   const hintTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
   const showHint = useCallback((message: string) => {
@@ -219,32 +237,47 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
     emit(el)
   }, [closeMenu, emit])
 
+  /** Files go to the attachment list; text keeps being inserted as text. */
+  const takeFiles = useCallback((data: DataTransfer | null | undefined, source: 'paste' | 'drop'): boolean => {
+    if (!carriesFiles(data)) return false
+    const files = filesOf(data)
+    if (onFiles && files.length > 0) {
+      onFiles(files)
+      return true
+    }
+    showHint(source === 'paste'
+      ? '输入框不支持粘贴图片或文件，请用附件按钮上传'
+      : '输入框不支持拖入图片或文件，请用附件按钮上传')
+    return true
+  }, [onFiles, showHint])
+
   const handlePaste = useCallback((e: React.ClipboardEvent<HTMLDivElement>) => {
     const el = editRef.current
     if (!el || disabled) return
-    // 无论剪贴板里是什么都先拦掉浏览器默认粘贴：只有纯文本会被我们插入，图片/文件直接忽略。
+    // 无论剪贴板里是什么都先拦掉浏览器默认粘贴：文本由我们插入，图片/文件走附件。
     e.preventDefault()
+    takeFiles(e.clipboardData, 'paste')
     const pasted = e.clipboardData?.getData('text/plain') ?? ''
-    if (!pasted) {
-      if (carriesFiles(e.clipboardData)) showHint('输入框不支持粘贴图片或文件，请用附件按钮上传')
-      return
-    }
-    insertPlainText(el, pasted)
-  }, [disabled, insertPlainText, showHint])
+    if (pasted) insertPlainText(el, pasted)
+  }, [disabled, insertPlainText, takeFiles])
 
   // 拖入同理：默认行为会把图片/文件/富文本直接落进 contenteditable。
   const handleDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     const el = editRef.current
     if (!el || disabled) return
     e.preventDefault()
-    if (carriesFiles(e.dataTransfer)) {
-      showHint('输入框不支持拖入图片或文件，请用附件按钮上传')
-      return
-    }
+    if (takeFiles(e.dataTransfer, 'drop')) return
     const dropped = e.dataTransfer?.getData('text/plain') ?? ''
     if (!dropped) return
     insertPlainText(el, dropped)
-  }, [disabled, insertPlainText, showHint])
+  }, [disabled, insertPlainText, takeFiles])
+
+  /** Without this the browser refuses the drop and shows a “no entry” cursor over the box. */
+  const handleDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    if (disabled || !carriesFiles(e.dataTransfer)) return
+    e.preventDefault()
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
+  }, [disabled])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
     // 组词期间让输入法处理回车、方向键和删除键，不选择 @ 成员或发送。
@@ -378,6 +411,7 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
         onInput={handleInput}
         onPaste={handlePaste}
         onDrop={handleDrop}
+        onDragOver={handleDragOver}
         onCompositionStart={() => { isComposingRef.current = true }}
         onCompositionEnd={() => { isComposingRef.current = false }}
         onKeyDown={handleKeyDown}

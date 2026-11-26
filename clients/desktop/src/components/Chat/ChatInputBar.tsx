@@ -49,6 +49,8 @@ const CHAT_TEXTAREA_MAX_HEIGHT = 240
 export interface ChatInputBarProps {
   onSend: (text: string, files: UploadableChatFile[], employeeId?: string, mentions?: string[]) => boolean | Promise<boolean>
   onPickFile: () => Promise<CachedFile | null>
+  /** Caches a file the WebView holds (pasted or dropped) so it becomes an ordinary attachment. */
+  onImportFile?: (file: File) => Promise<CachedFile | null>
   onUploadFile?: (file: CachedFile, employeeId?: string) => Promise<string>
   onDeleteUploadedFile?: (attachmentId: string) => Promise<unknown>
   disabled?: boolean
@@ -76,7 +78,7 @@ export interface ChatInputBarProps {
 }
 
 export const ChatInputBar = memo(({
-  onSend, onPickFile, onUploadFile, onDeleteUploadedFile,
+  onSend, onPickFile, onImportFile, onUploadFile, onDeleteUploadedFile,
   disabled, convId, conversationUpgradeFrom, draft, draftFiles, onDraftChange,
   variant = 'dock', placeholder = '输入消息…', autoFocus, helper, tools,
   employees = [], members, isGenerating, isSyncing, onAbort, onHeightChange, enableVoiceInput, enableKnowledgeFiles,
@@ -302,6 +304,25 @@ export const ChatInputBar = memo(({
     } catch { setFileError('选择文件失败，请重试') }
     finally { setIsPickingFile(false) }
   }
+
+  /** Pasted and dropped files take the very same route as a file chosen with the attachment button. */
+  const handleImportFiles = useCallback((files: File[]) => {
+    if (!onImportFile || files.length === 0) return
+    setFileError('')
+    void (async () => {
+      for (const file of files) {
+        try {
+          const cached = await onImportFile(file)
+          if (!cached) continue
+          if (onUploadFile) handleUploadFile(cached)
+          else setPendingFiles((previous) => [...previous, cached])
+        } catch (error) {
+          console.error('[ChatInputBar] import pasted file failed:', error)
+          setFileError(`添加“${file.name || '剪贴板图片'}”失败，请重试`)
+        }
+      }
+    })()
+  }, [handleUploadFile, onImportFile, onUploadFile])
 
   const handleRemoveFile = useCallback((file: UploadableChatFile, index: number) => {
     setPendingFiles((previous) => file.upload
@@ -687,6 +708,7 @@ export const ChatInputBar = memo(({
             autoFocus={autoFocus}
             onEnter={handleSend}
             onChange={composer.handleChange}
+            onFiles={onImportFile && !isInteractionDisabled ? handleImportFiles : undefined}
           />
           <div className="chat-input-actions">
             <div className="chat-input-tools">

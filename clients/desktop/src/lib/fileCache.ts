@@ -28,6 +28,55 @@ export async function pickAndCacheFile(userId: string, chatId: string): Promise<
   })
 }
 
+const EXT_BY_MIME: Record<string, string> = {
+  'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp',
+  'image/bmp': 'bmp', 'image/svg+xml': 'svg', 'application/pdf': 'pdf',
+  'text/plain': 'txt', 'text/markdown': 'md', 'text/csv': 'csv', 'application/json': 'json',
+}
+
+/** `/` and the like would make the name look like a path; the Rust side rejects those outright. */
+function sanitizeFileName(name: string): string {
+  const cleaned = Array.from(name, (character) => {
+    const code = character.codePointAt(0) ?? 0
+    return code < 0x20 || '\\/:*?"<>|'.includes(character) ? '_' : character
+  }).join('')
+  return cleaned.replace(/^\.+/, '').trim().slice(0, 120)
+}
+
+/** Chunked so a large attachment does not blow the argument limit of `String.fromCharCode`. */
+async function toBase64(blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(await blob.arrayBuffer())
+  let binary = ''
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+  }
+  return btoa(binary)
+}
+
+/** A screenshot pasted from the clipboard arrives without a name; give it a readable, unique one. */
+function fallbackFileName(mime: string): string {
+  const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)
+  const ext = EXT_BY_MIME[mime] ?? (mime.split('/')[1] || 'bin').replace(/[^a-z0-9]/gi, '')
+  return `${mime.startsWith('image/') ? '粘贴图片' : '粘贴文件'}-${stamp}.${ext || 'bin'}`
+}
+
+/**
+ * Cache a file the WebView already holds (clipboard paste, drag-and-drop) into the same
+ * per-chat attachment directory the native picker writes to, so the result is an ordinary
+ * attachment: same preview, same upload, same send.
+ */
+export async function cacheFileFromBlob(
+  userId: string,
+  chatId: string,
+  blob: Blob,
+  fileName?: string,
+): Promise<CachedFile> {
+  const name = sanitizeFileName(fileName ?? '') || fallbackFileName(blob.type || 'application/octet-stream')
+  return invoke<CachedFile>('cache_file_bytes', {
+    userId, chatId, fileName: name, dataBase64: await toBase64(blob),
+  })
+}
+
 /**
  * Restore an asset:// URL from a stored rel_path.
  * Call this when rendering a stored file message after restart.

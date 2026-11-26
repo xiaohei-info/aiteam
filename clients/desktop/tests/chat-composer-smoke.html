@@ -15,6 +15,7 @@ const variant = params.get('variant') ?? 'dock'
 window.__sent = []
 window.__drafts = {}
 window.__failNext = false
+window.__imported = []
 
 const members = mode === 'group'
   ? [
@@ -40,6 +41,17 @@ function Harness() {
       return true
     },
     onPickFile: async () => null,
+    // 浏览器里没有 Tauri invoke：假装缓存成功，记录下来供断言。
+    onImportFile: async (file) => {
+      window.__imported.push({ name: file.name, size: file.size, mime: file.type })
+      return {
+        rel_path: `u/${convId}/file/${file.name}`,
+        asset_url: URL.createObjectURL(file),
+        name: file.name,
+        size: file.size,
+        mime: file.type,
+      }
+    },
     onDraftChange: (id, text) => { window.__drafts[id] = { text } },
   })
 }
