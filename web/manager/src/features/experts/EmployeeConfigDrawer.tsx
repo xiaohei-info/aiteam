@@ -27,6 +27,7 @@ import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
 import { useI18n } from "../../i18n/context";
 import { DepartmentSelector } from "./DepartmentSelector";
+import { EmployeeAvatarEditor } from "./EmployeeAvatar";
 import { KnowledgePolicyPanel } from "./KnowledgePolicyPanel";
 import { MemoryPolicyPanel } from "./MemoryPolicyPanel";
 import { useExpertsApi } from "./useExpertsApi";
@@ -52,6 +53,8 @@ export interface EmployeeConfigDrawerProps {
   departments?: Department[];
   onClose: () => void;
   onSaved: (updated: EmployeeConfig) => void;
+  /** 头像上传后立即生效（不随表单保存）；列表页据此刷新卡片头像。 */
+  onAvatarChanged?: (employeeId: string, avatarUrl: string) => void;
 }
 
 const DEFAULT_THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high"];
@@ -123,6 +126,7 @@ export function toEmployeeConfigIn(config: EmployeeConfig): EmployeeConfigIn {
     copied_from_employee_id,
     skill_status,
     connector_status,
+    avatar_url,
     ...editable
   } = config;
   void employee_id;
@@ -144,6 +148,8 @@ export function toEmployeeConfigIn(config: EmployeeConfig): EmployeeConfigIn {
   // 目录状态由服务端按当前目录算出，只读。
   void skill_status;
   void connector_status;
+  // 头像单独上传（POST /avatar），写入 schema 不收该字段，带上会 422。
+  void avatar_url;
   return editable;
 }
 
@@ -153,6 +159,7 @@ export function EmployeeConfigDrawer({
   departments = [],
   onClose,
   onSaved,
+  onAvatarChanged,
 }: EmployeeConfigDrawerProps): ReactNode {
   const i18n = useI18n();
   const experts = useExpertsApi();
@@ -394,6 +401,18 @@ export function EmployeeConfigDrawer({
               ) : (
                 <form id="employee-config-form" onSubmit={handleSubmit}>
                   <VStack gap={5}>
+                    {employee && (
+                      <EmployeeAvatarEditor
+                        employee={employee}
+                        upload={experts.uploadEmployeeAvatar}
+                        disabled={submitting}
+                        onUploaded={(id, avatarUrl) => {
+                          // 只改本地实例：不动 draft，未保存的表单修改保留。
+                          setEmployee((prev) => (prev && prev.employee_id === id ? { ...prev, avatar_url: avatarUrl } : prev));
+                          onAvatarChanged?.(id, avatarUrl);
+                        }}
+                      />
+                    )}
                     <VStack gap={3}>
                       <Heading level={3}>{i18n.t("manager.experts.section_prompt")}</Heading>
                       <FormLayout>

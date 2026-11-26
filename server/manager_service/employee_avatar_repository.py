@@ -42,6 +42,14 @@ class EmployeeAvatarRepository:
             ).fetchone()
         return _row(row) if row else None
 
+    def versions(self, ctx: TenantContext) -> dict[str, int]:
+        """{employee_id: version} for every live avatar in the tenant (one query for list pages)."""
+        with self._router.session(ctx) as s:
+            rows = s.execute(
+                "SELECT employee_id, version FROM employee_avatar WHERE deleted_at IS NULL",
+            ).fetchall()
+        return {str(r[0]): int(r[1]) for r in rows}
+
     def upsert(self, ctx: TenantContext, *, employee_id: str, storage_key: str,
                mime_type: str, byte_size: int, sha256: str) -> EmployeeAvatarRow:
         """Insert at version 1, or bump the version when the bytes changed (same sha256 = no-op)."""

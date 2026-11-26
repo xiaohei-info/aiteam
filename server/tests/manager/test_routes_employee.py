@@ -256,3 +256,36 @@ def test_list_returns_before_scope_reconcile_runs():
         client = _client("postgresql://fake/fake")
         assert client.get("/api/manager/employees", headers=_auth_header()).status_code == 200
     assert order == ["list", "reconcile"]
+
+
+def test_list_and_get_carry_avatar_url():
+    """企业端专家列表/详情带头像路径（PR #231 复核：企业端要能展示员工头像）。"""
+    svc = _fake_service()
+    avatars = MagicMock()
+    avatars.avatar_urls.return_value = {"emp-1": "/api/manager/employees/emp-1/avatar/content?v=2"}
+    with patch("manager_service.routes_employee._service", return_value=svc), \
+         patch("manager_service.routes_employee._avatar_service", return_value=avatars), \
+         patch("manager_service.routes_employee.reconcile_for_admin"):
+        client = _client("postgresql://fake/fake")
+        listed = client.get("/api/manager/employees", headers=_auth_header())
+        one = client.get("/api/manager/employees/emp-1", headers=_auth_header())
+        # 保存后返回的配置也要带头像，否则企业端卡片在保存后头像消失。
+        saved = client.put("/api/manager/employees/emp-1", json={"display_name": "专家A"}, headers=_auth_header())
+    assert listed.status_code == 200, listed.text
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["data"]["avatar_url"] == "/api/manager/employees/emp-1/avatar/content?v=2"
+    assert listed.json()["data"][0]["avatar_url"] == "/api/manager/employees/emp-1/avatar/content?v=2"
+    assert one.json()["data"]["avatar_url"] == "/api/manager/employees/emp-1/avatar/content?v=2"
+
+
+def test_list_without_avatar_is_null_and_avatar_failure_does_not_break_list():
+    svc = _fake_service()
+    broken = MagicMock()
+    broken.avatar_urls.side_effect = RuntimeError("db down")
+    with patch("manager_service.routes_employee._service", return_value=svc), \
+         patch("manager_service.routes_employee._avatar_service", return_value=broken), \
+         patch("manager_service.routes_employee.reconcile_for_admin"):
+        client = _client("postgresql://fake/fake")
+        listed = client.get("/api/manager/employees", headers=_auth_header())
+    assert listed.status_code == 200, listed.text
+    assert listed.json()["data"][0]["avatar_url"] is None

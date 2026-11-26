@@ -8,7 +8,7 @@
  * /marketplace + /solutions；本卡恢复实例列表 + 详情配置能力）。
  */
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { ApiError, DigitalEmployeeAvatar } from "@aiteam/shared";
+import { ApiError } from "@aiteam/shared";
 import { Badge } from "@astryxdesign/core/Badge";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
@@ -22,6 +22,7 @@ import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
 import { useI18n } from "../../i18n/context";
 import { CopyExpertDialog } from "./CopyExpertDialog";
+import { EmployeeAvatar } from "./EmployeeAvatar";
 import { EmployeeConfigDrawer } from "./EmployeeConfigDrawer";
 import { useExpertsApi } from "./useExpertsApi";
 import type { Department, EmployeeConfig } from "./types";
@@ -99,6 +100,12 @@ export function ExpertsPage(): ReactNode {
     },
     [],
   );
+
+  // 详情弹窗里上传的头像：单独记一份，不改 items——改 items 会让弹窗按新实例重置草稿，丢掉未保存的修改。
+  const [avatarOverrides, setAvatarOverrides] = useState<Record<string, string>>({});
+  const onAvatarChanged = useCallback((employeeId: string, avatarUrl: string) => {
+    setAvatarOverrides((prev) => ({ ...prev, [employeeId]: avatarUrl }));
+  }, []);
 
   const onCopied = useCallback((copy: EmployeeConfig) => {
     setItems((prev) => [copy, ...prev]);
@@ -228,7 +235,7 @@ export function ExpertsPage(): ReactNode {
                 }}
               >
                 <div data-ui="expert-card-hero">
-                  <DigitalEmployeeAvatar name={displayName} size={54} />
+                  <EmployeeAvatar name={displayName} src={avatarOverrides[employee.employee_id] ?? employee.avatar_url} size={54} />
                   <div data-ui="expert-card-identity">
                     <Heading level={3}>
                       {/* 键盘与读屏用户的详情入口：名称本身是按钮。 */}
@@ -314,6 +321,7 @@ export function ExpertsPage(): ReactNode {
           departments={departments}
           onClose={() => setDetailId(null)}
           onSaved={onSaved}
+          onAvatarChanged={onAvatarChanged}
         />
       )}
     </VStack>

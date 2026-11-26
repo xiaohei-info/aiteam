@@ -16,6 +16,7 @@ import type {
   Department,
   EmployeeConfig,
   EmployeeConfigIn,
+  EmployeeAvatarOut,
   ExpertTemplate,
   RecruitExpertInput,
   RecruitModelPolicy,
@@ -41,6 +42,11 @@ export interface ExpertsApi {
     idempotencyKey: string,
   ) => Promise<EmployeeConfig | null>;
   getLifecycleOptions: (employeeId: string) => Promise<LifecycleOptions>;
+  /** 上传企业自建员工（origin=custom）的头像；data 为不带前缀的 Base64。模板来源员工返回 409。 */
+  uploadEmployeeAvatar?: (
+    employeeId: string,
+    avatar: { mime_type: string; data: string; filename?: string },
+  ) => Promise<EmployeeAvatarOut | null>;
   listSolutionInstances: () => Promise<SolutionInstance[]>;
 }
 
@@ -75,6 +81,9 @@ export function useExpertsApi(): ExpertsApi {
       updateEmployee(employeeId, config) {
         // PUT 全量替换（EmployeeConfigIn）：回传载入的完整配置，仅覆盖被编辑字段，保全其余。
         return client.put<EmployeeConfig>(`/api/manager/employees/${employeeId}`, { body: config });
+      },
+      uploadEmployeeAvatar(employeeId, avatar) {
+        return client.post<EmployeeAvatarOut>(`/api/manager/employees/${employeeId}/avatar`, { body: avatar });
       },
       copyEmployee(employeeId, input, idempotencyKey) {
         return client.post<EmployeeConfig>(`/api/manager/employees/${employeeId}/copy`, { body: input, idempotencyKey });
