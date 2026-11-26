@@ -6,7 +6,7 @@ import { useGlobalShortcutClose } from '../../hooks/useGlobalShortcut'
 import type { GroupMember } from '../../stores/chat'
 import { isImeKeyboardEvent } from '../../lib/imeKeyboard'
 import { extractMentionText, type RichTextNodeLike } from './mentionRichText'
-import { carriesFiles, composePaste, fetchImage, filesOf, htmlToParts, type ComposedPaste } from './clipboardContent'
+import { carriesFiles, composePaste, filesOf, htmlToParts, type ComposedPaste } from './clipboardContent'
 import { readClipboardRtfImages } from '../../lib/fileCache'
 
 export interface MentionInputHandle {
@@ -244,8 +244,10 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
 
   /**
    * 粘贴与拖入共用：文字照常插入，图片和文件走附件（与点「+ 导入」同一路径）。
-   * 图文混在一起时（网页/文档里复制的一段），每张图、每个文件在原位置留下 `[图片：名称]` /
-   * `[文件：名称]` 占位，发出去后仍看得出哪段话配哪张图。访达复制文件时剪贴板顺带的文件名文字不算内容。
+   * - 纯图片、访达复制的文件：作附件（剪贴板顺带的文件名文字不算内容）。
+   * - 富文本带图片且拿得到图片数据（含 WPS/Word 从 RTF 补回）：图文都加，图片在原位置留 `[图片：名称]` 占位。
+   * - 复制表格（有文字、富文本里没图片，只多一张截图）：只贴文字。
+   * - 网页图文（图片只有网址）、飞书内部引用：只贴文字，不下载、不留占位，提示图片没带过来。
    */
   const takeTransfer = useCallback((el: HTMLDivElement, data: DataTransfer | null | undefined, source: 'paste' | 'drop', at?: Range | null) => {
     if (!data) return
@@ -253,7 +255,7 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
     const parts = htmlToParts(data.getData('text/html') ?? '')
     const files = filesOf(data)
     const apply = (composed: ComposedPaste, range?: Range | null) => {
-      const hasAttachments = composed.files.length > 0 || composed.pending.length > 0
+      const hasAttachments = composed.files.length > 0
       if (hasAttachments && !onFiles) {
         showHint(source === 'paste'
           ? '这里不支持粘贴图片或文件，请用附件按钮上传'
@@ -265,17 +267,9 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
       }
       if (composed.text) insertPlainText(el, composed.text, range)
       if (composed.files.length > 0) onFiles?.(composed.files)
-      // 飞书等应用复制时只把内部图片引用放进剪贴板，图片本身没带过来，谁都取不到。
+      // 网页图片只有网址、飞书只给内部引用：图片没随复制带过来，不下载也不留占位，只贴文字并提示。
       if (composed.unavailable > 0) {
-        showHint(`有 ${composed.unavailable} 张图片没有随复制带过来，请在原应用里单独复制图片再粘贴`)
-      }
-      if (composed.pending.length > 0 && onFiles) {
-        void Promise.all(composed.pending.map(({ name, src }) => fetchImage(src, name))).then((fetched) => {
-          const ok = fetched.filter((file): file is File => file !== null)
-          if (ok.length > 0) onFiles(ok)
-          const missed = fetched.length - ok.length
-          if (missed > 0) showHint(`有 ${missed} 张图片只有网址、取不到，请另存后再添加`)
-        })
+        showHint(`已粘贴文字，${composed.unavailable} 张图片没有随复制带过来；需要的话请单独复制图片再粘贴`)
       }
     }
 

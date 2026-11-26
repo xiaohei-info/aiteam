@@ -292,7 +292,7 @@ for (const mode of ['single', 'group']) {
   await evaluate(`document.querySelectorAll('.chat-file-chip-remove').forEach(b => b.click())`)
   await pause(150)
 
-  // 11c. 图文混合粘贴（网页/文档复制）：文字和图片一起进来，图片在文字里留名称占位
+  // 11c. 复制表格：文字 + 一张截图、富文本里没有图片 → 只贴文字，不导入截图
   await evaluate(`document.querySelector('[role="textbox"]').focus()`)
   await clearAll()
   await evaluate(`(async () => {
@@ -308,9 +308,9 @@ for (const mode of ['single', 'group']) {
   await command('paste', 'v', 'KeyV', 86)
   await pause(200)
   s = await read()
-  assert.match(s.text, /^图文混合\n\[图片：[^\]]+\.png\]$/, `${mode}: 图文混合粘贴应保留文字并留图片占位，实际 ${JSON.stringify(s.text)}`)
-  assert.equal(s.imported.length, importedBeforeMixed + 1, `${mode}: 图文混合粘贴应同时导入图片附件，实际 ${JSON.stringify(s.imported)}`)
-  await screenshot(`${mode}-mixed-paste-text-and-image`)
+  assert.equal(s.text, '图文混合', `${mode}: 文字 + 截图应只贴文字，实际 ${JSON.stringify(s.text)}`)
+  assert.equal(s.imported.length, importedBeforeMixed, `${mode}: 文字 + 截图不应导入截图，实际 ${JSON.stringify(s.imported)}`)
+  await screenshot(`${mode}-table-paste-text-only`)
 
   // 11d. 拖入文字：落在松手位置，不替换当前选中内容
   await clearAll()

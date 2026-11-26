@@ -74,9 +74,9 @@ test('WPS/Word 图文：页面读不到的图片由本机端从剪贴板 RTF 读
   assert.ok(takeBody.includes('getRangeAt(0).cloneRange()'), '异步读取期间要记住光标位置')
 })
 
-test('只有网址的图片会去取，取不到要提示', () => {
-  assert.ok(takeBody.includes('fetchImage(src, name)'))
-  assert.ok(takeBody.includes('showHint(`有 ${missed} 张图片'), '取不到的图片不能静默丢掉')
+test('只有网址的图片不去下载，只贴文字并提示图片没带过来', () => {
+  assert.ok(!takeBody.includes('fetchImage'), '网页图片不应下载')
+  assert.ok(takeBody.includes('showHint(`已粘贴文字，${composed.unavailable} 张图片'), '没带过来的图片不能静默丢掉')
 })
 
 test('没有 onFiles（宿主未接附件）时提示改用附件按钮，并且不留空占位', () => {

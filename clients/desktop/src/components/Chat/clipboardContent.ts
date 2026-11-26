@@ -10,7 +10,7 @@
 
 export type PastePart =
   | { kind: 'text'; text: string }
-  /** `file` is set when the picture's bytes are known (data: URL or a fetched remote image). */
+  /** `file` is set when the HTML itself carries the picture's bytes (a data: URL). */
   | { kind: 'image'; name: string; src?: string; file?: File }
 
 export interface ComposedPaste {
@@ -19,14 +19,10 @@ export interface ComposedPaste {
   /** Files to attach, renamed so every placeholder points at exactly one attachment. */
   files: File[]
   /**
-   * Pictures that only came as an address. Their placeholder is already in `text` under `name`;
-   * the caller fetches `src` afterwards and attaches it, or tells the user it could not.
-   */
-  pending: Array<{ name: string; src: string }>
-  /**
-   * Pictures the source app did not put on the clipboard at all: only a private reference such as
-   * Feishu's `native-resource://…`. Nothing can fetch them, so they get no placeholder; the caller
-   * tells the user to copy the picture on its own.
+   * Pictures whose bytes are not on the clipboard: a web address (web pages), a private reference
+   * such as Feishu's `native-resource://…`, or a sandboxed temp file (WPS/Word, whose pictures the
+   * caller may still recover from the clipboard RTF). They are not downloaded and get no
+   * placeholder; only the text is pasted and the caller tells the user.
    */
   unavailable: number
 }
@@ -98,14 +94,16 @@ function isJustFileNames(plain: string, files: File[]): boolean {
 export function composePaste(input: { plain: string; parts: PastePart[]; files: File[] }): ComposedPaste {
   const { plain, parts, files } = input
   const hasHtmlImage = parts.some((part) => part.kind === 'image')
-  if (files.length === 0 && !hasHtmlImage) return { text: plain, files: [], pending: [], unavailable: 0 }
-  if (!hasHtmlImage && (!plain.trim() || isJustFileNames(plain, files))) {
-    return { text: '', files: uniqueFiles(files), pending: [], unavailable: 0 }
+  if (files.length === 0 && !hasHtmlImage) return { text: plain, files: [], unavailable: 0 }
+  if (!hasHtmlImage) {
+    // 纯图片 / 访达复制的文件：作附件。
+    if (!plain.trim() || isJustFileNames(plain, files)) return { text: '', files: uniqueFiles(files), unavailable: 0 }
+    // 有文字、富文本里却没有图片（Excel/Numbers 复制表格会顺带一张表格截图）：图片不是内容，只贴文字。
+    return { text: plain, files: [], unavailable: 0 }
   }
 
   const taken = new Set<string>()
   const attachments: File[] = []
-  const pending: ComposedPaste['pending'] = []
   let unavailable = 0
   const attach = (file: File): string => {
     const named = renamed(file, uniqueName(file.name, taken))
@@ -122,34 +120,29 @@ export function composePaste(input: { plain: string; parts: PastePart[]; files: 
   }
 
   let text = ''
-  if (hasHtmlImage) {
-    for (const part of parts) {
-      if (part.kind === 'text') {
-        text += part.text
-        continue
-      }
-      const file = part.file ?? takeSpareImage()
-      if (file) {
-        text += attach(file)
-      } else if (!/^https?:/i.test(part.src ?? '')) {
-        unavailable += 1
-      } else {
-        const name = uniqueName(part.name, taken)
-        pending.push({ name, src: part.src ?? '' })
-        text += placeholderFor(name, 'image/')
-      }
+  let dropped = false
+  for (const part of parts) {
+    if (part.kind === 'text') {
+      // 去掉一张拿不到的图后，两侧的空格不要叠成两个。
+      text += dropped && /\s$/.test(text) ? part.text.replace(/^[ \t]+/, '') : part.text
+      dropped = false
+      continue
     }
-  } else {
-    text = plain
+    const file = part.file ?? takeSpareImage()
+    if (file) {
+      text += attach(file)
+    } else {
+      unavailable += 1
+      dropped = true
+    }
   }
-  // Files whose place in the text is unknown (e.g. a screenshot pasted together with text) go last.
+  // Files whose place in the text is unknown go last.
   const rest = spare.map(attach)
   text = tidy(text)
   if (rest.length > 0) text = text ? `${text}\n${rest.join('\n')}` : rest.join('\n')
 
   const words = text.replace(/\[(?:图片|文件)：[^\]]*\]/g, '').trim()
-  if (!words && pending.length === 0) return { text: '', files: attachments, pending, unavailable }
-  return { text, files: attachments, pending, unavailable }
+  return { text: words ? text : '', files: attachments, unavailable }
 }
 
 function uniqueFiles(files: File[]): File[] {
@@ -232,17 +225,4 @@ export function htmlToParts(html: string): PastePart[] {
   walk(doc.body, false)
   flush()
   return parts
-}
-
-/** Fetches a picture that only came as a web address; `null` when it cannot be fetched. */
-export async function fetchImage(src: string, name: string, fetcher: typeof fetch = fetch): Promise<File | null> {
-  if (!/^https?:/i.test(src)) return null
-  try {
-    const response = await fetcher(src, { signal: AbortSignal.timeout(8000) })
-    if (!response.ok) return null
-    const blob = await response.blob()
-    return blob.type.startsWith('image/') ? new File([blob], name, { type: blob.type }) : null
-  } catch {
-    return null
-  }
 }
