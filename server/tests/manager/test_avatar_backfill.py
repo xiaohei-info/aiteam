@@ -140,10 +140,6 @@ def test_backfill_skips_legacy_http_template_avatar():
     assert report.skipped_avatar == 1
     assert report.seeded == 0
     assert avatars.updates == []
-    # 报表要能让运维直接定位到该改哪个模板。
-    assert report.as_dict()["skipped_avatar_employees"] == [
-        {"employee_id": "e1", "template_id": "tpl-1", "reason": "external_url"}
-    ]
 
 
 def test_backfill_counts_template_unavailable_without_failing():
@@ -253,9 +249,7 @@ def test_build_backfill_enumerates_tenants_from_the_control_database(tmp_path, m
 def test_report_as_dict_lists_every_counter():
     from manager_service.avatar_backfill import AvatarBackfillReport
 
-    report = AvatarBackfillReport()
-    data = report.as_dict()
-    assert set(data) == {
+    assert set(AvatarBackfillReport().as_dict()) == {
         "tenants",
         "employees",
         "seeded",
@@ -265,43 +259,4 @@ def test_report_as_dict_lists_every_counter():
         "skipped_avatar",
         "template_unavailable",
         "failed",
-        "skipped_avatar_employees",
-        "skipped_avatar_truncated",
     }
-    assert data["skipped_avatar_employees"] == []
-    assert data["skipped_avatar_truncated"] is False
-
-
-def test_report_records_skipped_avatar_details_with_a_cap():
-    from manager_service.avatar_backfill import MAX_SKIPPED_AVATAR_DETAILS, AvatarBackfillReport
-
-    report = AvatarBackfillReport()
-    for index in range(MAX_SKIPPED_AVATAR_DETAILS + 5):
-        report.note_skipped_avatar(employee_id=f"e{index}", template_id="tpl-1", reason="external_url")
-
-    data = report.as_dict()
-    assert report.skipped_avatar == MAX_SKIPPED_AVATAR_DETAILS + 5
-    assert len(data["skipped_avatar_employees"]) == MAX_SKIPPED_AVATAR_DETAILS
-    assert data["skipped_avatar_employees"][0] == {"employee_id": "e0", "template_id": "tpl-1", "reason": "external_url"}
-    assert data["skipped_avatar_truncated"] is True
-
-
-@pytest.mark.parametrize(
-    ("value", "reason"),
-    [
-        (None, "empty"),
-        ("", "empty"),
-        ("   ", "empty"),
-        ("https://cdn.example/a.png", "external_url"),
-        ("http://cdn.example/a.png", "external_url"),
-        ("//cdn.example/a.png", "external_url"),
-        ("/api/manager/employees/x/avatar/content", "relative_path"),
-        ("avatars/x.webp", "relative_path"),
-        ("data:text/plain;base64,AAAA", "unsupported_format"),
-        ("data:image/gif;base64,****", "unsupported_format"),
-    ],
-)
-def test_avatar_skip_reason_classifies_why_the_template_cannot_be_stored(value, reason):
-    from manager_service.avatar_backfill import avatar_skip_reason
-
-    assert avatar_skip_reason(value) == reason

@@ -26,8 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, fields
 from typing import Any, Callable, Iterable, Protocol, Sequence
 
 from shared.config import load_settings, service_client_kwargs
@@ -61,48 +60,9 @@ class AvatarBackfillReport:
     skipped_avatar: int = 0
     template_unavailable: int = 0
     failed: int = 0
-    # 被跳过的模板头像明细（有上限），运维据此定位需要回运营端改头像的模板。
-    skipped_avatar_employees: list[dict[str, str]] = field(default_factory=list)
 
-    def note_skipped_avatar(self, *, employee_id: str, template_id: str | None, reason: str) -> None:
-        self.skipped_avatar += 1
-        if len(self.skipped_avatar_employees) < MAX_SKIPPED_AVATAR_DETAILS:
-            self.skipped_avatar_employees.append(
-                {"employee_id": employee_id, "template_id": template_id or "", "reason": reason}
-            )
-
-    def as_dict(self) -> dict[str, Any]:
-        data: dict[str, Any] = {name: getattr(self, name) for name in COUNTER_FIELDS}
-        data["skipped_avatar_employees"] = list(self.skipped_avatar_employees)
-        data["skipped_avatar_truncated"] = self.skipped_avatar > len(self.skipped_avatar_employees)
-        return data
-
-
-COUNTER_FIELDS = (
-    "tenants",
-    "employees",
-    "seeded",
-    "skipped_existing",
-    "skipped_archived",
-    "skipped_no_template",
-    "skipped_avatar",
-    "template_unavailable",
-    "failed",
-)
-
-MAX_SKIPPED_AVATAR_DETAILS = 50
-
-
-def avatar_skip_reason(value: str | None) -> str:
-    """模板头像为什么写不了：给运维一个可执行的分类，而不是只说“跳过了”。"""
-    text = (value or "").strip()
-    if not text:
-        return "empty"
-    if text.startswith("//") or re.match(r"^[a-z][a-z0-9+.-]*://", text, re.IGNORECASE):
-        return "external_url"
-    if not text.startswith("data:"):
-        return "relative_path"
-    return "unsupported_format"
+    def as_dict(self) -> dict[str, int]:
+        return {item.name: getattr(self, item.name) for item in fields(self)}
 
 
 class _AvatarPort(Protocol):
@@ -173,11 +133,7 @@ class EmployeeAvatarBackfill:
             return
         parsed = parse_catalog_avatar_url(getattr(template, "avatar_url", "") or "")
         if parsed is None:
-            report.note_skipped_avatar(
-                employee_id=row.employee_id,
-                template_id=row.source_template_id,
-                reason=avatar_skip_reason(getattr(template, "avatar_url", "")),
-            )
+            report.skipped_avatar += 1
             return
         mime_type, encoded = parsed
         if dry_run:
