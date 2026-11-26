@@ -5,12 +5,11 @@
  */
 import { useCallback, useEffect, useState, type AnimationEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { X, Zap, UserRound, Camera, Maximize2, LoaderCircle, ChevronLeft } from 'lucide-react'
+import { X, Zap, UserRound, Maximize2, LoaderCircle, ChevronLeft } from 'lucide-react'
 import './AgentDetailPanel.css'
 import { useGlobalShortcutClose } from '../../hooks/useGlobalShortcut'
 import { useChatStore } from '../../stores/chat'
 import RequestErrorState from '../RequestState/RequestErrorState'
-import { backendApi } from '../../api/backend'
 import { agentApi } from '../../api/agent'
 import type { AutomationTask } from '../../api/agent/automationTasks'
 import { getAvatarFallback, getEmployeeAvatar, renderAvatar } from '../../lib/avatarUtils'
@@ -36,8 +35,6 @@ export default function AgentDetailPanel() {
   const [visible, setVisible] = useState(detailOpen)
   const [closing, setClosing] = useState(false)
   const [avatarViewer, setAvatarViewer] = useState(false)
-  const [avatarUploading, setAvatarUploading] = useState(false)
-  const [avatarError, setAvatarError] = useState('')
   const [automationOpen, setAutomationOpen] = useState(false)
   const [employeeAutomationTasks, setEmployeeAutomationTasks] = useState<AutomationTask[]>([])
   const [automationLoading, setAutomationLoading] = useState(false)
@@ -176,32 +173,6 @@ export default function AgentDetailPanel() {
     }
   }
 
-  const handleAvatarUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp'] as const
-    const mimeType = file ? allowedTypes.find(type => type === file.type) : undefined
-    if (!file || !employeeId || !mimeType) {
-      if (file) setAvatarError('仅支持 JPEG、PNG 或 WebP 图片')
-      return
-    }
-    if (file.size > 5 * 1024 * 1024) { setAvatarError('头像不能超过 5MB'); return }
-    setAvatarUploading(true); setAvatarError('')
-    try {
-      const data = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(',')[1] ?? ''); reader.onerror = () => reject(new Error('头像读取失败')); reader.readAsDataURL(file) })
-      const result = await backendApi.updateEmployeeAvatar(employeeId, { data, mime_type: mimeType, filename: file.name })
-      // The content endpoint is cacheable for a few minutes. Include the
-      // returned local version so replacing an existing avatar is visible
-      // immediately instead of reusing the previous binary response.
-      const avatarUrl = result.avatar_url
-        ? `${result.avatar_url}${result.avatar_url.includes('?') ? '&' : '?'}v=${result.version}`
-        : null
-      useChatStore.setState(state => ({
-        workbenchEmployees: state.workbenchEmployees.map(item => item.employeeId === employeeId ? { ...item, avatarUrl } : item),
-        conversations: state.conversations.map(item => item._employeeId === employeeId ? { ...item, agentAvatarUrl: avatarUrl } : item),
-      }))
-    } catch (error) { setAvatarError(error instanceof Error ? error.message : '头像更新失败') } finally { setAvatarUploading(false); event.target.value = '' }
-  }
-
   // 头像显示逻辑：优先使用自定义头像URL，否则显示首字符
   const avatarDisplay = resolvedAvatarUrl
     ? renderAvatar(resolvedAvatarUrl, getAvatarFallback(name))
@@ -249,7 +220,6 @@ export default function AgentDetailPanel() {
               <span className="adp-user-name">{name}</span>
             </div>
           </div>
-          {avatarError && <p className="adp-avatar-error" role="alert">{avatarError}</p>}
 
           {employeeId && <EmployeeUsageCard employeeId={employeeId} />}
 
@@ -338,10 +308,6 @@ export default function AgentDetailPanel() {
               <button type="button" className="adp-close" onClick={() => setAvatarViewer(false)} aria-label="关闭预览"><X size={16} /></button>
             </div>
             <div className="adp-avatar-large">{resolvedAvatarUrl ? renderAvatar(resolvedAvatarUrl, getAvatarFallback(name)) : initial}</div>
-            <label className="adp-avatar-upload">
-              {avatarUploading ? '正在上传…' : <><Camera size={15} />切换头像</>}
-              <input hidden type="file" accept="image/jpeg,image/png,image/webp" onChange={handleAvatarUpload} disabled={avatarUploading} />
-            </label>
           </div>
         </div>
       )}

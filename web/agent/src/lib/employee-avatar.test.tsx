@@ -42,7 +42,7 @@ describe("EmployeeAvatar", () => {
     stream.mockResolvedValue(new Response(new Blob([new Uint8Array([1, 2, 3])]), { status: 200 }));
     render(<EmployeeAvatar name="员工" src="/api/agent/employees/e1/avatar/content" />);
 
-    await waitFor(() => expect(stream).toHaveBeenCalledWith("/api/agent/employees/e1/avatar/content", { headers: { Accept: "image/*" } }));
+    await waitFor(() => expect(stream).toHaveBeenCalledWith("/api/agent/employees/e1/avatar/content", { headers: { Accept: "image/webp" } }));
     await waitFor(() => {
       expect(document.querySelector("img")?.getAttribute("src")).toBe("blob:avatar");
     });

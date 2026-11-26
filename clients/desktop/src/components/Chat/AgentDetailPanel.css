@@ -182,14 +182,14 @@
 }
 
 .adp-feature-card{background:linear-gradient(135deg,rgba(212,175,55,.13),rgba(18,24,31,.42));border-color:rgba(212,175,55,.24)}
-.adp-avatar-button{padding:0;cursor:pointer}.adp-avatar-hover{position:absolute;inset:0;display:grid;place-items:center;background:rgba(0,0,0,.5);opacity:0;transition:opacity .16s}.adp-avatar-button:hover .adp-avatar-hover{opacity:1}.adp-avatar-error{margin:6px 0;color:#ef8a8a;font-size:11px}
+.adp-avatar-button{padding:0;cursor:pointer}.adp-avatar-hover{position:absolute;inset:0;display:grid;place-items:center;background:rgba(0,0,0,.5);opacity:0;transition:opacity .16s}.adp-avatar-button:hover .adp-avatar-hover{opacity:1}
 .adp-avatar-modal{position:absolute;inset:0;z-index:80;display:grid;place-items:center;overflow:auto;padding:16px;background:rgba(5,8,12,.74);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);animation:adp-avatar-modal-in 160ms var(--ease-out)}
 .adp-avatar-preview{width:min(380px,calc(100% - 16px));max-height:calc(100% - 16px);box-sizing:border-box;display:grid;gap:18px;overflow:auto;padding:16px;border:1px solid var(--glass-card-border);border-radius:18px;background:linear-gradient(145deg,rgba(255,255,255,.08),rgba(18,24,31,.88));box-shadow:var(--glass-card-shadow),0 24px 70px rgba(0,0,0,.34)}
 .adp-avatar-preview-header{display:flex;align-items:center;justify-content:space-between;padding:0 2px;color:var(--text-primary);font-size:13px;font-weight:650;letter-spacing:.01em}.adp-avatar-preview-header .adp-close{position:static;width:28px;height:28px}
 .adp-avatar-large{width:min(320px,100%);aspect-ratio:1;justify-self:center;display:grid;place-items:center;overflow:hidden;border:1px solid rgba(212,175,55,.24);border-radius:16px;background:var(--surface-3);color:var(--brand);font-size:100px;box-shadow:inset 0 1px 0 rgba(255,255,255,.08)}.adp-avatar-large img{width:100%;height:100%;object-fit:cover}
-.adp-avatar-upload{display:inline-flex;align-items:center;justify-content:center;gap:7px;width:100%;box-sizing:border-box;padding:10px 14px;border:1px solid rgba(244,228,188,.34);border-radius:10px;background:var(--brand-gradient);color:var(--text-on-brand);font-size:12px;font-weight:650;cursor:pointer;box-shadow:0 8px 20px rgba(184,134,11,.18);transition:filter var(--duration-fast),transform var(--duration-fast)}.adp-avatar-upload:hover{filter:brightness(1.06)}.adp-avatar-upload:active{transform:translateY(1px)}
+
 @keyframes adp-avatar-modal-in{from{opacity:0}to{opacity:1}}
-@media (prefers-reduced-motion: reduce){.adp-avatar-modal{animation:none}.adp-avatar-upload{transition:none}}
+@media (prefers-reduced-motion: reduce){.adp-avatar-modal{animation:none}}
 .adp-inline-action{border:0;background:none;color:var(--brand);font-size:11px;cursor:pointer}
 .adp-period{display:inline-block;margin-top:8px;color:var(--brand);font-size:10px}
 .adp-capability-text{display:block;color:var(--text-secondary);font-size:12px;line-height:1.6}

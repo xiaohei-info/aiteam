@@ -65,8 +65,7 @@
 | GET | `/api/agent/grants/readiness` | grantsReadiness | 已核对调用 | `src/api/agent/auth.ts:63` |
 | GET | `/api/agent/grants/experts/{employee_id}/readiness` | expertReadiness | 已核对调用 | `src/api/agent/experts.ts:62` |
 | POST | `/api/agent/grants/sync` | syncGrants | 已核对调用 | `src/api/agent/auth.ts:57` |
-| POST | `/api/agent/employees/{employee_id}/avatar` | updateEmployeeAvatar | 已核对调用 | `src/api/agent/avatar.ts:17` |
-| GET | `/api/agent/employees/{employee_id}/avatar/content` | getEmployeeAvatar | 已核对调用 | `src/api/agent/avatar.ts:29` |
+| GET | `/api/agent/employees/{employee_id}/avatar/content` | getEmployeeAvatar | 已核对调用 | `src/api/agent/avatar.ts:8` |
 | GET | `/api/agent/work-records` | listWorkRecords | 已核对调用 | `src/api/agent/conversations.ts:272`<br>`src/api/agent/observations.ts:9` |
 | GET | `/api/agent/work-records/changes` | listWorkRecordChanges | 已核对调用 | `src/api/agent/observations.ts:10` |
 | GET | `/api/agent/usage/statistics` | getUsageStatistics | 已核对调用 | `src/api/agent/observations.ts:11` |
@@ -74,6 +73,7 @@
 | POST | `/api/agent/usage/flush` | flushUsage | 文档允许，当前未调用 |  |
 | GET | `/api/agent/marketplace/templates` | listMarketplaceTemplates | 已核对调用 | `src/api/backend/index.ts:22` |
 | GET | `/api/agent/marketplace/templates/{template_id}` | getMarketplaceTemplate | 已核对调用 | `src/api/backend/index.ts:25` |
+| GET | `/api/agent/marketplace/templates/{template_id}/avatar/content` | getMarketplaceTemplateAvatar | 已核对调用 | `src/api/agent/avatar.ts:18` |
 | GET | `/api/agent/knowledge-bases` | listKnowledgeBases | 已核对调用 | `src/api/backend/index.ts:27` |
 | GET | `/api/agent/knowledge-bases/{knowledge_base_id}/{kind}` | knowledgeReadModel | 文档允许，当前未调用 |  |
 | GET | `/api/agent/knowledge-bases/{knowledge_base_id}/{kind}/{resource_id}` | knowledgeReadModelResource | 文档允许，当前未调用 |  |

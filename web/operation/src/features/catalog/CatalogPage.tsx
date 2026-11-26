@@ -22,7 +22,7 @@ import { TemplateLifecycleActions, type LifecycleHandler, type TemplateLifecycle
 import { useCatalogApi } from "./useCatalogApi";
 import type { CatalogDetailLocationState, CatalogItem, CatalogItemType, CatalogStatus, VisibleScope } from "./types";
 import { scopeText } from "./types";
-import { isSafeAvatarDataUrl } from "./avatar";
+import { useTemplateAvatarSrc } from "./AvatarFileInput";
 import "./catalog.css";
 
 type CatalogRow = CatalogItem & Record<string, unknown>;
@@ -40,8 +40,9 @@ function statusPresentation(status: CatalogStatus): { label: string; variant: Ba
   return { label: "草稿", variant: "warning" };
 }
 
-function CatalogAvatar({ name, src }: { name: string; src?: string }): ReactNode {
-  if (!isSafeAvatarDataUrl(src)) return <DigitalEmployeeAvatar name={name} size={54} />;
+function CatalogAvatar({ name, src: value }: { name: string; src?: string }): ReactNode {
+  const src = useTemplateAvatarSrc(value);
+  if (!src) return <DigitalEmployeeAvatar name={name} size={54} />;
   return (
     <span
       data-aiteam-avatar="true"

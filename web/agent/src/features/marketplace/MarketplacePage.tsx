@@ -11,7 +11,7 @@ import { HStack } from "@astryxdesign/core/HStack";
 import { Text } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
-import { DigitalEmployeeAvatar } from "@aiteam/shared";
+import { EmployeeAvatar } from "../../lib/employee-avatar";
 import { useApp } from "../../lib/app-context";
 import { listTemplates } from "./useMarketplaceApi";
 import type { MarketTemplate } from "./types";
@@ -75,7 +75,7 @@ export function MarketplacePage() {
             <Card key={t.template_id} padding={3} width={280}>
               <VStack gap={2}>
                 <HStack gap={2} align="center">
-                  <DigitalEmployeeAvatar name={t.display_name} seed={t.template_id} src={t.avatar_url} size={52} />
+                  <EmployeeAvatar name={t.display_name} seed={t.template_id} src={t.avatar_url} size={52} />
                   <VStack gap={0}>
                     <Text weight="semibold">{t.display_name}</Text>
                     <Text type="supporting">{t.category}</Text>
