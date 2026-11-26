@@ -58,7 +58,9 @@ export interface ChatInputBarProps {
   conversationUpgradeFrom?: string
   draft?: string
   draftFiles?: CachedFile[]
-  onDraftChange: (convId: string, text: string, files: CachedFile[]) => void
+  /** 草稿里的 @ 成员标签（输入框自己克隆的节点）；有快照就原样放回，没有才退回纯文本。 */
+  draftMentions?: MentionInputSnapshot
+  onDraftChange: (convId: string, text: string, files: CachedFile[], mentionSnapshot?: MentionInputSnapshot) => void
   employees?: WorkbenchEmployee[]
   members?: GroupMember[]
   variant?: 'dock' | 'hero'
@@ -79,7 +81,7 @@ export interface ChatInputBarProps {
 
 export const ChatInputBar = memo(({
   onSend, onPickFile, onImportFile, onUploadFile, onDeleteUploadedFile,
-  disabled, convId, conversationUpgradeFrom, draft, draftFiles, onDraftChange,
+  disabled, convId, conversationUpgradeFrom, draft, draftFiles, draftMentions, onDraftChange,
   variant = 'dock', placeholder = '输入消息…', autoFocus, helper, tools,
   employees = [], members, isGenerating, isSyncing, onAbort, onHeightChange, enableVoiceInput, enableKnowledgeFiles,
 }: ChatInputBarProps) => {
@@ -112,7 +114,7 @@ export const ChatInputBar = memo(({
   // 正在发送的会话；emp_ 升级为真实会话时跟着更新，用于判断失败时把内容放回哪里。
   const submittingConvRef = useRef<string | null>(null)
   const mountedRef = useRef(false)
-  const adoptedDraftRef = useRef({ convId, draft, draftFiles })
+  const adoptedDraftRef = useRef({ convId, draft, draftFiles, draftMentions })
   // 生成中发送的消息按会话排队，本轮结束后依次发出；队首发送失败时暂停该会话的队列。
   const [queues, setQueues] = useState<ChatSendQueues<MentionInputSnapshot>>({})
   const queuesRef = useRef(queues)
@@ -150,7 +152,8 @@ export const ChatInputBar = memo(({
       })
       setKnowledgeOpen(false)
       setFileError('')
-      onDraftChange(previousConvId, previousDraft, previousFiles)
+      // 带上 @ 成员快照：只存纯文本的话切回来「@某人」只剩文字，发送时不再提及对方。
+      onDraftChange(previousConvId, previousDraft, previousFiles, composer.snapshot())
       setPendingFiles(draftFiles ?? [])
     }
     if (isConversationUpgrade && submittingConvRef.current === previousConvId) submittingConvRef.current = convId
@@ -166,19 +169,19 @@ export const ChatInputBar = memo(({
     if (conversationChanged) prevConvRef.current = convId
 
     // MentionInput 是 contenteditable，必须显式随 convId 恢复/清空 DOM，避免草稿串会话。
-    if (!isConversationUpgrade) composer.setText(nextDraft)
+    if (!isConversationUpgrade) composer.restore(nextDraft ? draftMentions : undefined, nextDraft)
   }, [convId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // 新会话页发送后已切到会话、输入框换了一个；发送失败时页面把内容写回该会话草稿，
   // 这里在输入框为空时采用它。切换会话的草稿由上面的 effect 处理。
   useLayoutEffect(() => {
     const previous = adoptedDraftRef.current
-    adoptedDraftRef.current = { convId, draft, draftFiles }
+    adoptedDraftRef.current = { convId, draft, draftFiles, draftMentions }
     if (previous.convId !== convId) return
     if (previous.draft === draft && previous.draftFiles === draftFiles) return
     if ((!draft && !draftFiles?.length) || isSubmitting) return
     if (composer.valueRef.current.text.trim() || filesRef.current.length > 0) return
-    composer.setText(draft ?? '')
+    composer.restore(draftMentions, draft ?? '')
     setPendingFiles(draftFiles ?? [])
   }, [convId, draft, draftFiles]) // eslint-disable-line react-hooks/exhaustive-deps
 

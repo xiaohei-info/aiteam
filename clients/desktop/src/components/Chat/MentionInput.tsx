@@ -352,6 +352,8 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
       // 只放回本输入框自己克隆的节点，不解析任何 HTML。
       el.replaceChildren(...snapshot.map((node) => node.cloneNode(true)))
       emit(el)
+      // 输入框本身仍有焦点（切会话恢复草稿）：替换节点会把光标打回开头，放回末尾。
+      if (document.activeElement === el) { caretToEnd(el); return }
       // 发送期间输入框被禁用、焦点落到 body；用户点了别处就不抢焦点。
       if (document.activeElement && document.activeElement !== document.body) return
       el.focus()

@@ -456,7 +456,9 @@ interface ChatStore {
   activeGroupId: string
   groupDetailOpen: boolean
   highlightMsgId: string | null
-  draftsByConv: Record<string, { text: string; files: CachedFile[] }>
+  // mentionSnapshot 是输入框自己克隆的 DOM 节点（含 @ 成员 chip）：草稿只存纯文本时，
+  // 切回会话后文字里的「@某人」会退化成普通文字，发送时不再提及对方。只存内存、不持久化。
+  draftsByConv: Record<string, { text: string; files: CachedFile[]; mentionSnapshot?: readonly Node[] }>
   streamingMsgIds: Set<string>
   generatingConvIds: Set<string>
   // 本轮生成已结束、正在拉 entries 对齐的会话。对齐会整体替换消息列表，
@@ -495,7 +497,7 @@ interface ChatStore {
   dropStaleConversation: (convId: string, kind?: 'conv' | 'group') => void
   loadMoreMessages: (convId: string, isGroup?: boolean) => Promise<boolean>
   setHighlightMsgId: (id: string | null) => void
-  setConvDraft: (convId: string, text: string, files: CachedFile[]) => void
+  setConvDraft: (convId: string, text: string, files: CachedFile[], mentionSnapshot?: readonly Node[]) => void
   // 新栈:page 层通过 submitPrompt 发起 prompt 后调用此 action,创建占位并接管 SSE。
   startAssistantStream: (convId: string, opts?: AssistantStreamOptions) => void
   abortStream: (convId: string) => Promise<void>
@@ -1070,8 +1072,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   // 新栈 /entries 全量返回,无游标分页;保留签名,始终返回 false。
   loadMoreMessages: async () => false,
 
-  setConvDraft: (convId, text, files) =>
-    set((s) => ({ draftsByConv: { ...s.draftsByConv, [convId]: { text, files } } })),
+  setConvDraft: (convId, text, files, mentionSnapshot) =>
+    set((s) => ({ draftsByConv: { ...s.draftsByConv, [convId]: { text, files, mentionSnapshot } } })),
 
   // -------- 流式订阅入口(核心) --------
 

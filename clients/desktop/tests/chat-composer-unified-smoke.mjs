@@ -93,7 +93,11 @@ const state = `(() => {
     imported: window.__imported,
     ariaAutocomplete: el?.getAttribute('aria-autocomplete') ?? null,
     sent: window.__sent,
-    drafts: window.__drafts,
+    // 草稿里的 mentionSnapshot 是 DOM 节点，不能按值回传：只取文字和 chip 数量。
+    drafts: Object.fromEntries(Object.entries(window.__drafts).map(([id, draft]) => [id, {
+      text: draft?.text ?? '',
+      mentionChips: Array.from(draft?.mentionSnapshot ?? []).filter(node => node.classList?.contains?.('mention-chip')).length,
+    }])),
   }
 })()`
 const read = () => evaluate(state)
@@ -301,6 +305,29 @@ for (const mode of ['single', 'group']) {
   assert.equal(s.text, '草稿头尾', `${mode}: 草稿恢复后光标应在末尾，实际 ${JSON.stringify(s.text)}`)
   await clearAll()
   await evaluate(`window.__drafts['conversation-1'] = undefined`)
+
+  // 13. 群聊草稿里的 @ 成员切会话后仍然生效（旧行为：只存纯文本，切回来 @ 退化成普通文字）
+  if (mode === 'group') {
+    await evaluate(`document.querySelector('[role="textbox"]').focus()`)
+    await clearAll()
+    await type('请 @数')
+    await press('Enter')
+    await type('汇总一下')
+    assert.equal((await read()).chips, 1, '群聊: 草稿用例前应有 1 个 chip')
+    await evaluate(`window.__setConv('conversation-2')`)
+    await pause(150)
+    s = await read()
+    assert.equal(s.drafts['conversation-1']?.mentionChips, 1, '群聊: 草稿应保存 @ 成员标签')
+    await evaluate(`window.__setConv('conversation-1')`)
+    await pause(150)
+    s = await read()
+    assert.equal(s.chips, 1, `群聊: 切回后 @ chip 应还在，实际 ${s.chips}`)
+    await screenshot('group-mention-draft-restored')
+    await press('Enter')
+    s = await read()
+    assert.deepEqual(s.sent.at(-1)?.mentions, ['analyst'], '群聊: 草稿恢复后提交仍应携带 mentions')
+    await evaluate(`window.__drafts['conversation-1'] = undefined`)
+  }
 
   r.sent = s.sent
 }

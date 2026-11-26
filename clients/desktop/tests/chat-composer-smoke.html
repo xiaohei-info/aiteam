@@ -31,6 +31,7 @@ function Harness() {
   return React.createElement(ChatInputBar, {
     convId,
     draft: window.__drafts[convId]?.text ?? '',
+    draftMentions: window.__drafts[convId]?.mentionSnapshot,
     members,
     employees,
     variant,
@@ -52,7 +53,7 @@ function Harness() {
         mime: file.type,
       }
     },
-    onDraftChange: (id, text) => { window.__drafts[id] = { text } },
+    onDraftChange: (id, text, files, mentionSnapshot) => { window.__drafts[id] = { text, mentionSnapshot } },
   })
 }
 createRoot(document.getElementById('root')).render(React.createElement(Harness))

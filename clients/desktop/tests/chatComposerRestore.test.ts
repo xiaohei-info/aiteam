@@ -49,3 +49,23 @@ test('new session restores the draft only after a failed send', () => {
   const start = source.slice(source.indexOf('const startNewSession'), source.indexOf('const handleDraftChange'))
   assert.equal(start.indexOf('setConvDraft(conversation.id, trimmed, files)') > start.indexOf('await submitMessage('), true)
 })
+
+test('conversation drafts keep the @ mention tags, so switching back still submits mentions', () => {
+  const bar = readFileSync(new URL('../src/components/Chat/ChatInputBar.tsx', import.meta.url), 'utf8')
+  assert.ok(
+    bar.includes('onDraftChange(previousConvId, previousDraft, previousFiles, composer.snapshot())'),
+    'leaving a conversation must store the mention snapshot next to the draft text',
+  )
+  assert.ok(
+    bar.includes('composer.restore(nextDraft ? draftMentions : undefined, nextDraft)'),
+    'switching conversations must restore the snapshot, not plain text',
+  )
+  assert.ok(bar.includes("composer.restore(draftMentions, draft ?? '')"), 'adopting a draft must restore the snapshot too')
+
+  const store = readFileSync(new URL('../src/stores/chat.ts', import.meta.url), 'utf8')
+  assert.ok(store.includes('[convId]: { text, files, mentionSnapshot }'), 'the draft store must carry the snapshot')
+
+  const group = readFileSync(new URL('../src/pages/GroupChat/index.tsx', import.meta.url), 'utf8')
+  assert.ok(group.includes('draftMentions={draftsByConv[activeGroupId]?.mentionSnapshot}'), '群聊页必须把快照传回输入框')
+  assert.ok(group.includes('setConvDraft(convId, text, files, mentionSnapshot)'), '群聊页必须把快照写进草稿')
+})

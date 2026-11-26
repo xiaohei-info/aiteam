@@ -239,8 +239,8 @@ export default function GroupChat() {
     await useChatStore.getState().abortStream(activeGroupId)
   }, [activeGroupId])
 
-  const handleDraftChange = useCallback((convId: string, text: string, files: CachedFile[]) => {
-    setConvDraft(convId, text, files)
+  const handleDraftChange = useCallback((convId: string, text: string, files: CachedFile[], mentionSnapshot?: readonly Node[]) => {
+    setConvDraft(convId, text, files, mentionSnapshot)
   }, [setConvDraft])
 
   const ensureGroupConversation = useCallback(async () => {
@@ -379,6 +379,7 @@ export default function GroupChat() {
         convId={activeGroupId}
         draft={draftsByConv[activeGroupId]?.text}
         draftFiles={draftsByConv[activeGroupId]?.files}
+        draftMentions={draftsByConv[activeGroupId]?.mentionSnapshot}
         onDraftChange={handleDraftChange}
         disabled={activeMessagesLoading || Boolean(activeMessagesError)}
         isGenerating={generatingConvIds.has(activeGroupId)}
