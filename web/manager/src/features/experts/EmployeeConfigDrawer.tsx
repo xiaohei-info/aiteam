@@ -55,6 +55,14 @@ export interface EmployeeConfigDrawerProps {
   onSaved: (updated: EmployeeConfig) => void;
   /** 头像上传后立即生效（不随表单保存）；列表页据此刷新卡片头像。 */
   onAvatarChanged?: (employeeId: string, avatarUrl: string) => void;
+  /**
+   * 本会话内已上传、但还没写回列表实例的头像（列表页的 avatarOverrides）。
+   * 上传后不改 items 是为了不让抽屉按新实例重置草稿，代价是重开详情时 `employee.avatar_url`
+   * 还是旧值（看不到新头像、按钮还写着「上传头像」）；这里补上最新值。
+   * 走独立标量 prop 而不是合成 employee 对象：后者每次变更都会触发下面的草稿同步 effect，
+   * 上传一次就会把未保存的表单内容冲掉。
+   */
+  avatarUrl?: string | null;
 }
 
 const DEFAULT_THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high"];
@@ -156,6 +164,7 @@ export function toEmployeeConfigIn(config: EmployeeConfig): EmployeeConfigIn {
 export function EmployeeConfigDrawer({
   employeeId,
   employee: injectedEmployee,
+  avatarUrl: injectedAvatarUrl,
   departments = [],
   onClose,
   onSaved,
@@ -244,6 +253,15 @@ export function EmployeeConfigDrawer({
       .catch(() => { if (alive) setSkillsError(true); });
     return () => { alive = false; };
   }, [capabilityApi, skillsAttempt]);
+
+  // 头像区展示的实例：优先用列表页记下的最新上传结果，其余字段仍用本地实例。
+  const avatarEmployee = useMemo(
+    () =>
+      employee && injectedAvatarUrl && injectedAvatarUrl !== employee.avatar_url
+        ? { ...employee, avatar_url: injectedAvatarUrl }
+        : employee,
+    [employee, injectedAvatarUrl],
+  );
 
   const skillOptions = useMemo(() => buildSkillOptions(skills, draft?.skills ?? []), [skills, draft?.skills]);
   // 库还没加载出来（或加载失败）时不能判断「已失效」，否则会把全部技能误标。
@@ -401,9 +419,9 @@ export function EmployeeConfigDrawer({
               ) : (
                 <form id="employee-config-form" onSubmit={handleSubmit}>
                   <VStack gap={5}>
-                    {employee && (
+                    {avatarEmployee && (
                       <EmployeeAvatarEditor
-                        employee={employee}
+                        employee={avatarEmployee}
                         upload={experts.uploadEmployeeAvatar}
                         disabled={submitting}
                         onUploaded={(id, avatarUrl) => {
