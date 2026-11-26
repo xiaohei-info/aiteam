@@ -28,6 +28,11 @@ tokio = { version = "1", features = ["time"] }
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# macOS: read the RTF flavour of the clipboard for pictures WebKit does not expose (src/clipboard_images.rs).
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSPasteboard"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSData", "NSArray"] }
+
 # Windows: DPAPI wraps the auth vault master key (src/secure_session.rs); a Job Object ends the Agent
 # tree on exit or crash (src/agent.rs); url turns a path into the file:// URL Node needs for --import.
 [target.'cfg(windows)'.dependencies]

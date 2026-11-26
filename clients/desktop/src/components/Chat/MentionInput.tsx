@@ -6,7 +6,8 @@ import { useGlobalShortcutClose } from '../../hooks/useGlobalShortcut'
 import type { GroupMember } from '../../stores/chat'
 import { isImeKeyboardEvent } from '../../lib/imeKeyboard'
 import { extractMentionText, type RichTextNodeLike } from './mentionRichText'
-import { carriesFiles, composePaste, fetchImage, filesOf, htmlToParts } from './clipboardContent'
+import { carriesFiles, composePaste, fetchImage, filesOf, htmlToParts, type ComposedPaste } from './clipboardContent'
+import { readClipboardRtfImages } from '../../lib/fileCache'
 
 export interface MentionInputHandle {
   clear: () => void
@@ -248,36 +249,50 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
    */
   const takeTransfer = useCallback((el: HTMLDivElement, data: DataTransfer | null | undefined, source: 'paste' | 'drop', at?: Range | null) => {
     if (!data) return
+    const plain = data.getData('text/plain') ?? ''
+    const parts = htmlToParts(data.getData('text/html') ?? '')
     const files = filesOf(data)
-    const composed = composePaste({
-      plain: data.getData('text/plain') ?? '',
-      parts: htmlToParts(data.getData('text/html') ?? ''),
-      files,
-    })
-    const hasAttachments = composed.files.length > 0 || composed.pending.length > 0
-    if (hasAttachments && !onFiles) {
-      showHint(source === 'paste'
-        ? '这里不支持粘贴图片或文件，请用附件按钮上传'
-        : '这里不支持拖入图片或文件，请用附件按钮上传')
-      // 只插入用户写的文字，不留指向不存在附件的占位。
-      const words = composed.text.replace(/\[(?:图片|文件)：[^\]]*\]/g, '').trim()
-      if (words) insertPlainText(el, words, at)
+    const apply = (composed: ComposedPaste, range?: Range | null) => {
+      const hasAttachments = composed.files.length > 0 || composed.pending.length > 0
+      if (hasAttachments && !onFiles) {
+        showHint(source === 'paste'
+          ? '这里不支持粘贴图片或文件，请用附件按钮上传'
+          : '这里不支持拖入图片或文件，请用附件按钮上传')
+        // 只插入用户写的文字，不留指向不存在附件的占位。
+        const words = composed.text.replace(/\[(?:图片|文件)：[^\]]*\]/g, '').trim()
+        if (words) insertPlainText(el, words, range)
+        return
+      }
+      if (composed.text) insertPlainText(el, composed.text, range)
+      if (composed.files.length > 0) onFiles?.(composed.files)
+      // 飞书等应用复制时只把内部图片引用放进剪贴板，图片本身没带过来，谁都取不到。
+      if (composed.unavailable > 0) {
+        showHint(`有 ${composed.unavailable} 张图片没有随复制带过来，请在原应用里单独复制图片再粘贴`)
+      }
+      if (composed.pending.length > 0 && onFiles) {
+        void Promise.all(composed.pending.map(({ name, src }) => fetchImage(src, name))).then((fetched) => {
+          const ok = fetched.filter((file): file is File => file !== null)
+          if (ok.length > 0) onFiles(ok)
+          const missed = fetched.length - ok.length
+          if (missed > 0) showHint(`有 ${missed} 张图片只有网址、取不到，请另存后再添加`)
+        })
+      }
+    }
+
+    const composed = composePaste({ plain, parts, files })
+    if (source !== 'paste' || composed.unavailable === 0 || !onFiles) {
+      apply(composed, at)
       return
     }
-    if (composed.text) insertPlainText(el, composed.text, at)
-    if (composed.files.length > 0) onFiles?.(composed.files)
-    // 飞书等应用复制时只把内部图片引用放进剪贴板，图片本身没带过来，谁都取不到。
-    if (composed.unavailable > 0) {
-      showHint(`有 ${composed.unavailable} 张图片没有随复制带过来，请在原应用里单独复制图片再粘贴`)
-    }
-    if (composed.pending.length > 0 && onFiles) {
-      void Promise.all(composed.pending.map(({ name, src }) => fetchImage(src, name))).then((fetched) => {
-        const ok = fetched.filter((file): file is File => file !== null)
-        if (ok.length > 0) onFiles(ok)
-        const missed = fetched.length - ok.length
-        if (missed > 0) showHint(`有 ${missed} 张图片只有网址、取不到，请另存后再添加`)
-      })
-    }
+    // WPS/Word 复制图文：HTML 里的图片指向源应用沙盒里的临时文件，页面读不到；
+    // 图片本身在剪贴板的 RTF 里，由本机端读出后按原顺序补回占位。
+    const selection = window.getSelection()
+    const range = selection && selection.rangeCount > 0 && el.contains(selection.anchorNode)
+      ? selection.getRangeAt(0).cloneRange()
+      : null
+    void readClipboardRtfImages().then((pictures) => {
+      apply(pictures.length > 0 ? composePaste({ plain, parts, files: [...files, ...pictures] }) : composed, range)
+    })
   }, [insertPlainText, onFiles, showHint])
 
   const handlePaste = useCallback((e: React.ClipboardEvent<HTMLDivElement>) => {

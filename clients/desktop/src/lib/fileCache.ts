@@ -78,6 +78,25 @@ export async function cacheFileFromBlob(
 }
 
 /**
+ * Pictures a rich-text copy carries only in its RTF (WPS/Word: the HTML points at a temp file in
+ * the source app's sandbox). Read natively from the system clipboard; empty outside Tauri or when
+ * the clipboard has none.
+ */
+export async function readClipboardRtfImages(): Promise<File[]> {
+  try {
+    const images = await invoke<Array<{ name: string; mime: string; dataBase64: string }>>('read_clipboard_rtf_images')
+    return images.map(({ name, mime, dataBase64 }) => {
+      const raw = atob(dataBase64)
+      const bytes = new Uint8Array(raw.length)
+      for (let i = 0; i < raw.length; i += 1) bytes[i] = raw.charCodeAt(i)
+      return new File([bytes], name, { type: mime })
+    })
+  } catch {
+    return []
+  }
+}
+
+/**
  * Restore an asset:// URL from a stored rel_path.
  * Call this when rendering a stored file message after restart.
  */

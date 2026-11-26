@@ -73,3 +73,17 @@ test('飞书输入框复制：图片只有 native-resource 内部引用，不留
   assert.deepEqual(result.pending, [])
   assert.equal(result.unavailable, 1)
 })
+
+test('WPS 图文：HTML 图片指向沙盒临时文件，补上 RTF 里读出的图片后按原位置占位', () => {
+  const parts: PastePart[] = [
+    { kind: 'text', text: '第一段文字\n' },
+    { kind: 'image', name: 'wps2.jpg', src: 'file:////Users/x/Library/Containers/com.kingsoft.wpsoffice.mac/Data/tmp/wps2.jpg' },
+    { kind: 'text', text: '\n第二段文字' },
+  ]
+  const before = composePaste({ plain: '第一段文字\n\n第二段文字', parts, files: [] })
+  assert.equal(before.unavailable, 1)
+  const after = composePaste({ plain: '第一段文字\n\n第二段文字', parts, files: [png('图片1.png')] })
+  assert.equal(after.unavailable, 0)
+  assert.equal(after.text, '第一段文字\n[图片：图片1.png]\n第二段文字')
+  assert.deepEqual(after.files.map((f) => f.name), ['图片1.png'])
+})

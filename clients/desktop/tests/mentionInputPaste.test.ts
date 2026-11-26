@@ -57,14 +57,21 @@ const takeBody = source.slice(takeStart, source.indexOf('}, [insertPlainText, on
 test('图文一起进来：文字（含占位）插入输入框，图片/文件交给 onFiles', () => {
   assert.ok(takeBody.includes('composePaste('), '应由 composePaste 生成带占位的文字和附件列表')
   assert.ok(takeBody.includes("htmlToParts(data.getData('text/html')"), '应读取 HTML 以确定图片在文字中的位置')
-  assert.ok(takeBody.includes('if (composed.text) insertPlainText(el, composed.text, at)'), '文字没插入输入框')
+  assert.ok(takeBody.includes('if (composed.text) insertPlainText(el, composed.text, range)'), '文字没插入输入框')
   assert.ok(takeBody.includes('onFiles?.(composed.files)'), '图片/文件没交给附件导入')
-  assert.ok(!takeBody.slice(takeBody.indexOf('if (composed.text)')).includes('return'), '有文字时不能提前返回而丢掉图片')
+  assert.ok(!takeBody.slice(takeBody.indexOf('if (composed.text)'), takeBody.indexOf('const composed = composePaste')).includes('return'), '有文字时不能提前返回而丢掉图片')
   assert.ok(source.includes('onFiles?: (files: File[]) => void'), 'MentionInput 缺少 onFiles 入参')
 })
 
 test('源应用没把图片放进剪贴板（飞书）时要提示单独复制图片', () => {
   assert.ok(takeBody.includes('if (composed.unavailable > 0)'))
+})
+
+test('WPS/Word 图文：页面读不到的图片由本机端从剪贴板 RTF 读出，按顺序补回', () => {
+  assert.ok(takeBody.includes("source !== 'paste' || composed.unavailable === 0"), '只有粘贴且有读不到的图时才走本机兜底')
+  assert.ok(takeBody.includes('readClipboardRtfImages()'))
+  assert.ok(takeBody.includes('composePaste({ plain, parts, files: [...files, ...pictures] })'), 'RTF 图片应按顺序填回 HTML 里的图片位置')
+  assert.ok(takeBody.includes('getRangeAt(0).cloneRange()'), '异步读取期间要记住光标位置')
 })
 
 test('只有网址的图片会去取，取不到要提示', () => {
