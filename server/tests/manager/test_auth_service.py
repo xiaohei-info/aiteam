@@ -20,6 +20,8 @@ from manager_service.auth_service import (
 )
 from shared.contracts.enums import AuthProvider, EnterpriseRole
 from manager_service.keys import TenantKeyStore
+from manager_service.repository import IdentityRow
+from shared.security import hash_password
 
 
 def test_tenant_key_store_rejects_malformed_kid_before_database_query():
@@ -124,10 +126,13 @@ def test_sync_owner_bootstrap_replaces_existing_owner_credential():
     assert args[0].roles == [EnterpriseRole.OWNER.value]
 
 
-def test_login_requires_enterprise_or_tenant_id():
+def test_login_without_enterprise_matches_account_and_password():
+    """未填企业标识：不再 422，改为按账号和密码匹配企业（无此账号 → 401）。"""
     svc = _svc()
-    with pytest.raises(ValidationProblem, match="enterprise or tenant_id is required"):
+    svc._account_tenants = MagicMock(return_value={})
+    with pytest.raises(Unauthorized, match="invalid credentials"):
         svc.login(LoginInput(account="13800138000", password="Pw1!"))
+    svc._account_tenants.assert_called_once_with("13800138000")
     svc._repo.find_identity.assert_not_called()
 
 
@@ -208,16 +213,20 @@ def test_login_ignores_whitespace_enterprise_when_tenant_id_present():
     assert svc._repo.find_identity.call_args[0][0].tenant_id == tenant_id
 
 
-def test_login_whitespace_enterprise_without_tenant_id_is_required():
+def test_login_whitespace_enterprise_is_treated_as_omitted():
     svc = _svc()
-    with pytest.raises(ValidationProblem, match="enterprise or tenant_id is required"):
+    svc.resolve_tenant = MagicMock()
+    svc._account_tenants = MagicMock(return_value={})
+    with pytest.raises(Unauthorized, match="invalid credentials"):
         svc.login(LoginInput(enterprise="   ", account="13800138000", password="Pw1!"))
-    svc._repo.find_identity.assert_not_called()
+    svc.resolve_tenant.assert_not_called()
+    svc._account_tenants.assert_called_once()
 
 
-def test_owner_reset_requires_enterprise_or_tenant_id():
+def test_owner_reset_without_enterprise_unknown_account_is_401():
     svc = _svc()
-    with pytest.raises(ValidationProblem, match="enterprise or tenant_id is required"):
+    svc._account_tenants = MagicMock(return_value={})
+    with pytest.raises(Unauthorized, match="invalid credentials"):
         svc.owner_reset(OwnerResetInput(
             account="13800138000", old_password="Pw1!", new_password="Fresh-Pass-2",
         ))
@@ -307,12 +316,17 @@ def test_resolve_tenant_unknown_enterprise_is_not_found(mock_connect):
         _svc().resolve_tenant("missing-co")
 
 
-@patch("psycopg.connect")
-def test_resolve_tenant_by_account_duplicate_is_tenant_selection_required(mock_connect):
-    conn = MagicMock()
-    conn.execute.return_value.fetchall.return_value = [("t-1", "active", "a"), ("t-2", "active", "b")]
-    mock_connect.return_value.__enter__.return_value = conn
+def test_login_without_enterprise_duplicate_password_match_is_tenant_selection_required():
+    svc = _svc()
+    secret = hash_password("Pw1!")
+    svc._account_tenants = MagicMock(return_value={
+        "550e8400-e29b-41d4-a716-446655440001": ("active", "a"),
+        "550e8400-e29b-41d4-a716-446655440002": ("active", "b"),
+    })
+    svc._repo.find_identity.return_value = IdentityRow(
+        identity_id="i", user_id="u", secret=secret, must_reset=False, roles=["member"],
+    )
     with pytest.raises(TenantSelectionRequired) as exc:
-        _svc().resolve_tenant_by_account("13800000000")
+        svc.login(LoginInput(account="13800000000", password="Pw1!"))
     assert exc.value.status == 409
     assert exc.value.code == "tenant_selection_required"

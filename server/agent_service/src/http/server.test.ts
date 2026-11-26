@@ -760,7 +760,8 @@ test("Agent OpenAPI gives every frontend operation structured parameters, respon
         assert(errorResponse?.content?.["application/problem+json"]?.schema?.$ref === "#/components/schemas/Problem", `${label} ${status} must use problem+json`);
       }
       const successResponses = Object.entries(operation.responses).filter(([status]) => /^2/.test(status));
-      if (!path.includes("/knowledge-bases")) {
+      // 已停用的接口（deprecated）只会返回错误，不要求成功响应。
+      if (!path.includes("/knowledge-bases") && !operation.deprecated) {
         assert(successResponses.length > 0, `${label} missing success response`);
         for (const [status, response] of successResponses) {
           if (status === "204") {

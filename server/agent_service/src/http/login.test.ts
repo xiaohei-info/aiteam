@@ -1,4 +1,4 @@
-/** 公开登录端点的企业解析契约：不填 tenant_id 时由同源 Agent 让 Manager 解析。 */
+/** 公开登录端点的企业匹配契约：Agent 不再「凭账号查企业」，企业参数原样转交 Manager，由 Manager 按账号和密码匹配。 */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { JwtClockError } from "./auth.js";
@@ -12,21 +12,19 @@ const CLAIMS = (account: string, tenantId: string) => ({
 
 async function withServer(
   run: (base: string, calls: { path: string; body: unknown }[]) => Promise<void>,
-  opts: { resolve?: boolean; login?: boolean } = {},
+  opts: { login?: boolean; matchedTenant?: string } = {},
 ): Promise<void> {
   const fixture = await createFixture();
   const calls: { path: string; body: unknown }[] = [];
   const managerClient = {
-    ...(opts.resolve === false ? {} : {
-      resolveTenantByAccount: async (account: string, enterprise?: string | null) => {
-        calls.push({ path: "resolve", body: { account, enterprise } });
-        return { data: { tenant_id: "tenant-resolved" } };
-      },
-    }),
     ...(opts.login === false ? {} : {
-      login: async (input: { account: string; tenant_id: string }) => {
+      login: async (input: { account: string; tenant_id?: string }) => {
         calls.push({ path: "login", body: input });
-        return { data: { token: "tok", claims: CLAIMS(input.account, input.tenant_id) } };
+        return { data: { token: "tok", claims: CLAIMS(input.account, input.tenant_id ?? opts.matchedTenant ?? "tenant-matched") } };
+      },
+      ownerReset: async (input: { account: string; tenant_id?: string }) => {
+        calls.push({ path: "ownerReset", body: input });
+        return { data: { token: "tok", claims: CLAIMS(input.account, input.tenant_id ?? opts.matchedTenant ?? "tenant-matched") } };
       },
     }),
   };
@@ -55,20 +53,25 @@ function post(base: string, path: string, body: unknown): Promise<Response> {
   });
 }
 
-test("login 只传 enterprise 时自行解析租户，并只用解析结果调 Manager", async () => {
+test("login 只传 account 时不预先解析企业，直接交 Manager 按账号和密码匹配", async () => {
   await withServer(async (base, calls) => {
-    const response = await post(base, "/api/agent/login", { account: "alice", password: "pw", enterprise: "acme" });
+    const response = await post(base, "/api/agent/login", { account: "alice", password: "pw" });
     assert.equal(response.status, 200, await response.clone().text());
-    assert.deepEqual(calls, [
-      { path: "resolve", body: { account: "alice", enterprise: "acme" } },
-      { path: "login", body: { tenant_id: "tenant-resolved", account: "alice", password: "pw" } },
-    ]);
+    assert.deepEqual(calls, [{ path: "login", body: { account: "alice", password: "pw" } }]);
     const body = (await response.json()) as { data: { claims: { tenant_id: string } } };
-    assert.equal(body.data.claims.tenant_id, "tenant-resolved");
+    assert.equal(body.data.claims.tenant_id, "tenant-matched");
   });
 });
 
-test("login 传 tenant_id 时跳过解析（调用方已自行解析）", async () => {
+test("login 传 enterprise 时原样转交 Manager", async () => {
+  await withServer(async (base, calls) => {
+    const response = await post(base, "/api/agent/login", { account: "alice", password: "pw", enterprise: " acme " });
+    assert.equal(response.status, 200, await response.clone().text());
+    assert.deepEqual(calls, [{ path: "login", body: { enterprise: "acme", account: "alice", password: "pw" } }]);
+  });
+});
+
+test("login 传候选 tenant_id 时只按该企业登录，且 Manager 返回别的企业视为无效", async () => {
   await withServer(async (base, calls) => {
     const response = await post(base, "/api/agent/login", { account: "alice", password: "pw", tenant_id: "tenant-explicit" });
     assert.equal(response.status, 200, await response.clone().text());
@@ -76,59 +79,44 @@ test("login 传 tenant_id 时跳过解析（调用方已自行解析）", async 
   });
 });
 
-test("login 只传 account 时按账号解析企业（单企业用户无需填写企业标识）", async () => {
+test("reset-password 未填企业时也直接交 Manager（旧密码通过后匹配企业）", async () => {
   await withServer(async (base, calls) => {
-    const response = await post(base, "/api/agent/login", { account: "alice", password: "pw" });
+    const response = await post(base, "/api/agent/reset-password", { account: "owner", old_password: "old", new_password: "new" });
     assert.equal(response.status, 200, await response.clone().text());
-    assert.deepEqual(calls, [
-      { path: "resolve", body: { account: "alice", enterprise: undefined } },
-      { path: "login", body: { tenant_id: "tenant-resolved", account: "alice", password: "pw" } },
-    ]);
+    assert.deepEqual(calls, [{ path: "ownerReset", body: { account: "owner", old_password: "old", new_password: "new" } }]);
   });
 });
 
-test("login 在 Manager 拒绝解析时透传其 problem 状态与 code", async () => {
-  const fixture = await createFixture();
-  const http = new AgentHttpServer({
-    host: fixture.host,
-    store: fixture.store,
-    managerClient: {
-      resolveTenantByAccount: async () => {
-        throw new ManagerAuthError(409, { code: "enterprise_ambiguous", detail: "enterprise identifier is ambiguous" });
-      },
-      login: async () => { throw new Error("login must not be called when resolution fails"); },
-    } as never,
-    authenticate: () => ({ callerId: "member-1", userId: "member-1", tenantId: "tenant-1", roles: ["member"] }),
+test("resolve-tenant-by-account 已停用：不论账号是否存在都返回同一个 410，且不访问 Manager", async () => {
+  await withServer(async (base, calls) => {
+    const bodies: unknown[] = [];
+    for (const body of [{ account: "exists" }, { account: "nobody-" + Date.now() }, { account: "x", enterprise: "acme" }, {}]) {
+      const response = await post(base, "/api/auth/resolve-tenant-by-account", body);
+      assert.equal(response.status, 410);
+      assert.match(response.headers.get("content-type") ?? "", /application\/problem\+json/u);
+      const payload = (await response.json()) as Record<string, unknown>;
+      bodies.push({ code: payload.code, detail: payload.detail, meta: payload.meta });
+    }
+    assert.deepEqual(bodies[0], { code: "client_upgrade_required", detail: "客户端版本过旧，请升级后登录", meta: undefined });
+    for (const body of bodies) assert.deepEqual(body, bodies[0]);
+    assert.deepEqual(calls, []);
   });
-  await http.listen(0);
-  const address = http.server.address();
-  assert(address && typeof address === "object");
-  try {
-    const response = await post(`http://127.0.0.1:${address.port}`, "/api/agent/login", { account: "alice", password: "pw", enterprise: "acme" });
-    assert.equal(response.status, 409);
-    const body = (await response.json()) as { code: string; detail: string };
-    assert.equal(body.code, "enterprise_ambiguous");
-    assert.match(body.detail, /ambiguous/u);
-  } finally {
-    await http.close();
-    await fixture.close();
-  }
 });
 
-test("login 无 Manager 解析能力时返回 503 manager_unavailable", async () => {
+test("login 无 Manager 认证能力时返回 503 manager_unavailable", async () => {
   await withServer(async (base, calls) => {
     const response = await post(base, "/api/agent/login", { account: "alice", password: "pw", enterprise: "acme" });
     assert.equal(response.status, 503);
     const body = (await response.json()) as { code: string };
     assert.equal(body.code, "manager_unavailable");
     assert.deepEqual(calls, []);
-  }, { resolve: false });
+  }, { login: false });
 });
 
-test("OpenAPI 上 login/reset-password 暴露 enterprise，tenant_id 不再必填", async () => {
+test("OpenAPI 上 login/reset-password 暴露 enterprise，tenant_id 不必填；resolve-tenant-by-account 只文档化 410（另保留全局统一的 422/500）", async () => {
   await withServer(async (base) => {
     const document = (await (await fetch(`${base}/openapi.json`)).json()) as {
-      paths: Record<string, { post: { requestBody?: { content: { "application/json": { schema: unknown } } } } }>;
+      paths: Record<string, { post: { deprecated?: boolean; responses: Record<string, unknown>; requestBody?: { content: { "application/json": { schema: unknown } } } } }>;
       components: { schemas: Record<string, { required?: string[]; properties: Record<string, unknown> }> };
     };
     for (const path of ["/api/agent/login", "/api/agent/reset-password"]) {
@@ -139,6 +127,10 @@ test("OpenAPI 上 login/reset-password 暴露 enterprise，tenant_id 不再必�
       assert(!schema.required?.includes("tenant_id"), `${ref[1]} 不应再要求 tenant_id`);
       assert(schema.required?.includes("account"), `${ref[1]} 应要求 account`);
     }
+    const retired = document.paths["/api/auth/resolve-tenant-by-account"]!.post;
+    assert.equal(retired.deprecated, true);
+    assert.deepEqual(Object.keys(retired.responses).sort(), ["410", "422", "500"]);
+    assert.equal(retired.requestBody, undefined);
   });
 });
 
@@ -204,7 +196,7 @@ async function withRejectingManager(
 
 const SELECTION_REQUIRED = new ManagerAuthError(409, {
   code: "tenant_selection_required",
-  detail: "account belongs to multiple tenants",
+  detail: "account and password match multiple enterprises; select one by tenant_id",
   meta: {
     candidates: [
       { tenant_id: "tenant-a", enterprise_name: "甲企业", secret: "must-not-leak" },
@@ -215,25 +207,31 @@ const SELECTION_REQUIRED = new ManagerAuthError(409, {
   },
 });
 
-for (const path of ["/api/auth/resolve-tenant-by-account", "/api/agent/login"]) {
-  test(`${path} 透传 tenant_selection_required 的候选企业，只放行校验过的字段`, async () => {
-    await withRejectingManager({
-      resolveTenantByAccount: async () => { throw SELECTION_REQUIRED; },
-      login: async () => { throw new Error("login must not be called when resolution fails"); },
-    }, async (base) => {
-      const response = await post(base, path, { account: "alice", password: "pw" });
-      assert.equal(response.status, 409);
-      const body = (await response.json()) as { code: string; meta?: unknown };
-      assert.equal(body.code, "tenant_selection_required");
-      assert.deepEqual(body.meta, { candidates: [{ tenant_id: "tenant-a", enterprise_name: "甲企业" }] });
-    });
+test("login 透传 tenant_selection_required 的候选企业，只放行校验过的字段", async () => {
+  await withRejectingManager({ login: async () => { throw SELECTION_REQUIRED; } }, async (base) => {
+    const response = await post(base, "/api/agent/login", { account: "alice", password: "pw" });
+    assert.equal(response.status, 409);
+    const body = (await response.json()) as { code: string; meta?: unknown };
+    assert.equal(body.code, "tenant_selection_required");
+    assert.deepEqual(body.meta, { candidates: [{ tenant_id: "tenant-a", enterprise_name: "甲企业" }] });
   });
-}
+});
+
+test("login 透传「需要改密」响应的 meta.tenant_id，供改密定位企业", async () => {
+  await withRejectingManager({
+    login: async () => { throw new ManagerAuthError(403, { code: "password_reset_required", detail: "reset", meta: { tenant_id: "tenant-a", other: "x" } }); },
+  }, async (base) => {
+    const response = await post(base, "/api/agent/login", { account: "owner", password: "boot" });
+    assert.equal(response.status, 403);
+    const body = (await response.json()) as { code: string; meta?: unknown };
+    assert.equal(body.code, "password_reset_required");
+    assert.deepEqual(body.meta, { tenant_id: "tenant-a" });
+  });
+});
 
 for (const status of [401, 403, 404, 409, 422, 429]) {
   test(`Manager 认证 ${status} 不会被本地 Agent 映射成 5xx`, async () => {
     await withRejectingManager({
-      resolveTenantByAccount: async () => ({ data: { tenant_id: "tenant-a" } }),
       login: async () => { throw new ManagerAuthError(status, { code: `manager_${status}`, detail: "rejected" }); },
     }, async (base) => {
       const response = await post(base, "/api/agent/login", { account: "alice", password: "pw" });

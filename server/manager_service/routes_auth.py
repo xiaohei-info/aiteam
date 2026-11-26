@@ -1,6 +1,6 @@
 """Manager 认证北向路由（/api/auth/*，02 §10.1 路径前缀 + §10.3 envelope；03 §9.4/§9.6）。
 
-公开端点（无需 token，§9.6）：login / owner-reset / resolve-tenant / resolve-tenant-by-account / jwks。
+公开端点（无需 token，§9.6）：login / owner-reset / resolve-tenant / jwks；resolve-tenant-by-account 已停用（固定 410）。
 凭据校验失败 → 401；首登需重置 → 403；账号已存在 → 409；皆经统一 problem+json。
 """
 
@@ -14,7 +14,15 @@ from shared.contracts.auth import TokenClaims
 from shared.contracts.envelope import Envelope
 from shared.errors import AppError
 
-from .auth_service import AuthResult, AuthService, LoginInput, OwnerResetInput, build_auth_service
+from .auth_service import (
+    CLIENT_UPGRADE_DETAIL,
+    AuthResult,
+    AuthService,
+    ClientUpgradeRequired,
+    LoginInput,
+    OwnerResetInput,
+    build_auth_service,
+)
 from .openapi_schemas import JwksOut
 
 
@@ -41,23 +49,6 @@ class ResolveTenantOutput(BaseModel):
     tenant_id: str
 
 
-
-class ResolveTenantByAccountInput(BaseModel):
-    """员工账号 → tenant_id 解析请求（登录前调用，隐藏 UUID 细节）。"""
-
-    account: str = Field(
-        description="员工账号（手机号或用户名，匹配 auth_identity.external_id）"
-    )
-    enterprise: str | None = Field(
-        default=None,
-        description="可选企业代码或名称；账号跨企业时必须提供以消除歧义",
-    )
-
-
-class ResolveTenantByAccountOutput(BaseModel):
-    """解析结果：tenant_id（供 login / owner-reset 使用）。"""
-
-    tenant_id: str
 
 class _ManagerNotConfigured(AppError):
     status, code, title = 503, "manager_db_unconfigured", "Manager DB Unconfigured"
@@ -88,19 +79,20 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 @router.post(
     "/resolve-tenant-by-account",
-    description="员工账号 → tenant_id 解析（登录前调用，隐藏 UUID 细节；#382）。"
-              "账号跨企业时返回 tenant_selection_required 409，带 enterprise 后继续。",
-    summary="解析员工账号到 tenant_id（公开端点，#382）",
+    description="已停用：旧版客户端「凭账号查企业」入口。不再查询账号，不论账号是否存在都固定返回 410 "
+              "client_upgrade_required（客户端版本过旧，请升级后登录）。新版客户端直接调用 login，"
+              "未填企业标识时由登录接口按账号和密码匹配企业。",
+    summary="已停用：解析员工账号到 tenant_id（固定 410）",
     operation_id="manager_resolve_tenant_by_account",
+    deprecated=True,
+    status_code=410,
 )
-async def resolve_tenant_by_account(
-    body: ResolveTenantByAccountInput, svc: AuthService = Depends(_auth_service)
-) -> Envelope[ResolveTenantByAccountOutput]:
-    tenant_id = svc.resolve_tenant_by_account(body.account, body.enterprise)
-    return Envelope[ResolveTenantByAccountOutput](data=ResolveTenantByAccountOutput(tenant_id=tenant_id))
+async def resolve_tenant_by_account() -> None:
+    # 不读请求体、不连库：响应与账号是否存在、是否配置数据库都无关。
+    raise ClientUpgradeRequired(CLIENT_UPGRADE_DETAIL)
 
 
-@router.post("/login", description="成员或负责人使用企业标识或已解析 tenant 与账号密码登录。登录成功后返回带 tenant_id 的 JWT。", summary="成员/负责人登录（公开端点）", operation_id="manager_login")
+@router.post("/login", description="成员或负责人登录。可带企业标识或 tenant_id；都不带时按账号和密码匹配企业：只有一个企业密码通过则直接登录，多个则 409 tenant_selection_required 并在 meta.candidates 列出密码通过的企业（tenant_id + enterprise_name），再带 tenant_id 重试。账号不存在与密码错误返回相同的 401。需要改密时 403 的 meta.tenant_id 指明企业。", summary="成员/负责人登录（公开端点）", operation_id="manager_login")
 async def login(body: LoginInput, svc: AuthService = Depends(_auth_service)) -> Envelope[AuthResult]:
     return Envelope[AuthResult](data=svc.login(body))
 

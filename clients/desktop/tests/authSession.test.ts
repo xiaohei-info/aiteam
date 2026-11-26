@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { AgentApiClient, AgentRequestOptions } from '../src/api/agent/client.ts'
-import { loginByAccount, resetPassword, syncAuthenticatedAgent } from '../src/api/agent/auth.ts'
+import { login, resetPassword, syncAuthenticatedAgent } from '../src/api/agent/auth.ts'
 import {
   invalidateSecureCredential,
   isPasswordResetRequired,
@@ -174,39 +174,20 @@ test('late unauthorized responses cannot invalidate a newly authenticated sessio
   assert.equal(shouldInvalidateSessionOnUnauthorized(401, 'current-token', 'current-token'), true)
 })
 
-test('account login resolves tenant before sending the credential request', async () => {
+test('account-only login sends one credential request and never calls the retired resolver', async () => {
   const requests: AgentRequestOptions[] = []
   const client = {
     request: async (options: AgentRequestOptions) => {
       requests.push(options)
-      if (options.path === '/api/auth/resolve-tenant-by-account') {
-        return { tenant_id: 'tenant-1' }
-      }
-      return {
-        token: 'token-1',
-        claims: { user_id: 'member-1', tenant_id: null, roles: ['member'] },
-      }
+      return { token: 'token-1', claims: { user_id: 'member-1', tenant_id: 'tenant-1', roles: ['member'] } }
     },
   } as AgentApiClient
 
-  const result = await loginByAccount(client, { account: 'member@example.com', password: 'Old-Pass-1!' })
+  const result = await login(client, { account: 'member@example.com', password: 'Old-Pass-1!' })
 
-  assert.equal(result.claims.tenant_id, null)
+  assert.equal(result.claims.tenant_id, 'tenant-1')
   assert.deepEqual(requests, [
-    {
-      method: 'POST',
-      path: '/api/auth/resolve-tenant-by-account',
-      body: { account: 'member@example.com' },
-    },
-    {
-      method: 'POST',
-      path: '/api/agent/login',
-      body: {
-        tenant_id: 'tenant-1',
-        account: 'member@example.com',
-        password: 'Old-Pass-1!',
-      },
-    },
+    { method: 'POST', path: '/api/agent/login', body: { account: 'member@example.com', password: 'Old-Pass-1!' } },
   ])
 })
 

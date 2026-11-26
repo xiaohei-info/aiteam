@@ -28,12 +28,13 @@ from shared.contracts.auth import TokenClaims
 from shared.contracts.enums import AuthProvider, EnterpriseRole
 from shared.contracts.tenancy import TenantContext
 from shared.db import PgTenantRouter
-from shared.errors import Conflict, NotFound, ServiceUnavailable, TooManyRequests, Unauthorized, ValidationProblem
+from shared.errors import AppError, Conflict, NotFound, ServiceUnavailable, TooManyRequests, Unauthorized, ValidationProblem
 from shared.auth.constants import AUTH_SESSION_TTL_SECONDS
 
 from .active_principal import require_active
 from .auth_sessions import ManagerAuthSessionRepository
 from .auth_password_policy import (
+    PasswordExpired,
     PasswordResetRequired,
     assert_password_not_expired,
     validate_password_complexity,
@@ -76,19 +77,41 @@ class EnterpriseAmbiguous(Conflict):
     code, title = "enterprise_ambiguous", "Enterprise Ambiguous"
 
 
+class ClientUpgradeRequired(AppError):
+    """旧版「凭账号查企业」接口已停用：不论账号是否存在都固定返回 410，要求升级客户端。"""
+
+    status, code, title = 410, "client_upgrade_required", "Client Upgrade Required"
+
+
+CLIENT_UPGRADE_DETAIL = "客户端版本过旧，请升级后登录"
+# 账号不存在与密码错误必须返回完全相同的 401（同 code / detail / 无 meta），不泄漏账号是否存在。
+_INVALID_CREDENTIALS = "invalid credentials"
+_dummy_secret: str | None = None
+
+
+def _dummy_password_check(password: str) -> None:
+    """账号不存在时也做一次同等代价的密码校验，避免按响应时间区分「无此账号」。"""
+    global _dummy_secret
+    if _dummy_secret is None:
+        _dummy_secret = hash_password(uuid.uuid4().hex)
+    verify_password(password, _dummy_secret)
+
+
 class LoginInput(BaseModel):
-    """企业成员/负责人登录。用户填写企业标识与账号密码；tenant_id 仅为内部解析结果。"""
+    """企业成员/负责人登录。企业标识可省略：省略时按账号和密码匹配企业（多个则 409 候选）。"""
 
     model_config = ConfigDict(extra="forbid")
 
-    enterprise: str | None = Field(default=None, description="企业代码或名称")
+    enterprise: str | None = Field(default=None, description="企业代码或名称；省略时按账号和密码匹配企业")
     account: str = Field(description="手机号/用户名（external_id）")
     password: str = Field(description="登录密码；仅用于本次请求，不会回显。")
-    tenant_id: str | None = Field(default=None, description="内部 tenant UUID（解析结果，非用户必填）")
+    tenant_id: str | None = Field(
+        default=None, description="内部 tenant UUID：409 tenant_selection_required 候选中选定的企业（非用户必填）"
+    )
 
 
 class OwnerResetInput(BaseModel):
-    """负责人重置密码。用户填写企业标识与账号密码；tenant_id 仅为内部解析结果。"""
+    """负责人重置密码。通常带登录 403 响应 meta.tenant_id；都不带时旧密码通过后再匹配企业。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -96,7 +119,9 @@ class OwnerResetInput(BaseModel):
     account: str = Field(description="手机号/用户名（external_id）")
     old_password: str = Field(description="bootstrap/旧密码")
     new_password: str = Field(description="要设置的新密码")
-    tenant_id: str | None = Field(default=None, description="内部 tenant UUID（解析结果，非用户必填）")
+    tenant_id: str | None = Field(
+        default=None, description="内部 tenant UUID：登录 403 password_reset_required 响应 meta.tenant_id（非用户必填）"
+    )
 
 
 class AuthResult(BaseModel):
@@ -234,48 +259,118 @@ class AuthService:
         except (ValueError, TypeError):
             raise ValidationProblem("invalid tenant_id format")
 
-    def _session_tenant_id(self, *, tenant_id: str | None, enterprise: str | None) -> str:
-        resolved = None
-        if enterprise and enterprise.strip():
-            resolved = self.resolve_tenant(enterprise.strip())
+    def _session_tenant_id(self, *, tenant_id: str | None, enterprise: str) -> str:
+        """显式企业：tenant_id（登录弹窗选中的候选）和/或企业标识（用户填写），两者都给时必须一致。"""
+        resolved = self.resolve_tenant(enterprise) if enterprise else None
         if tenant_id is not None:
             self._validate_tenant_id(tenant_id)
             if resolved is not None and tenant_id != resolved:
                 raise ValidationProblem("enterprise does not match tenant_id")
             return tenant_id
-        if resolved is None:
-            raise ValidationProblem("enterprise or tenant_id is required")
         return resolved
 
+    def _authenticate(self, *, tenant_id: str | None, enterprise: str | None, account: str, password: str):
+        """校验账号密码并确定登录企业，返回 ``(tenant_id, ctx, identity)``。
+
+        - 给了 tenant_id 或企业标识：只在该企业内校验。
+        - 都没给：按账号找到所有未归档身份，**逐个企业校验密码**，只保留密码通过的企业；
+          一个 → 直接用它；多个 → 优先 active，仍多个则 409 + meta.candidates（只含密码通过的企业）。
+        - 账号不存在 / 密码在所有企业都不对：同一个 401（同 code、detail，无 meta）。
+        """
+        enterprise = (enterprise or "").strip()
+        if tenant_id is not None or enterprise:
+            tid = self._session_tenant_id(tenant_id=tenant_id, enterprise=enterprise)
+            ctx = TenantContext(tenant_id=tid, user_id="anon", roles=[])
+            identity = self._repo.find_identity(ctx, provider=AuthProvider.PHONE, external_id=account)
+            if identity is None or not identity.secret or not verify_password(password, identity.secret):
+                record_attempt(self._audit, ctx, provider="password", external_id=account,
+                               actor="anon", success=False, detail="invalid credentials")
+                raise Unauthorized(_INVALID_CREDENTIALS)
+            return tid, ctx, identity
+        tenants = self._account_tenants(account)
+        if not tenants:
+            _dummy_password_check(password)
+            raise Unauthorized(_INVALID_CREDENTIALS)
+        matched: dict[str, tuple] = {}
+        for tid in tenants:
+            ctx = TenantContext(tenant_id=tid, user_id="anon", roles=[])
+            identity = self._repo.find_identity(ctx, provider=AuthProvider.PHONE, external_id=account)
+            if identity is not None and identity.secret and verify_password(password, identity.secret):
+                matched[tid] = (ctx, identity)
+            else:
+                record_attempt(self._audit, ctx, provider="password", external_id=account,
+                               actor="anon", success=False, detail="invalid credentials")
+        if not matched:
+            raise Unauthorized(_INVALID_CREDENTIALS)
+        pool = _prefer_active({tid: tenants[tid][0] for tid in matched})
+        if len(pool) == 1:
+            ctx, identity = matched[pool[0]]
+            return pool[0], ctx, identity
+        candidates = sorted(
+            ({"tenant_id": tid, "enterprise_name": tenants[tid][1]} for tid in pool),
+            key=lambda c: (c["enterprise_name"], c["tenant_id"]),
+        )
+        raise TenantSelectionRequired(
+            "account and password match multiple enterprises; select one by tenant_id",
+            candidates=candidates,
+        )
+
+    def _account_tenants(self, account: str) -> dict[str, tuple[str, str]]:
+        """账号 → {tenant_id: (企业状态, 企业名称)}。已归档身份（企业注销 / 删除）不参与。
+
+        名称取 enterprise_settings.enterprise_name，为空时回落 tenant_registry.enterprise_slug。
+        这里只给出「哪些企业有这个账号」，是否能登录由调用方逐个企业校验密码后决定，结果不直接返回给未认证者。
+        """
+        import psycopg
+
+        query = (
+            "SELECT DISTINCT ai.tenant_id, tr.status, "
+            "COALESCE(NULLIF(es.enterprise_name, ''), tr.enterprise_slug) AS enterprise_name "
+            "FROM auth_identity ai "
+            "JOIN tenant_registry tr ON tr.tenant_id = ai.tenant_id "
+            "LEFT JOIN enterprise_settings es ON es.tenant_id = ai.tenant_id "
+            "WHERE ai.provider IN ('phone', 'password') AND ai.external_id = %s AND ai.archived_at IS NULL"
+        )
+        try:
+            with psycopg.connect(self._admin_dsn, autocommit=True) as conn:
+                rows = conn.execute(query, (account,)).fetchall()
+        except psycopg.Error as exc:
+            raise ServiceUnavailable("Manager account directory is unavailable") from exc
+        return {str(r[0]): (r[1], r[2]) for r in rows}
+
+    @staticmethod
+    def _reset_meta(tenant_id: str) -> dict[str, str]:
+        """「需要改密」响应回传 tenant_id：此时密码已校验通过，后续改密直接按该企业进行，无需再匹配企业。"""
+        return {"tenant_id": tenant_id}
+
     def login(self, req):
-        tenant_id = self._session_tenant_id(tenant_id=req.tenant_id, enterprise=req.enterprise)
-        ctx = TenantContext(tenant_id=tenant_id, user_id="anon", roles=[])
-        identity = self._repo.find_identity(ctx, provider=AuthProvider.PHONE, external_id=req.account)
-        if identity is None or not identity.secret or not verify_password(req.password, identity.secret):
-            record_attempt(self._audit, ctx, provider="password", external_id=req.account,
-                           actor="anon", success=False, detail="invalid credentials")
-            raise Unauthorized("invalid credentials")
+        tenant_id, ctx, identity = self._authenticate(
+            tenant_id=req.tenant_id, enterprise=req.enterprise, account=req.account, password=req.password,
+        )
         require_active(identity)
         # 凭据核对通过后再看企业状态（不向未认证者泄露），且在任何“成功”审计之前。
         self._assert_tenant_active(tenant_id)
         if identity.must_reset:
             record_attempt(self._audit, ctx, provider="password", external_id=req.account,
                            actor=identity.user_id, success=False, detail="reset required")
-            raise PasswordResetRequired("password reset required before login")
-        assert_password_not_expired(password_changed_at=identity.password_changed_at)
+            raise PasswordResetRequired("password reset required before login", meta=self._reset_meta(tenant_id))
+        try:
+            assert_password_not_expired(password_changed_at=identity.password_changed_at)
+        except PasswordExpired as exc:
+            raise PasswordExpired(exc.detail, meta=self._reset_meta(tenant_id)) from None
         record_attempt(self._audit, ctx, provider="password", external_id=req.account,
                        actor=identity.user_id, success=True, detail=None)
         return self._issue(tenant_id, identity.user_id, identity.roles)
 
     def owner_reset(self, req):
-        tenant_id = self._session_tenant_id(tenant_id=req.tenant_id, enterprise=req.enterprise)
+        """首次登录 / 过期改密。未给企业时与登录同口径：旧密码通过后才匹配企业（多个则 409 候选）。
+        正常流程里客户端会带上「需要改密」响应 meta.tenant_id，直接定位到该企业。"""
+        if req.tenant_id is not None:
+            self._validate_tenant_id(req.tenant_id)
         validate_password_complexity(req.new_password)
-        ctx = TenantContext(tenant_id=tenant_id, user_id="anon", roles=[])
-        identity = self._repo.find_identity(ctx, provider=AuthProvider.PHONE, external_id=req.account)
-        if identity is None or not identity.secret or not verify_password(req.old_password, identity.secret):
-            record_attempt(self._audit, ctx, provider="password", external_id=req.account,
-                           actor="anon", success=False, detail="invalid credentials")
-            raise Unauthorized("invalid credentials")
+        tenant_id, ctx, identity = self._authenticate(
+            tenant_id=req.tenant_id, enterprise=req.enterprise, account=req.account, password=req.old_password,
+        )
         require_active(identity)
         # 暂停 / 封禁等企业不可用时不能改密码（先拒绝，再写）。
         self._assert_tenant_active(tenant_id)
@@ -389,8 +484,14 @@ class AuthService:
         return self._keys.jwks(tenant_id)
 
     def resolve_tenant(self, enterprise: str) -> str:
-        """企业代码/名称 → tenant_id。代码精确匹配优先（重名时只看 active 企业）；slug 唯一。"""
+        """企业代码/名称 → tenant_id。代码精确匹配优先（重名时只看 active 企业）；slug 唯一。
+
+        同一标识命中多家且全都不可用（暂停 / 封禁 / 注销 / 删除）时，报企业状态而不是「标识歧义」：
+        改填企业代码也登录不了，真正原因是这些企业都不可用。
+        """
         import psycopg
+
+        from .tenant_status import TenantUnavailable
 
         value = (enterprise or "").strip()
         if not value:
@@ -401,47 +502,24 @@ class AuthService:
                     f"SELECT tenant_id, status FROM tenant_registry WHERE {column} = %s",  # noqa: S608 - 固定列名
                     (value,),
                 ).fetchall()
-                tenant_id = _single_preferring_active({str(r[0]): r[1] for r in rows})
+                statuses = {str(r[0]): r[1] for r in rows}
+                tenant_id = _single_preferring_active(statuses)
                 if tenant_id is not None:
                     return tenant_id
+                if rows and "active" not in statuses.values():
+                    raise TenantUnavailable(_most_relevant_status(statuses.values()), at_login=True)
                 if rows:
                     raise EnterpriseAmbiguous(f"enterprise identifier is ambiguous: {value}")
         raise NotFound(f"enterprise not found: {value}")
 
-    def resolve_tenant_by_account(self, account: str, enterprise: str | None = None) -> str:
-        """账号 → 唯一 tenant。已归档身份（企业注销 / 删除）不参与；命中多个企业时优先 active，
-        仍有多个则 409 并在 meta.candidates 给出候选企业。可选 enterprise 用于消歧。"""
-        import psycopg
 
-        scoped = None
-        if enterprise and enterprise.strip():
-            scoped = self.resolve_tenant(enterprise.strip())
-        query = (
-            "SELECT DISTINCT ai.tenant_id, tr.status, tr.enterprise_slug FROM auth_identity ai "
-            "JOIN tenant_registry tr ON tr.tenant_id = ai.tenant_id "
-            "WHERE ai.provider IN ('phone', 'password') AND ai.external_id = %s AND ai.archived_at IS NULL"
-        )
-        params: tuple = (account,)
-        if scoped is not None:
-            query += " AND ai.tenant_id = %s"
-            params = (account, scoped)
-        with psycopg.connect(self._admin_dsn, autocommit=True) as conn:
-            rows = conn.execute(query, params).fetchall()
-        if not rows:
-            raise NotFound(f"account not bound to any tenant: {account}")
-        tenants = {str(r[0]): (r[1], r[2]) for r in rows}
-        tenant_id = _single_preferring_active({tid: status for tid, (status, _) in tenants.items()})
-        if tenant_id is not None:
-            return tenant_id
-        pool = _prefer_active({tid: status for tid, (status, _) in tenants.items()})
-        candidates = sorted(
-            ({"tenant_id": tid, "enterprise_name": tenants[tid][1]} for tid in pool),
-            key=lambda c: c["enterprise_name"],
-        )
-        raise TenantSelectionRequired(
-            f"account belongs to multiple tenants, enterprise must be specified: {account}",
-            candidates=candidates,
-        )
+# 多家不可用企业共用一个标识时，按可恢复程度给出最相关的状态（暂停可恢复，最值得提示）。
+_INACTIVE_STATUS_PRIORITY = ("suspended", "banned", "closed", "deleted")
+
+
+def _most_relevant_status(statuses) -> str:
+    present = set(statuses)
+    return next((s for s in _INACTIVE_STATUS_PRIORITY if s in present), next(iter(present)))
 
 
 def _prefer_active(statuses: dict[str, str]) -> list[str]:

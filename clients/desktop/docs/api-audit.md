@@ -27,7 +27,7 @@
 | GET | `/openapi.json` | openapi | 已核对调用 | `src/api/agent/customGroups.ts:24`<br>`src-tauri/src/agent.rs:248` |
 | GET | `/redoc` | redoc | 文档允许，当前未调用 |  |
 | GET | `/redoc/redoc.standalone.js` | redocBundle | 文档允许，当前未调用 |  |
-| POST | `/api/auth/resolve-tenant-by-account` | resolveTenantByAccount | 已核对调用 | `src/api/agent/auth.ts:23` |
+| POST | `/api/auth/resolve-tenant-by-account` | resolveTenantByAccount | 文档允许，当前未调用（已停用，固定 410） |  |
 | POST | `/api/agent/login` | login | 已核对调用 | `src/api/agent/auth.ts:38` |
 | POST | `/api/agent/reset-password` | resetPassword | 已核对调用 | `src/api/agent/auth.ts:76` |
 | POST | `/api/agent/audio/transcriptions` | transcribeAudio | 已核对调用 | `src/api/backend/index.ts:16` |

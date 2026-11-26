@@ -28,6 +28,8 @@ interface LoginInput {
   enterprise: string
   account: string
   password: string
+  // 409 候选中选定的企业：直接按 tenant_id 登录，不再按企业标识解析。
+  tenantId?: string
 }
 
 function describeLoginFailure(err: unknown, resettingPassword: boolean): string {
@@ -50,7 +52,7 @@ export default function Login() {
   const [showNewPassword, setShowNewPassword] = useState(false)
   const [showConfirmPassword, setShowConfirmPassword] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
-  // 账号属于多个企业时由用户选择；选中后用企业名重新登录，并按该企业保存登录信息。
+  // 账号密码匹配多个企业时由用户选择；选中后按候选的 tenant_id 重新登录（企业标识输入框保持用户原样）。
   const [tenantChoice, setTenantChoice] = useState<{ input: LoginInput; candidates: TenantCandidate[] } | null>(null)
   // 自动登录在内部页进行，失败后才来到这里，第一屏就要说明原因。
   const [error, setError] = useState<string | null>(() => {
@@ -142,14 +144,15 @@ export default function Login() {
     setIsLoading(true)
     setError(null)
     try {
-      const loginEnterprise = (pendingPasswordReset?.enterprise ?? pendingPasswordReset?.tenant_id ?? input.enterprise).trim()
+      // 保存的登录信息只记用户填写的企业标识；tenant_id 是内部值，不能当企业标识再解析。
+      const loginEnterprise = (pendingPasswordReset?.enterprise ?? input.enterprise).trim()
       const loginAccount = (pendingPasswordReset?.account ?? input.account).trim()
       let loginPassword = input.password
       if (pendingPasswordReset) {
         await resetPassword(input.password, newPassword)
         loginPassword = newPassword
       } else {
-        const outcome = await login(input.enterprise.trim(), input.account.trim(), input.password)
+        const outcome = await login(input.enterprise.trim(), input.account.trim(), input.password, input.tenantId)
         if (outcome === 'password_reset_required') {
           setIsLoading(false)
           setNewPassword('')
@@ -188,8 +191,7 @@ export default function Login() {
     const pending = tenantChoice
     setTenantChoice(null)
     if (!pending) return
-    setEnterprise(candidate.enterprise_name)
-    void runLogin({ ...pending.input, enterprise: candidate.enterprise_name })
+    void runLogin({ ...pending.input, tenantId: candidate.tenant_id })
   }
 
   const handleCancelTenantPick = () => {
@@ -294,7 +296,7 @@ export default function Login() {
                 autoCapitalize="none"
                 spellCheck={false}
                 placeholder="企业标识（选填）"
-                value={pendingPasswordReset?.enterprise ?? pendingPasswordReset?.tenant_id ?? enterprise}
+                value={pendingPasswordReset?.enterprise ?? enterprise}
                 onChange={(e) => {
                   const nextEnterprise = e.target.value
                   setEnterprise(nextEnterprise)

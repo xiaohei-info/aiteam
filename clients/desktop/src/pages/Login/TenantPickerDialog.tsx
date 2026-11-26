@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { Building2 } from 'lucide-react'
 import './TenantPickerDialog.css'
 import { useDialogFocus } from '../../hooks/useDialogFocus'
-import type { TenantCandidate } from '../../lib/loginFailure'
+import { tenantCandidateLabel, type TenantCandidate } from '../../lib/loginFailure'
 
 interface TenantPickerDialogProps {
   account: string
@@ -12,7 +12,7 @@ interface TenantPickerDialogProps {
   onCancel: () => void
 }
 
-/** 同一账号属于多个企业时，让用户选择这次要登录的企业。 */
+/** 账号和密码匹配多个企业时，让用户选择这次要登录的企业；选中后按 tenant_id 登录。 */
 export default function TenantPickerDialog({ account, candidates, onPick, onCancel }: TenantPickerDialogProps) {
   const dialogRef = useDialogFocus<HTMLDivElement>()
 
@@ -44,7 +44,7 @@ export default function TenantPickerDialog({ account, candidates, onPick, onCanc
             <li key={candidate.tenant_id}>
               <button type="button" className="tpd-item" onClick={() => onPick(candidate)}>
                 <Building2 size={16} aria-hidden="true" />
-                <span className="tpd-item-name">{candidate.enterprise_name}</span>
+                <span className="tpd-item-name">{tenantCandidateLabel(candidate)}</span>
               </button>
             </li>
           ))}

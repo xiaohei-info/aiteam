@@ -166,19 +166,15 @@ const ConversationScheduleInput = Type.Union([
     one_shot: Type.Optional(Type.Literal(false, { description: "重复调度应为 false 或省略。" })),
   }, { additionalProperties: false, description: "重复调度：必须提供 interval_seconds，one_shot 不能为 true。" }),
 ], { $id: "ConversationScheduleInput", description: "创建或更新调度配置；一次性和重复调度使用不同字段组合。" });
-const ResolveTenantRequest = Type.Object({
-  account: Type.String({ minLength: 1, maxLength: 256, description: "员工手机号或账号。" }),
-  enterprise: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: "账号跨企业时用于消歧的企业代码或名称。" })),
-}, { $id: "ResolveTenantRequest", additionalProperties: false, description: "员工账号企业解析请求。" });
 const AgentLoginRequest = Type.Object({
-  tenant_id: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: "已解析的企业租户 UUID；省略时服务端按 account/enterprise 自动解析。" })),
-  enterprise: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: "企业代码或名称；同账号跨企业时用于消歧。" })),
+  tenant_id: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: "企业租户 UUID：409 tenant_selection_required 的 meta.candidates 中选定的企业；省略时由 Manager 按账号和密码匹配企业。" })),
+  enterprise: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: "企业代码或名称（可省略）；填写时只在该企业内校验。" })),
   account: Type.String({ minLength: 1, maxLength: 256, description: "登录账号或手机号。" }),
   password: Type.String({ minLength: 1, maxLength: 512, format: "password", writeOnly: true, description: "登录密码；仅通过请求发送，服务端不会回显。" }),
-}, { $id: "AgentLoginRequest", additionalProperties: false, description: "Agent 登录请求；不填 tenant_id 时按 account/enterprise 解析企业，成功后返回受服务端会话控制的 30 天 access token。" });
+}, { $id: "AgentLoginRequest", additionalProperties: false, description: "Agent 登录请求；tenant_id / enterprise 都不填时由 Manager 按账号和密码匹配企业（多个则 409 带候选，再带候选 tenant_id 重试），成功后返回受服务端会话控制的 30 天 access token。" });
 const AgentResetPasswordRequest = Type.Object({
-  tenant_id: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: "已解析的企业租户 UUID；省略时服务端按 account/enterprise 自动解析。" })),
-  enterprise: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: "企业代码或名称；同账号跨企业时用于消歧。" })),
+  tenant_id: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: "企业租户 UUID：登录 403 password_reset_required / password_expired 响应 meta.tenant_id；省略时由 Manager 在旧密码通过后匹配企业。" })),
+  enterprise: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: "企业代码或名称（可省略）。" })),
   account: Type.String({ minLength: 1, maxLength: 256, description: "需要重置密码的负责人账号。" }),
   old_password: Type.String({ minLength: 1, maxLength: 512, format: "password", writeOnly: true, description: "当前密码；仅通过请求发送。" }),
   new_password: Type.String({ minLength: 1, maxLength: 512, format: "password", writeOnly: true, description: "新密码；仅通过请求发送。" }),
@@ -485,8 +481,6 @@ const AuthClaims = Type.Object({
 }, { $id: "AuthClaims", additionalProperties: false, description: "当前登录身份声明；不包含密码或其他凭据。" });
 const AuthResult = Type.Object({ token: Type.String({ minLength: 1, readOnly: true, description: "30 天 access token；对应服务端 auth_session，用于后续 Authorization: Bearer ***" }), claims: Type.Ref("AuthClaims") }, { $id: "AuthResult", additionalProperties: false, description: "登录或密码重置结果。" });
 const AuthResultEnvelope = Type.Object({ data: Type.Ref("AuthResult") }, { $id: "AuthResultEnvelope", description: "认证结果响应。" });
-const TenantResolution = Type.Object({ tenant_id: Type.String({ minLength: 1, description: "解析出的企业租户 ID；仅返回租户标识。" }) }, { $id: "TenantResolution", additionalProperties: false, description: "企业租户解析结果。" });
-const TenantResolutionEnvelope = Type.Object({ data: Type.Ref("TenantResolution") }, { $id: "TenantResolutionEnvelope", description: "租户解析响应。" });
 const PingEnvelope = Type.Object({ data: Type.Object({ pong: Type.Boolean({ description: "固定存活探针结果。" }) }, { additionalProperties: false }) }, { $id: "PingEnvelope" });
 const ClaimsEnvelope = Type.Object({ data: Type.Ref("AuthClaims") }, { $id: "ClaimsEnvelope" });
 const ModelPolicy = Type.Object({
@@ -890,7 +884,7 @@ const ApprovalDecisionRequest = Type.Object({ decision: Type.Union([Type.Literal
 const ProblemSchema = Type.Object({ type: Type.String({ description: "错误类型 URI。" }), title: Type.String({ description: "错误标题。" }), status: Type.Integer({ description: "HTTP 状态码。" }), code: Type.String({ description: "机器可读错误码。" }), detail: Type.String({ description: "人类可读错误说明。" }), instance: Type.String({ description: "错误实例或请求关联 ID。" }), request_id: Type.String({ description: "请求关联 ID。" }), errors: Type.Optional(Type.Array(Type.Object({ loc: Type.Array(Type.Union([Type.String(), Type.Integer()]), { description: "错误字段路径。" }), message: Type.String({ description: "字段错误说明。" }), type: Type.String({ description: "校验错误类型。" }) }, { additionalProperties: false }), { description: "字段级错误。" })), meta: Type.Optional(Type.Record(Type.String({ description: "元数据键。" }), Type.Union([Type.String(), Type.Number(), Type.Boolean(), Type.Null(), Type.Array(Type.Object({ tenant_id: Type.String({ description: "候选企业的租户 ID，可直接作为登录的 tenant_id。" }), enterprise_name: Type.String({ description: "候选企业名称。" }) }, { additionalProperties: false }), { description: "tenant_selection_required 时的候选企业（meta.candidates）。" })]), { description: "非敏感诊断元数据。" })) }, { $id: "Problem", additionalProperties: false, description: "统一 problem+json 错误。" });
 const LOCAL_FILE_DOWNLOAD_CONTENT = Object.fromEntries([...ALLOWED_FILE_MIMES].map((mime) => [mime, { schema: { type: "string", format: "binary", description: `${mime} 文件内容。` } }]));
 const LOCAL_AVATAR_DOWNLOAD_CONTENT = Object.fromEntries(["image/jpeg", "image/png", "image/webp"].map((mime) => [mime, { schema: { type: "string", format: "binary", description: `本机 ${mime} 员工头像内容。` } }]));
-const OPENAPI_SCHEMAS = [ConversationFailureOut, CustomGroupCreateRequest, GroupOrchestration, GroupOrchestrationUpdateRequest, GroupMembersUpdateRequest, GroupMembersUpdateEnvelope,...WORK_RECORD_SCHEMAS, ...CONVERSATION_READ_SCHEMAS, ...CONVERSATION_WORKSPACE_SCHEMAS, ConversationSchedule, ConversationScheduleInput, ResolveTenantRequest, AgentLoginRequest, AgentResetPasswordRequest, ConversationMetadata, ConversationCreateRequest, ConversationUpdateRequest, ConversationStateUpdateRequest, ConversationProjectFolderRequest, ConversationState, ConversationEnvelope, ConversationListEnvelope, ConversationStateOut, ConversationStateEnvelope, ThinkingLevel, ConversationContextOut, ConversationContextEnvelope, ConversationThinkingLevelRequest, ContextResetMemoryReason, ConversationContextResetRequest, ConversationContextResetParticipantOut, ConversationContextResetOut, ConversationContextResetEnvelope, GrantSyncRequest, UsageFlushRequest, ConversationDeleteEnvelope, ConversationContentPart, ConversationMessage, ConversationEntry, ConversationEntriesEnvelope, BoundedJsonValue, PiSseToolCall, PiSseAssistantMessageEvent, PiSseEventData, PiSseReconciliation, AbortEnvelope, AuthClaims, AuthResult, AuthResultEnvelope, TenantResolution, TenantResolutionEnvelope, PingEnvelope, ClaimsEnvelope, ModelPolicy, SkillSigningKeyMetadata, ExpertProjection, SolutionProjection, SnapshotProjection, ExpertListEnvelope, SolutionListEnvelope, LocalCapability, LocalCapabilityListEnvelope, InstallableSkillOut, InstallableSkillListEnvelope, CapabilityAutoInstall, CapabilityAutoInstallListEnvelope, LocalCapabilityDeleteEnvelope, McpLoginOut, McpLoginEnvelope, McpLoginStartEnvelope, McpLoginCancelEnvelope, McpProbeRequest, McpProbeOut, McpProbeEnvelope, McpInstallRequest, McpInstallEnvelope, CatalogMcpOut, CatalogMcpListEnvelope, CatalogMcpInstallRequest, McpTokenRequest, McpTokenEnvelope, SkillInstallRequest, SkillInstallEnvelope, CustomSkillImportRequest, CustomSkillPreviewOut, CustomSkillScanItem, CustomSkillInstallResultItem, CustomSkillClawHubCandidate, CustomSkillClawHubSecurity, CustomSkillClawHubPreview, CustomSkillImportEnvelope, LocalSkillPathEnvelope, SnapshotListEnvelope, ReadinessState, SkillReadiness, CapabilityReadiness, ExpertReadiness, ReadinessEnvelope, ExpertReadinessEnvelope, GrantSyncEnvelope, UsageFlushEnvelope, OrgTreeNode, OrgTreeEnvelope, OrgDepartmentCreateRequest, OrgDepartmentUpdateRequest, OrgDepartmentPromoteRequest, OrgDepartmentEnvelope, OrgDepartmentDeleteEnvelope, OrgAssignmentRequest, OrgAssignmentEnvelope, OfficeSceneEnvelope, OfficeFeedEnvelope, GoneEnvelope, PromptImage, PromptRequest, PromptAccepted, PromptAcceptedEnvelope, LocalFileUpload, AudioTranscriptionRequest, AudioTranscriptionResponse, AudioTranscriptionEnvelope, EmployeeAvatarRequest, EmployeeAvatarResponse, LocalFileMetadata, LocalFileEnvelope, Page, LocalFileListEnvelope, LocalFileDeleteEnvelope, MarketplaceOutputType, MarketplaceTemplate, MarketplaceTemplateEnvelope, MarketplaceTemplateListEnvelope, UsageSummary, UsageOutboxItem, UsageOutboxListEnvelope, ApprovalRecordSchema, ApprovalListEnvelope, ApprovalEnvelope, ApprovalDecisionRequest, ProblemSchema] as const;
+const OPENAPI_SCHEMAS = [ConversationFailureOut, CustomGroupCreateRequest, GroupOrchestration, GroupOrchestrationUpdateRequest, GroupMembersUpdateRequest, GroupMembersUpdateEnvelope,...WORK_RECORD_SCHEMAS, ...CONVERSATION_READ_SCHEMAS, ...CONVERSATION_WORKSPACE_SCHEMAS, ConversationSchedule, ConversationScheduleInput, AgentLoginRequest, AgentResetPasswordRequest, ConversationMetadata, ConversationCreateRequest, ConversationUpdateRequest, ConversationStateUpdateRequest, ConversationProjectFolderRequest, ConversationState, ConversationEnvelope, ConversationListEnvelope, ConversationStateOut, ConversationStateEnvelope, ThinkingLevel, ConversationContextOut, ConversationContextEnvelope, ConversationThinkingLevelRequest, ContextResetMemoryReason, ConversationContextResetRequest, ConversationContextResetParticipantOut, ConversationContextResetOut, ConversationContextResetEnvelope, GrantSyncRequest, UsageFlushRequest, ConversationDeleteEnvelope, ConversationContentPart, ConversationMessage, ConversationEntry, ConversationEntriesEnvelope, BoundedJsonValue, PiSseToolCall, PiSseAssistantMessageEvent, PiSseEventData, PiSseReconciliation, AbortEnvelope, AuthClaims, AuthResult, AuthResultEnvelope, PingEnvelope, ClaimsEnvelope, ModelPolicy, SkillSigningKeyMetadata, ExpertProjection, SolutionProjection, SnapshotProjection, ExpertListEnvelope, SolutionListEnvelope, LocalCapability, LocalCapabilityListEnvelope, InstallableSkillOut, InstallableSkillListEnvelope, CapabilityAutoInstall, CapabilityAutoInstallListEnvelope, LocalCapabilityDeleteEnvelope, McpLoginOut, McpLoginEnvelope, McpLoginStartEnvelope, McpLoginCancelEnvelope, McpProbeRequest, McpProbeOut, McpProbeEnvelope, McpInstallRequest, McpInstallEnvelope, CatalogMcpOut, CatalogMcpListEnvelope, CatalogMcpInstallRequest, McpTokenRequest, McpTokenEnvelope, SkillInstallRequest, SkillInstallEnvelope, CustomSkillImportRequest, CustomSkillPreviewOut, CustomSkillScanItem, CustomSkillInstallResultItem, CustomSkillClawHubCandidate, CustomSkillClawHubSecurity, CustomSkillClawHubPreview, CustomSkillImportEnvelope, LocalSkillPathEnvelope, SnapshotListEnvelope, ReadinessState, SkillReadiness, CapabilityReadiness, ExpertReadiness, ReadinessEnvelope, ExpertReadinessEnvelope, GrantSyncEnvelope, UsageFlushEnvelope, OrgTreeNode, OrgTreeEnvelope, OrgDepartmentCreateRequest, OrgDepartmentUpdateRequest, OrgDepartmentPromoteRequest, OrgDepartmentEnvelope, OrgDepartmentDeleteEnvelope, OrgAssignmentRequest, OrgAssignmentEnvelope, OfficeSceneEnvelope, OfficeFeedEnvelope, GoneEnvelope, PromptImage, PromptRequest, PromptAccepted, PromptAcceptedEnvelope, LocalFileUpload, AudioTranscriptionRequest, AudioTranscriptionResponse, AudioTranscriptionEnvelope, EmployeeAvatarRequest, EmployeeAvatarResponse, LocalFileMetadata, LocalFileEnvelope, Page, LocalFileListEnvelope, LocalFileDeleteEnvelope, MarketplaceOutputType, MarketplaceTemplate, MarketplaceTemplateEnvelope, MarketplaceTemplateListEnvelope, UsageSummary, UsageOutboxItem, UsageOutboxListEnvelope, ApprovalRecordSchema, ApprovalListEnvelope, ApprovalEnvelope, ApprovalDecisionRequest, ProblemSchema] as const;
 
 const GLOBAL_ACTIVITY_STREAM_EXAMPLES = {
   promptStarted: {
@@ -1057,7 +1051,6 @@ const OPENAPI_OPERATION_DOCS: Record<string, OpenApiOperationDocs> = {
   openapi: { responses: { "200": { description: "OpenAPI 3.1 文档对象。", examples: { document: { summary: "文档对象", value: { openapi: "3.1.0", info: { title: "AI Team Agent Service", version: "0.1.0" }, paths: {} } } } } } },
   redoc: { responses: { "200": { description: "ReDoc HTML 页面。", examples: { html: { summary: "HTML", value: "<!doctype html><title>AI Team Agent API</title>" } } } } },
   redocBundle: { responses: { "200": { description: "ReDoc JavaScript 资源。", examples: { javascript: { summary: "JavaScript", value: "(() => {})();" } } } } },
-  resolveTenantByAccount: { request: { account: { summary: "账号", value: { account: "13800000000" } } }, responses: { "200": { description: "仅返回解析出的租户标识。", examples: { resolved: { summary: "租户解析成功", value: { data: { tenant_id: "tenant-1" } } } } } } },
   login: { request: { credentials: { summary: "登录凭据", value: { tenant_id: "tenant-1", account: "13800000000", password: "••••••••" } } }, responses: { "200": { description: "返回受服务端会话控制的 30 天 access token 和身份声明。", examples: { loggedIn: { summary: "登录成功", value: { data: { token: "eyJ...redacted", claims: { user_id: "member-1", tenant_id: "tenant-1", roles: ["member"], exp: 1790000000, jti: "session-1" } } } } } } } },
   resetPassword: { request: { reset: { summary: "密码重置", value: { tenant_id: "tenant-1", account: "13800000000", old_password: "••••••••", new_password: "••••••••" } } }, responses: { "200": { description: "返回重置后新的本地 access token。", examples: { reset: { summary: "重置成功", value: { data: { token: "eyJ...redacted", claims: { user_id: "member-1", tenant_id: "tenant-1", roles: ["owner"], exp: 1790000000 } } } } } } } },
   transcribeAudio: { request: { audio: { summary: "录音文件", value: { filename: "recording.webm", mime_type: "audio/webm", data: "YXVkaW8=" } } }, responses: { "200": { description: "返回 ASR 文本和可选时长。", examples: { transcript: { summary: "转写成功", value: { data: { text: "你好，世界", duration: 1.2 } } } } } } },
@@ -1174,6 +1167,8 @@ const OPENAPI_OPERATION_DOCS: Record<string, OpenApiOperationDocs> = {
   officeFeed: { responses: { "200": { description: "本地会话调度摘要；不包含实时 Pi 事件。", examples: { feed: { summary: "调度动态", value: { data: { events: [{ type: "conversation_schedule", conversation_id: "conversation-1", title: "定时摘要", schedule: EXAMPLE_SCHEDULE }] } } } } } } },
 };
 
+/** 已停用的 resolve-tenant-by-account 固定返回的提示（与 Manager 一致）。 */
+export const CLIENT_UPGRADE_DETAIL = "客户端版本过旧，请升级后登录";
 const problemExample = (summary: string, status: number, code: string, detail: string) => ({
   summary,
   value: { type: "about:blank", title: code, status, code, detail, instance: "req-example", request_id: "req-example" },
@@ -1189,6 +1184,7 @@ const OPENAPI_COMPONENT_RESPONSES = {
   ManagerUnavailable: { description: "Manager 或其受控能力当前不可用；需要登录的接口在 Manager 无法确认会话时也返回此错误，客户端应保持登录、稍后重试。", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" }, examples: { unavailable: problemExample("依赖不可用", 503, "manager_unavailable", "Manager-backed capability is unavailable") } } } },
   BadGateway: { description: "受控上游语音服务返回失败或不可用。", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" }, examples: { upstream: problemExample("上游不可用", 502, "speech_upstream_unavailable", "Speech transcription service is unavailable") } } } },
   InternalError: { description: "Agent 未预期的内部错误；详细信息只写入受控日志。", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" }, examples: { internal: problemExample("内部错误", 500, "internal_error", "Internal server error") } } } },
+  ClientUpgradeRequired: { description: "旧版「凭账号查企业」接口已停用，客户端需要升级。", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" }, examples: { upgrade: problemExample("客户端版本过旧", 410, "client_upgrade_required", CLIENT_UPGRADE_DETAIL) } } } },
   Gone: { description: "该 Agent 接口已移除，请使用文档中指定的替代能力。", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" }, examples: { gone: problemExample("接口已移除", 410, "gone", "Agent knowledge base endpoints were removed; use the Pi knowledge tools") } } } },
   TooManyRequests: { description: "请求频率超过限制。", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" }, examples: { rateLimited: problemExample("请求过多", 429, "rate_limited", "Too many requests") } } } },
 } as const;
@@ -1261,12 +1257,16 @@ export interface AgentHttpServerOptions {
 function managerAuthProblem(error: ManagerAuthError, fallbackCode: string, fallbackDetail: string): HttpProblem {
   const body = error.body && typeof error.body === "object" ? error.body as Record<string, unknown> : undefined;
   const candidates = tenantCandidates(body?.meta);
+  // 「需要改密」响应回传 tenant_id（密码已校验通过），供后续 reset-password 直接定位企业。
+  const rawTenant = body?.meta && typeof body.meta === "object" ? (body.meta as { tenant_id?: unknown }).tenant_id : undefined;
+  const tenantId = typeof rawTenant === "string" && rawTenant.trim() && rawTenant.length <= 200 ? rawTenant : undefined;
+  const meta: ProblemMeta = { ...(candidates ? { candidates } : {}), ...(tenantId ? { tenant_id: tenantId } : {}) };
   return new HttpProblem(
     error.status,
     typeof body?.code === "string" ? body.code : fallbackCode,
     typeof body?.detail === "string" ? body.detail : fallbackDetail,
     body?.errors,
-    candidates ? { candidates } : undefined,
+    Object.keys(meta).length ? meta : undefined,
   );
 }
 
@@ -1301,6 +1301,7 @@ interface DocumentationResponse {
 }
 interface DocumentationOperation {
   operationId?: string;
+  deprecated?: boolean;
   summary?: string;
   description?: string;
   tags?: string[];
@@ -1422,7 +1423,7 @@ export class AgentHttpServer {
       refResolver: { buildLocalReference: (json: any, _baseUri: any, _fragment: string, index: number) => json.$id ?? `def-${index}` },
       transformObject: (documentObject: any) => {
         const openapiObject = documentObject.openapiObject ?? documentObject.swaggerObject;
-        const responseNames = new Set(["BadRequest", "Unauthorized", "Forbidden", "NotFound", "Conflict", "TooLarge", "ValidationError", "ManagerUnavailable", "BadGateway", "InternalError", "Gone", "TooManyRequests"]);
+        const responseNames = new Set(["BadRequest", "Unauthorized", "Forbidden", "NotFound", "Conflict", "TooLarge", "ValidationError", "ManagerUnavailable", "BadGateway", "InternalError", "Gone", "TooManyRequests", "ClientUpgradeRequired"]);
         const parameterDescriptions: Record<string, string> = {
           conversation_id: "本地会话 ID。", attachment_id: "本地附件 ID。", artifact_id: "授权附件 ID。", employee_id: "授权员工/专家 ID。", template_id: "专家模板 ID。",
           directory_id: "本地知识目录稳定 ID。", citation_id: "会话内单轮有效的引用句柄 ID。",
@@ -1477,14 +1478,15 @@ export class AgentHttpServer {
             // Authenticated routes also return 503 when Manager cannot confirm the session.
             if (managerBacked || authenticated) operation.responses["503"] ??= { $ref: "#/components/responses/ManagerUnavailable" };
             else if (!operationId.includes("AutomationTask") && operationId !== "listAgentConnectors") delete operation.responses["503"];
-            if (path === "/api/auth/resolve-tenant-by-account") {
-              operation.responses["404"] ??= { $ref: "#/components/responses/NotFound" };
-              operation.responses["409"] ??= { $ref: "#/components/responses/Conflict" };
-            }
             if (["createConversation", "listConversationEntries", "subscribeConversationEvents", "getConversationState", "setConversationState", "getConversationContext", "updateConversationContext", "setConversationThinkingLevel", "resetConversationContext", "promptConversation"].includes(operationId)) operation.responses["404"] ??= { $ref: "#/components/responses/NotFound" };
             if (operationId === "subscribeConversationEvents") operation.responses["409"] ??= { $ref: "#/components/responses/Conflict" };
             if (operationId === "transcribeAudio") operation.responses["502"] ??= { $ref: "#/components/responses/BadGateway" };
             if (["post", "put", "patch", "delete"].includes(method)) operation.responses["409"] ??= { $ref: "#/components/responses/Conflict" };
+            if (path === "/api/auth/resolve-tenant-by-account") {
+              // 已停用的旧接口：不读请求体、不访问 Manager，业务上只会返回 410；保留全局统一的 422/500 声明。
+              operation.deprecated = true;
+              for (const status of Object.keys(operation.responses)) if (!["410", "422", "500"].includes(status)) delete operation.responses[status];
+            }
             for (const [status, response] of Object.entries(operation.responses)) {
               const responseDocs = operationDocs?.responses?.[status];
               if (responseDocs?.description && response && typeof response === "object" && !response.$ref) response.description = responseDocs.description;
@@ -1558,7 +1560,7 @@ export class AgentHttpServer {
 
   private registerRoutes(): void {
     const jsonResponse = (schema: unknown, description = "Successful response") => ({ description, content: { "application/json": { schema } } });
-    const problemResponse = (name: "BadRequest" | "Unauthorized" | "Forbidden" | "NotFound" | "Conflict" | "TooLarge" | "ValidationError" | "ManagerUnavailable" | "BadGateway" | "InternalError" | "Gone" | "TooManyRequests") => ({ description: name, content: { "application/problem+json": { schema: Type.Ref("Problem") } } });
+    const problemResponse = (name: "BadRequest" | "Unauthorized" | "Forbidden" | "NotFound" | "Conflict" | "TooLarge" | "ValidationError" | "ManagerUnavailable" | "BadGateway" | "InternalError" | "Gone" | "TooManyRequests" | "ClientUpgradeRequired") => ({ description: name, content: { "application/problem+json": { schema: Type.Ref("Problem") } } });
     this.registerRoute("GET", "/healthz", (_request, response) => this.writeJson(response, 200, { data: { status: "ok" } }), routeSchema("healthz", { summary: "Agent 存活检查", description: "检查 Agent 进程是否存活。", response: { 200: jsonResponse(Type.Object({ data: Type.Object({ status: Type.String({ description: "服务状态。" }) }, { additionalProperties: false }) }, { additionalProperties: false })) } }), false);
     this.registerRoute("GET", "/metrics", (_request, response) => this.writeMetrics(response), routeSchema("metrics", { summary: "导出 Agent 指标", description: "返回 Prometheus 文本格式的本地 Agent 指标。", response: { 200: { description: "Prometheus metrics", content: { "text/plain": { schema: Type.String({ description: "Prometheus 指标文本。" }) } } } } }), false);
     this.registerRoute("GET", "/readyz", async (_request, response) => {
@@ -1596,7 +1598,7 @@ export class AgentHttpServer {
     this.registerRoute("GET", "/redoc", (_request, response) => this.writeHtml(response, redocHtml("/openapi.json")), routeSchema("redoc", { summary: "查看 Agent ReDoc", description: "使用 ReDoc 渲染当前 Agent OpenAPI 文档。", response: { 200: { description: "ReDoc HTML 页面。", content: { "text/html": { schema: Type.String({ description: "ReDoc HTML 文本。" }) } } } } }), false);
     this.registerRoute("GET", "/redoc/redoc.standalone.js", (_request, response) => this.writeText(response, 200, REDOC_BUNDLE, "text/javascript; charset=utf-8"), routeSchema("redocBundle", { summary: "获取 ReDoc 静态资源", description: "返回 ReDoc JavaScript 资源。", response: { 200: { description: "ReDoc JavaScript 资源。", content: { "text/javascript": { schema: Type.String({ description: "JavaScript 文本。" }) } } } } }), false);
 
-    this.registerRoute("POST", "/api/auth/resolve-tenant-by-account", (request, response) => this.resolveTenantByAccount(request, response), routeSchema("resolveTenantByAccount", { summary: "解析员工账号所属企业", description: "在登录前根据员工账号解析唯一企业租户。", body: Type.Ref("ResolveTenantRequest"), response: { 200: jsonResponse(Type.Ref("TenantResolutionEnvelope"), "租户解析成功；仅返回 tenant_id。"), 400: problemResponse("BadRequest"), 404: problemResponse("NotFound"), 409: problemResponse("Conflict") } }), false);
+    this.registerRoute("POST", "/api/auth/resolve-tenant-by-account", () => this.resolveTenantByAccount(), routeSchema("resolveTenantByAccount", { summary: "已停用：解析员工账号所属企业（固定 410）", description: "旧版客户端「凭账号查企业」入口已停用：不读请求体、不访问 Manager，不论账号是否存在都返回 410 client_upgrade_required。新版客户端直接调用 /api/agent/login，未填企业时由 Manager 按账号和密码匹配企业。", response: { 410: problemResponse("ClientUpgradeRequired") } }), false);
     this.registerRoute("POST", "/api/agent/login", (request, response) => this.login(request, response), routeSchema("login", { summary: "Agent 登录", description: "使用 Manager 返回的企业租户、账号和密码建立本地会话。", body: Type.Ref("AgentLoginRequest"), response: { 200: jsonResponse(Type.Ref("AuthResultEnvelope")) } }), false);
     this.registerRoute("POST", "/api/agent/reset-password", (request, response) => this.resetPassword(request, response), routeSchema("resetPassword", { summary: "重置负责人密码", description: "使用当前凭据向 Manager 请求重置密码。", body: Type.Ref("AgentResetPasswordRequest"), response: { 200: jsonResponse(Type.Ref("AuthResultEnvelope")) } }), false);
     this.registerRoute("POST", "/api/agent/logout", async (_request, response, caller) => {
@@ -1960,26 +1962,20 @@ export class AgentHttpServer {
     return error instanceof Error ? error : new Error("Unexpected HTTP error");
   }
 
-  private async resolveTenantByAccount(request: IncomingMessage, response: ServerResponse): Promise<void> {
-    if (!this.options.managerClient?.resolveTenantByAccount) throw new HttpProblem(503, "manager_unavailable", "Manager tenant resolution is not configured");
-    const body = await this.readJson(request);
-    const account = this.stringField(body.account, "account", 256);
-    const enterprise = typeof body.enterprise === "string" && body.enterprise.trim() ? this.stringField(body.enterprise, "enterprise", 200) : undefined;
-    try {
-      const payload = await this.options.managerClient.resolveTenantByAccount(account, enterprise);
-      const tenantId = payload && typeof payload === "object" ? (payload as { data?: { tenant_id?: unknown } }).data?.tenant_id : undefined;
-      if (typeof tenantId !== "string" || !tenantId.trim()) throw new ManagerUnavailableError("Manager returned an invalid tenant resolution");
-      this.writeJson(response, 200, payload);
-    } catch (error) {
-      if (error instanceof ManagerAuthError) throw managerAuthProblem(error, "tenant_resolution_failed", "Manager tenant resolution failed");
-      if (error instanceof ManagerUnavailableError) throw new HttpProblem(503, "manager_unavailable", "Manager tenant resolution is unavailable");
-      throw error;
-    }
+  /** 旧「凭账号查企业」接口已停用：固定 410，响应与账号是否存在无关。 */
+  private resolveTenantByAccount(): never {
+    throw new HttpProblem(410, "client_upgrade_required", CLIENT_UPGRADE_DETAIL);
   }
 
-  private async validateAuthTenant(payload: unknown, expected: string): Promise<void> {
+  /**
+   * 校验 Manager 签发的身份属于预期企业。未指定企业（由 Manager 按账号和密码匹配）时，
+   * 预期企业就是 Manager 返回的 claims.tenant_id，但必须是非空字符串。
+   */
+  private async validateAuthTenant(payload: unknown, requested: string | undefined): Promise<void> {
     const data = payload && typeof payload === "object" ? (payload as { data?: { claims?: { tenant_id?: unknown } } }).data : undefined;
-    if (!expected.trim() || data?.claims?.tenant_id !== expected) throw new ManagerUnavailableError("Manager returned an invalid Agent tenant identity");
+    const returned = data?.claims?.tenant_id;
+    const expected = requested ?? (typeof returned === "string" ? returned : "");
+    if (!data || !expected.trim() || returned !== expected) throw new ManagerUnavailableError("Manager returned an invalid Agent tenant identity");
     if (this.options.verifyLoginToken) {
       try {
         const token = (data as { token?: unknown }).token;
@@ -1997,21 +1993,14 @@ export class AgentHttpServer {
     }
   }
 
-  /** 公开认证端点的企业解析：显式 tenant_id 优先；否则按 account/enterprise 让 Manager 解析。 */
-  private async resolveAuthTenant(tenantId: string | null, account: string, enterprise: string | null): Promise<string> {
-    const explicit = tenantId?.trim();
-    if (explicit) return explicit;
-    if (!this.options.managerClient?.resolveTenantByAccount) throw new HttpProblem(503, "manager_unavailable", "Manager tenant resolution is not configured");
-    try {
-      const payload = await this.options.managerClient.resolveTenantByAccount(account, enterprise ?? undefined);
-      const resolved = payload && typeof payload === "object" ? (payload as { data?: { tenant_id?: unknown } }).data?.tenant_id : undefined;
-      if (typeof resolved !== "string" || !resolved.trim()) throw new ManagerUnavailableError("Manager returned an invalid tenant resolution");
-      return resolved;
-    } catch (error) {
-      if (error instanceof ManagerAuthError) throw managerAuthProblem(error, "tenant_resolution_failed", "Manager tenant resolution failed");
-      if (error instanceof ManagerUnavailableError) throw new HttpProblem(503, "manager_unavailable", "Manager tenant resolution is unavailable");
-      throw error;
-    }
+  /**
+   * 公开认证端点的企业参数：原样转交 Manager，不再先「凭账号查企业」。
+   * 都不给时由 Manager 按账号和（旧）密码匹配企业——只有密码通过的企业才会出现在 409 候选里。
+   */
+  private authTenantFields(body: Record<string, unknown>): { tenant_id?: string; enterprise?: string } {
+    const tenantId = this.optionalString(body.tenant_id, "tenant_id")?.trim();
+    const enterprise = this.optionalString(body.enterprise, "enterprise")?.trim();
+    return { ...(tenantId ? { tenant_id: tenantId } : {}), ...(enterprise ? { enterprise } : {}) };
   }
 
   private async login(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -2019,10 +2008,10 @@ export class AgentHttpServer {
     const body = await this.readJson(request);
     const account = this.stringField(body.account, "account", 256);
     const password = this.stringField(body.password, "password", 512);
-    const tenantId = await this.resolveAuthTenant(this.optionalString(body.tenant_id, "tenant_id"), account, this.optionalString(body.enterprise, "enterprise"));
+    const tenant = this.authTenantFields(body);
     try {
-      const payload = await this.options.managerClient.login({ tenant_id: tenantId, account, password });
-      await this.validateAuthTenant(payload, tenantId);
+      const payload = await this.options.managerClient.login({ ...tenant, account, password });
+      await this.validateAuthTenant(payload, tenant.tenant_id);
       this.writeJson(response, 200, payload);
     } catch (error) {
       if (error instanceof ManagerAuthError) throw managerAuthProblem(error, "authentication_failed", "Manager authentication failed");
@@ -2036,7 +2025,7 @@ export class AgentHttpServer {
     const body = await this.readJson(request);
     const account = this.stringField(body.account, "account", 256);
     const input = {
-      tenant_id: await this.resolveAuthTenant(this.optionalString(body.tenant_id, "tenant_id"), account, this.optionalString(body.enterprise, "enterprise")),
+      ...this.authTenantFields(body),
       account,
       old_password: this.stringField(body.old_password, "old_password", 512),
       new_password: this.stringField(body.new_password, "new_password", 512),

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { readFileSync } from 'node:fs'
-import { describeLoginApiFailure, tenantSelectionCandidates } from '../src/lib/loginFailure.ts'
+import { describeLoginApiFailure, tenantCandidateLabel, tenantSelectionCandidates } from '../src/lib/loginFailure.ts'
 
 const problem = (status: number, code: string, detail = '', meta?: unknown) => ({ status, code, message: detail, problem: { code, detail, meta } })
 
@@ -29,7 +29,12 @@ test('503 沿用企业服务不可用提示；其余 4xx 透传 detail；只有 
   assert.equal(describeLoginApiFailure(problem(500, 'internal_error'), false), '后端服务异常,请稍后重试')
 })
 
-test('tenant_selection_required 解析候选企业，过滤无效项', () => {
+test('410 client_upgrade_required 提示升级客户端', () => {
+  assert.equal(describeLoginApiFailure(problem(410, 'client_upgrade_required', '客户端版本过旧，请升级后登录'), false), '客户端版本过旧，请升级后登录')
+  assert.equal(describeLoginApiFailure(problem(410, 'client_upgrade_required'), false), '客户端版本过旧，请升级后登录')
+})
+
+test('tenant_selection_required 解析候选企业，过滤无效项，名称为空时展示企业标识', () => {
   const err = problem(409, 'tenant_selection_required', 'multi', {
     candidates: [
       { tenant_id: 't-a', enterprise_name: '甲企业' },
@@ -38,18 +43,22 @@ test('tenant_selection_required 解析候选企业，过滤无效项', () => {
       'junk',
     ],
   })
-  assert.deepEqual(tenantSelectionCandidates(err), [{ tenant_id: 't-a', enterprise_name: '甲企业' }])
+  const candidates = tenantSelectionCandidates(err)
+  assert.deepEqual(candidates, [{ tenant_id: 't-a', enterprise_name: '甲企业' }, { tenant_id: 't-c', enterprise_name: '' }])
+  assert.deepEqual(candidates.map(tenantCandidateLabel), ['甲企业', 't-c'])
   assert.deepEqual(tenantSelectionCandidates(problem(409, 'tenant_selection_required', 'multi')), [])
   assert.deepEqual(tenantSelectionCandidates(problem(409, 'enterprise_ambiguous', 'x', { candidates: [{ tenant_id: 't', enterprise_name: 'n' }] })), [])
 })
 
-test('登录页在多企业时弹出企业选择，选中后用企业名重新登录', () => {
+test('登录页在多企业时弹出企业选择，选中后按 tenant_id 重新登录，不把名称写回企业标识', () => {
   const source = readFileSync(new URL('../src/pages/Login/index.tsx', import.meta.url), 'utf8')
   assert.match(source, /tenantSelectionCandidates\(err\)/)
   assert.match(source, /<TenantPickerDialog/)
   const pick = source.slice(source.indexOf('const handlePickTenant'), source.indexOf('const handleCancelTenantPick'))
-  assert.match(pick, /setEnterprise\(candidate\.enterprise_name\)/)
-  assert.match(pick, /runLogin\(\{ \.\.\.pending\.input, enterprise: candidate\.enterprise_name \}\)/)
+  assert.match(pick, /runLogin\(\{ \.\.\.pending\.input, tenantId: candidate\.tenant_id \}\)/)
+  assert.doesNotMatch(pick, /setEnterprise|enterprise_name/)
+  const dialog = readFileSync(new URL('../src/pages/Login/TenantPickerDialog.tsx', import.meta.url), 'utf8')
+  assert.match(dialog, /tenantCandidateLabel\(candidate\)/)
 })
 
 test('企业选择弹窗：头部 / 可滚动列表 / 底部固定三段，列表可滚动', () => {

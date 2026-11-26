@@ -290,8 +290,13 @@ def test_control_plane_openapi_documents_known_bounds(tier: str) -> None:
         reset = spec["paths"]["/api/auth/owner-reset"]["post"]
         resolve = spec["paths"]["/api/auth/resolve-tenant"]["post"]
         resolve_account = spec["paths"]["/api/auth/resolve-tenant-by-account"]["post"]
-        for operation in (login, reset, resolve, resolve_account):
+        for operation in (login, reset, resolve):
             assert operation["responses"]["409"]["$ref"] == "#/components/responses/AuthConflict"
+        # 已停用的「凭账号查企业」接口只文档化 410，不再有成功 / 404 / 409 响应。
+        assert resolve_account.get("deprecated") is True
+        assert resolve_account["responses"]["410"]["$ref"] == "#/components/responses/ClientUpgradeRequired"
+        assert not {"200", "404", "409"} & set(resolve_account["responses"])
+        assert "requestBody" not in resolve_account
         assert login["responses"]["404"]["$ref"] == "#/components/responses/NotFound"
         assert reset["responses"]["404"]["$ref"] == "#/components/responses/NotFound"
         auth_conflict = spec["components"]["responses"]["AuthConflict"]

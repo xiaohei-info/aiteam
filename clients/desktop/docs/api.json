@@ -370,6 +370,35 @@
             "$ref": "#/components/headers/RequestId"
           }
         }
+      },
+      "ClientUpgradeRequired": {
+        "description": "旧版「凭账号查企业」接口已停用，客户端需要升级。",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            },
+            "examples": {
+              "upgrade": {
+                "summary": "客户端版本过旧",
+                "value": {
+                  "type": "about:blank",
+                  "title": "client_upgrade_required",
+                  "status": 410,
+                  "code": "client_upgrade_required",
+                  "detail": "客户端版本过旧，请升级后登录",
+                  "instance": "req-example",
+                  "request_id": "req-example"
+                }
+              }
+            }
+          }
+        },
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/RequestId"
+          }
+        }
       }
     },
     "schemas": {
@@ -2302,28 +2331,6 @@
         ],
         "description": "创建或更新调度配置；一次性和重复调度使用不同字段组合。"
       },
-      "ResolveTenantRequest": {
-        "type": "object",
-        "required": [
-          "account"
-        ],
-        "properties": {
-          "account": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 256,
-            "description": "员工手机号或账号。"
-          },
-          "enterprise": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200,
-            "description": "账号跨企业时用于消歧的企业代码或名称。"
-          }
-        },
-        "additionalProperties": false,
-        "description": "员工账号企业解析请求。"
-      },
       "AgentLoginRequest": {
         "type": "object",
         "required": [
@@ -2335,13 +2342,13 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 200,
-            "description": "已解析的企业租户 UUID；省略时服务端按 account/enterprise 自动解析。"
+            "description": "企业租户 UUID：409 tenant_selection_required 的 meta.candidates 中选定的企业；省略时由 Manager 按账号和密码匹配企业。"
           },
           "enterprise": {
             "type": "string",
             "minLength": 1,
             "maxLength": 200,
-            "description": "企业代码或名称；同账号跨企业时用于消歧。"
+            "description": "企业代码或名称（可省略）；填写时只在该企业内校验。"
           },
           "account": {
             "type": "string",
@@ -2359,7 +2366,7 @@
           }
         },
         "additionalProperties": false,
-        "description": "Agent 登录请求；不填 tenant_id 时按 account/enterprise 解析企业，成功后返回本地短期 access token。"
+        "description": "Agent 登录请求；tenant_id / enterprise 都不填时由 Manager 按账号和密码匹配企业（多个则 409 带候选，再带候选 tenant_id 重试），成功后返回受服务端会话控制的 30 天 access token。"
       },
       "AgentResetPasswordRequest": {
         "type": "object",
@@ -2373,13 +2380,13 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 200,
-            "description": "已解析的企业租户 UUID；省略时服务端按 account/enterprise 自动解析。"
+            "description": "企业租户 UUID：登录 403 password_reset_required / password_expired 响应 meta.tenant_id；省略时由 Manager 在旧密码通过后匹配企业。"
           },
           "enterprise": {
             "type": "string",
             "minLength": 1,
             "maxLength": 200,
-            "description": "企业代码或名称；同账号跨企业时用于消歧。"
+            "description": "企业代码或名称（可省略）。"
           },
           "account": {
             "type": "string",
@@ -4544,33 +4551,6 @@
           }
         },
         "description": "认证结果响应。"
-      },
-      "TenantResolution": {
-        "type": "object",
-        "required": [
-          "tenant_id"
-        ],
-        "properties": {
-          "tenant_id": {
-            "type": "string",
-            "minLength": 1,
-            "description": "解析出的企业租户 ID；仅返回租户标识。"
-          }
-        },
-        "additionalProperties": false,
-        "description": "企业租户解析结果。"
-      },
-      "TenantResolutionEnvelope": {
-        "type": "object",
-        "required": [
-          "data"
-        ],
-        "properties": {
-          "data": {
-            "$ref": "#/components/schemas/TenantResolution"
-          }
-        },
-        "description": "租户解析响应。"
       },
       "PingEnvelope": {
         "type": "object",
@@ -9884,44 +9864,16 @@
     "/api/auth/resolve-tenant-by-account": {
       "post": {
         "operationId": "resolveTenantByAccount",
-        "summary": "解析员工账号所属企业",
-        "description": "在登录前根据员工账号解析唯一企业租户。",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ResolveTenantRequest"
-              },
-              "examples": {
-                "account": {
-                  "summary": "账号",
-                  "value": {
-                    "account": "13800000000"
-                  }
-                }
-              }
-            }
-          }
-        },
+        "summary": "已停用：解析员工账号所属企业（固定 410）",
+        "description": "旧版客户端「凭账号查企业」入口已停用：不读请求体、不访问 Manager，不论账号是否存在都返回 410 client_upgrade_required。新版客户端直接调用 /api/agent/login，未填企业时由 Manager 按账号和密码匹配企业。",
         "security": [],
         "responses": {
-          "200": {
-            "description": "仅返回解析出的租户标识。",
+          "410": {
+            "description": "ClientUpgradeRequired",
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/TenantResolutionEnvelope"
-                },
-                "examples": {
-                  "resolved": {
-                    "summary": "租户解析成功",
-                    "value": {
-                      "data": {
-                        "tenant_id": "tenant-1"
-                      }
-                    }
-                  }
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             },
@@ -9930,35 +9882,12 @@
                 "$ref": "#/components/headers/RequestId"
               }
             }
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          },
-          "422": {
-            "$ref": "#/components/responses/ValidationError"
-          },
-          "500": {
-            "$ref": "#/components/responses/InternalError"
-          },
-          "503": {
-            "$ref": "#/components/responses/ManagerUnavailable"
           }
         },
         "tags": [
           "auth"
-        ]
+        ],
+        "deprecated": true
       }
     },
     "/api/agent/login": {

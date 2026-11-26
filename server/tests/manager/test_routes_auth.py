@@ -170,31 +170,6 @@ def test_resolve_tenant_enterprise_ambiguous_409():
     assert r.json()["code"] == "enterprise_ambiguous"
 
 
-def test_resolve_tenant_by_account_selection_required_409():
-    fake = _fake_auth_svc()
-    fake.resolve_tenant_by_account.side_effect = TenantSelectionRequired(
-        "account belongs to multiple tenants, enterprise must be specified: 13800138000"
-    )
-    with patch("manager_service.routes_auth.build_auth_service", return_value=fake):
-        c = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin")
-        r = c.post("/api/auth/resolve-tenant-by-account", json={"account": "13800138000"})
-    assert r.status_code == 409
-    assert r.json()["code"] == "tenant_selection_required"
-
-
-
-def test_resolve_tenant_by_account_selection_required_carries_candidates():
-    candidates = [{"tenant_id": "t-a", "enterprise_name": "甲"}, {"tenant_id": "t-b", "enterprise_name": "乙"}]
-    fake = _fake_auth_svc()
-    fake.resolve_tenant_by_account.side_effect = TenantSelectionRequired("multiple", candidates=candidates)
-    with patch("manager_service.routes_auth.build_auth_service", return_value=fake):
-        c = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin")
-        r = c.post("/api/auth/resolve-tenant-by-account", json={"account": "13800138000"})
-    assert r.status_code == 409
-    assert r.headers["content-type"].startswith("application/problem+json")
-    assert r.json()["meta"] == {"candidates": candidates}
-
-
 def test_owner_reset_enterprise_ambiguous_409():
     fake = _fake_auth_svc()
     fake.owner_reset.side_effect = EnterpriseAmbiguous("enterprise identifier is ambiguous: acme")
@@ -208,19 +183,6 @@ def test_owner_reset_enterprise_ambiguous_409():
     assert r.headers["content-type"].startswith("application/problem+json")
     assert r.json()["code"] == "enterprise_ambiguous"
     assert "Pw1!" not in str(r.json()) and "NewPw2!" not in str(r.json())
-
-
-def test_resolve_tenant_by_account_passes_enterprise_for_disambiguation():
-    fake = _fake_auth_svc()
-    fake.resolve_tenant_by_account.return_value = "t-resolved"
-    with patch("manager_service.routes_auth.build_auth_service", return_value=fake):
-        c = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin")
-        r = c.post("/api/auth/resolve-tenant-by-account", json={
-            "account": "13800138000", "enterprise": "acme",
-        })
-    assert r.status_code == 200
-    assert r.json()["data"]["tenant_id"] == "t-resolved"
-    fake.resolve_tenant_by_account.assert_called_once_with("13800138000", "acme")
 
 
 def test_login_happy_cache_hit():
@@ -260,27 +222,37 @@ def test_jwks_happy():
         assert "keys" in r.json()
 
 
-def test_resolve_tenant_by_account_happy():
-    """新端点：员工账号 → tenant_id，穿透 envelope。"""
+def test_login_selection_required_carries_password_matched_candidates():
+    """未填企业：多个企业密码通过 → 409 problem+json，meta.candidates 原样透出（tenant_id + 企业名）。"""
+    candidates = [{"tenant_id": "t-a", "enterprise_name": "甲"}, {"tenant_id": "t-b", "enterprise_name": "乙"}]
     fake = _fake_auth_svc()
-    fake.resolve_tenant_by_account.return_value = "t-resolved"
+    fake.login.side_effect = TenantSelectionRequired("multiple", candidates=candidates)
     with patch("manager_service.routes_auth.build_auth_service", return_value=fake):
         c = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin")
-        r = c.post("/api/auth/resolve-tenant-by-account", json={"account": "13800138000"})
-        assert r.status_code == 200
-        assert r.json()["data"]["tenant_id"] == "t-resolved"
-        fake.resolve_tenant_by_account.assert_called_once_with("13800138000", None)
+        r = c.post("/api/auth/login", json={"account": "13800138000", "password": "Pw1!"})
+    assert r.status_code == 409
+    assert r.headers["content-type"].startswith("application/problem+json")
+    assert r.json()["code"] == "tenant_selection_required"
+    assert r.json()["meta"] == {"candidates": candidates}
+    assert "Pw1!" not in str(r.json())
 
 
-def test_resolve_tenant_by_account_no_db_503():
-    """DB 缺 → 503（不静默放行）。"""
-    c = _client(None, admin_db_url=None)
-    r = c.post("/api/auth/resolve-tenant-by-account", json={"account": "13800138000"})
-    assert r.status_code == 503
-
-
-def test_resolve_tenant_by_account_422_missing_account():
-    """account 缺 → 422（body 校验失败），不回显其他字段。"""
-    c = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin")
-    r = c.post("/api/auth/resolve-tenant-by-account", json={})
-    assert r.status_code == 422
+@pytest.mark.parametrize("body", [
+    {"account": "13800138000"},
+    {"account": "19900000000", "enterprise": "acme"},
+    {},
+])
+@pytest.mark.parametrize("db", [("postgresql://fake/fake", "postgresql://admin/admin"), (None, None)])
+def test_resolve_tenant_by_account_is_retired_with_410(body, db):
+    """旧接口已停用：不论账号是否存在、请求体是否合法、是否配库，都返回同一个 410，且不查询账号。"""
+    fake = _fake_auth_svc()
+    with patch("manager_service.routes_auth.build_auth_service", return_value=fake) as build:
+        c = _client(db[0], admin_db_url=db[1])
+        r = c.post("/api/auth/resolve-tenant-by-account", json=body)
+    assert r.status_code == 410
+    assert r.headers["content-type"].startswith("application/problem+json")
+    payload = r.json()
+    assert payload["code"] == "client_upgrade_required"
+    assert payload["detail"] == "客户端版本过旧，请升级后登录"
+    assert "meta" not in payload or payload["meta"] is None
+    build.assert_not_called()

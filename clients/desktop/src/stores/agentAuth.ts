@@ -18,6 +18,7 @@ import type { AuthClaims } from '../api/agent/types'
 import {
   invalidateSecureCredential,
   isPasswordResetRequired,
+  passwordResetTenantId,
   persistVerifiedCredential,
   readCredentialWithRetry,
   resolveAuthenticatedTenantId,
@@ -66,7 +67,8 @@ interface AgentAuthState {
   runPendingAutoLogin: () => Promise<void>
   // 企业代码或名称通过 enterprise 登录；留空时按账号解析内部租户。
   // 失败会抛 AgentApiError 交给 UI 层判断。
-  login: (enterprise: string, account: string, password: string) => Promise<AgentLoginOutcome>
+  // tenantId：409 tenant_selection_required 候选中选定的企业；给出时忽略 enterprise。
+  login: (enterprise: string, account: string, password: string, tenantId?: string) => Promise<AgentLoginOutcome>
   resetPassword: (oldPassword: string, newPassword: string) => Promise<void>
   cancelPasswordReset: () => void
   setSession: (session: PersistedSession, generation?: number) => Promise<void>
@@ -343,9 +345,9 @@ export const useAgentAuthStore = create<AgentAuthState>((set, get) => ({
     return pendingAutoLogin
   },
 
-  login: async (inputEnterprise, account, password) => {
+  login: async (inputEnterprise, account, password, pickedTenantId) => {
     // Re-authentication can select another tenant. Remove the current token
-    // before tenant lookup/login so it is neither sent nor left in the keychain.
+    // before login so it is neither sent nor left in the keychain.
     const generation = beginSessionOperation()
     clearRuntimeSession(set)
     await enqueueStorage(async () => {
@@ -353,12 +355,13 @@ export const useAgentAuthStore = create<AgentAuthState>((set, get) => ({
     })
     if (!isCurrentSession(generation)) return 'authenticated'
     set({ pendingPasswordReset: null, restoreError: null })
-    const enterprise = inputEnterprise.trim()
-    const identity: EnterpriseIdentity = enterprise
-      ? { enterprise }
-      : { tenant_id: (await backendApi.resolveTenantByAccount({ account })).tenant_id }
-    if (!isCurrentSession(generation)) return 'authenticated'
-    if (identity.tenant_id !== undefined) resolveAuthenticatedTenantId(identity.tenant_id, identity.tenant_id)
+    const tenantChoice = pickedTenantId?.trim() ?? ''
+    const enterprise = tenantChoice ? '' : inputEnterprise.trim()
+    // 不再预先查企业：未填企业标识时直接登录，由企业服务按账号和密码匹配企业
+    // （多个匹配时 409 带候选，页面选定后带 tenant_id 再调用本方法）。
+    const identity: EnterpriseIdentity = tenantChoice
+      ? { tenant_id: tenantChoice }
+      : enterprise ? { enterprise } : {}
     let result
     try {
       result = await backendApi.login({
@@ -369,7 +372,10 @@ export const useAgentAuthStore = create<AgentAuthState>((set, get) => ({
     } catch (error) {
       if (!isCurrentSession(generation)) return 'authenticated'
       if (isPasswordResetRequired(error)) {
-        set({ pendingPasswordReset: { ...identity, account } })
+        // 改密沿用登录定位到的企业：企业服务在 403 meta.tenant_id 回传密码匹配到的企业；
+        // 没回传时保留本次登录的企业标识（都没有则改密时凭旧密码再匹配）。
+        const resetTenantId = passwordResetTenantId(error)
+        set({ pendingPasswordReset: resetTenantId ? { tenant_id: resetTenantId, account } : { ...identity, account } })
         return 'password_reset_required'
       }
       throw error
@@ -394,8 +400,10 @@ export const useAgentAuthStore = create<AgentAuthState>((set, get) => ({
     if (!pending) throw new Error('password reset was not requested by the authentication server')
 
     const generation = beginSessionOperation()
+    // 沿用登录时定位到的企业（tenant_id / 企业标识）；都没有时由企业服务凭旧密码匹配企业。
+    const { account: _account, ...identity } = pending
     const result = await backendApi.resetPassword({
-      ...(pending.enterprise !== undefined ? { enterprise: pending.enterprise } : { tenant_id: pending.tenant_id }),
+      ...(identity as EnterpriseIdentity),
       account: pending.account,
       old_password: oldPassword,
       new_password: newPassword,
