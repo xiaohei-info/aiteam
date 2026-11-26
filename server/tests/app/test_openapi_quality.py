@@ -229,7 +229,7 @@ def test_control_plane_openapi_documents_known_bounds(tier: str) -> None:
         auth_forbidden = spec["components"]["responses"]["AuthForbidden"]
         auth_examples = auth_forbidden["content"]["application/problem+json"]["examples"]
         assert {example["value"]["code"] for example in auth_examples.values()} == {
-            "password_reset_required", "password_expired", "principal_inactive",
+            "password_reset_required", "password_expired", "principal_inactive", "no_active_enterprise",
         }
         for operation_id in ("manager_employee_knowledge_bind", "manager_employee_knowledge_bind_patch"):
             operation = next(operation for _path, _method, operation in _operations(spec) if operation.get("operationId") == operation_id)
