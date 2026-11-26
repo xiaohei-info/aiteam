@@ -446,8 +446,13 @@ class CatalogService:
             changes = dict(changes)
             avatar = self._prepare_avatar(changes.pop("avatar_url"))
             current = entry.payload or {}
-            avatar_touched = isinstance(avatar, AvatarFile) or avatar is None
-            if avatar is None and avatar_version(current):
+            has_file_avatar = avatar_version(current) is not None
+            # 空值只有在确实存在文件态头像时才算「删除」。还没转换的旧模板只有 payload 里的内联
+            # avatar_url，详情接口根本返回不了它（avatar_url_for 没有版本就返回空串），所以保存
+            # 表单带回来的空串是「我没动头像」，不是「删掉它」——当成删除会把唯一的旧图抹掉，
+            # 且转换脚本之后再也找不到它。
+            avatar_touched = isinstance(avatar, AvatarFile) or (avatar is None and has_file_avatar)
+            if avatar is None and has_file_avatar:
                 changes.update(avatar_version=None, avatar_sha256=None)
                 avatar_delete = True
             elif isinstance(avatar, AvatarFile) and avatar.sha256 != current.get("avatar_sha256"):

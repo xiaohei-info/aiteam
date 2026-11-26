@@ -922,12 +922,38 @@ def test_upload_clears_legacy_inline_avatar_url_from_payload(service, tmp_path):
 
 
 def test_delete_avatar_also_clears_legacy_inline_avatar_url(service):
+    """真的删文件态头像时，残留的内联 avatar_url 要一并清掉，否则转换脚本会把旧图写回来。"""
     service.register_expert_template(_expert())
     repo = service._repo
-    legacy = repo.get(CatalogType.EXPERT_TEMPLATE, "tpl-cmo")
-    repo.update(legacy, payload={**legacy.payload, "avatar_url": _image_data_url()})
+    service.update_entry(CatalogType.EXPERT_TEMPLATE, "tpl-cmo", {"avatar_url": _image_data_url(color=(250, 2, 3))})
+    uploaded = repo.get(CatalogType.EXPERT_TEMPLATE, "tpl-cmo")
+    assert uploaded.payload["avatar_version"] == 1
+    repo.update(uploaded, payload={**uploaded.payload, "avatar_url": _image_data_url()})
 
     cleared = service.update_entry(CatalogType.EXPERT_TEMPLATE, "tpl-cmo", {"avatar_url": ""})
 
     assert cleared.avatar_url == "" and cleared.avatar_version is None
     assert "avatar_url" not in repo.get(CatalogType.EXPERT_TEMPLATE, "tpl-cmo").payload
+
+
+def test_editing_an_unconverted_template_keeps_its_legacy_avatar_convertible(service, tmp_path):
+    """还没转换的模板只改名字保存（表单会带回空头像），旧内联头像不能丢，之后脚本还能转换。"""
+    service.register_expert_template(_expert())
+    repo = service._repo
+    legacy = repo.get(CatalogType.EXPERT_TEMPLATE, "tpl-cmo")
+    data_url = _image_data_url()
+    repo.update(legacy, payload={**legacy.payload, "avatar_url": data_url})
+
+    saved = service.update_entry(
+        CatalogType.EXPERT_TEMPLATE, "tpl-cmo", {"display_name": "市场总监（改名）", "avatar_url": ""}
+    )
+
+    assert saved.display_name == "市场总监（改名）"
+    stored = repo.get(CatalogType.EXPERT_TEMPLATE, "tpl-cmo")
+    assert stored.payload["avatar_url"] == data_url, "只改名不应该把唯一的旧头像删掉"
+    assert "avatar_version" not in stored.payload
+
+    report = convert(repo, TemplateAvatarStore(tmp_path))
+    assert report["converted"] == ["tpl-cmo"] and report["failed"] == []
+    data, version, _ = service.read_template_avatar("tpl-cmo")
+    assert version == 1 and data == (tmp_path / "template-avatars" / "tpl-cmo.webp").read_bytes()
