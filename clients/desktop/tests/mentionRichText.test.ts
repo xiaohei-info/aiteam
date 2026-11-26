@@ -66,7 +66,7 @@ test('contentEditable 绑定了 onPaste 处理器', () => {
 test('handlePaste 只接受 text/plain 并阻止默认插入', () => {
   assert.ok(pasteBody.includes("getData('text/plain')"), 'handlePaste 应读取 text/plain')
   assert.ok(pasteBody.includes('e.preventDefault()'), 'handlePaste 应阻止默认 HTML 插入')
-  assert.ok(pasteBody.includes('onChange(text, mentions)'), 'handlePaste 结束后必须回调 onChange，否则发送键判定不到内容')
+  assert.ok(pasteBody.includes('emit(el)'), 'handlePaste 结束后必须回调 onChange，否则发送键判定不到内容')
 })
 
 test('展开逻辑已抽到可测的纯函数（递归遍历子树）', () => {

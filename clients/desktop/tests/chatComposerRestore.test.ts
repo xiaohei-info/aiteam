@@ -41,7 +41,7 @@ test('composer clears before awaiting onSend', () => {
   const awaitAt = send.indexOf('await onSend(')
   assert.ok(clearAt > 0 && awaitAt > clearAt, 'input must be cleared before the send request')
   const clearComposer = source.slice(source.indexOf('const clearComposer = '), source.indexOf('const readComposer = '))
-  assert.ok(clearComposer.includes("setInput('')") && clearComposer.includes('mentionInputRef.current?.clear()'))
+  assert.ok(clearComposer.includes('composer.clear()') && clearComposer.includes('setPendingFiles([])'))
 })
 
 test('new session restores the draft only after a failed send', () => {

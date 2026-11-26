@@ -6,7 +6,7 @@ import { createRoot } from 'react-dom/client'
 import '../src/styles/globals.css'
 import { ChatInputBar } from '../src/components/Chat/ChatInputBar.tsx'
 
-// 复现「粘贴内容后发送按钮不可用」：单聊（textarea）与群聊（MentionInput）两条路径都测。
+// 复现「粘贴内容后发送按钮不可用」：单聊（不传成员）与群聊（有成员）都渲染 MentionInput。
 const params = new URLSearchParams(location.search)
 const mode = params.get('mode') ?? 'single'
 window.__sent = []

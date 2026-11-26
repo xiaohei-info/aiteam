@@ -29,7 +29,8 @@
   box-shadow: var(--brand-focus-ring);
 }
 
-.mention-input:empty::before {
+.mention-input:empty::before,
+.mention-input[data-empty="true"]::before {
   content: attr(data-placeholder);
   color: var(--text-muted);
   pointer-events: none;

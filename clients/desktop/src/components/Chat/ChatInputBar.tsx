@@ -24,7 +24,8 @@ import { useGlobalShortcutClose } from '../../hooks/useGlobalShortcut'
 import { useVoiceInput, type VoiceRecording } from '../../hooks/useVoiceInput'
 import { PopoverPortal, PopoverTabOrder } from '../Popover/PopoverLayer'
 import { useAnchoredPopover } from '../Popover/useAnchoredPopover'
-import MentionInput, { type MentionInputHandle, type MentionInputSnapshot } from './MentionInput'
+import MentionInput, { type MentionInputSnapshot } from './MentionInput'
+import { useComposerValue } from './useComposerValue'
 import { ChatSendQueue } from './ChatSendQueue'
 import {
   enqueueMessage,
@@ -41,7 +42,6 @@ import {
 } from '../../lib/chatSendQueue'
 import { KnowledgeFilePicker } from './KnowledgeFilePicker'
 import { FileChip } from './FileChip'
-import { isImeKeyboardEvent } from '../../lib/imeKeyboard'
 
 const CHAT_TEXTAREA_MIN_HEIGHT = 60
 const CHAT_TEXTAREA_MAX_HEIGHT = 240
@@ -83,18 +83,16 @@ export const ChatInputBar = memo(({
 }: ChatInputBarProps) => {
   const [knowledgeOpen, setKnowledgeOpen] = useState(false)
   const [fileError, setFileError] = useState('')
-  const [input, setInput] = useState(draft ?? '')
   const [pendingFiles, setPendingFiles] = useState<UploadableChatFile[]>(draftFiles ?? [])
   const [isPickingFile, setIsPickingFile] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [textareaHeight, setTextareaHeight] = useState(CHAT_TEXTAREA_MIN_HEIGHT)
   const [selectedRoles, setSelectedRoles] = useState<string[]>([])
   const [roleOpen, setRoleOpen] = useState(false)
-  const mentionInputRef = useRef<MentionInputHandle>(null)
-  const mentionTextRef = useRef({ text: draft ?? '', mentions: [] as string[] })
-  const [mentionText, setMentionText] = useState(draft ?? '')
+  // 单聊与群聊共用同一个 MentionInput：单聊不传成员，@ 菜单不出现，其余输入行为完全一致。
+  const composer = useComposerValue(draft ?? '')
+  const mentionMembers = members ?? []
   const dragRef = useRef<{ startY: number; startH: number } | null>(null)
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
   const roleRef = useRef<HTMLDivElement>(null)
   const roleTriggerRef = useRef<HTMLButtonElement>(null)
   const roleMenuRef = useRef<HTMLDivElement>(null)
@@ -103,17 +101,12 @@ export const ChatInputBar = memo(({
   const rolePopover = useAnchoredPopover({ open: roleOpen, placement: 'bottom-start', fallbackPlacements: ['top-start'], offset: 6, fit: { maxHeight: 240 } })
   const roleTriggerRefs = useMergeRefs([roleTriggerRef, rolePopover.refs.setReference])
   const roleMenuRefs = useMergeRefs([roleMenuRef, rolePopover.refs.setFloating])
-  const inputRef = useRef(input)
-  inputRef.current = input
   const filesRef = useRef(pendingFiles)
   filesRef.current = pendingFiles
   const cancelledUploadIdsRef = useRef(new Set<string>())
   const prevConvRef = useRef(convId)
   const conversationUpgradeFromRef = useRef(conversationUpgradeFrom)
   conversationUpgradeFromRef.current = conversationUpgradeFrom
-  const prevMentionModeRef = useRef(members !== undefined && members.length > 0)
-  const isComposingRef = useRef(false)
-  const isMentionMode = members !== undefined && members.length > 0
   // 正在发送的会话；emp_ 升级为真实会话时跟着更新，用于判断失败时把内容放回哪里。
   const submittingConvRef = useRef<string | null>(null)
   const mountedRef = useRef(false)
@@ -147,9 +140,7 @@ export const ChatInputBar = memo(({
       && previousConvId === conversationUpgradeFrom
       && !convId.startsWith('emp_')
     if (conversationChanged && !isConversationUpgrade) {
-      const previousDraft = prevMentionModeRef.current
-        ? mentionTextRef.current.text
-        : inputRef.current
+      const previousDraft = composer.valueRef.current.text
       const previousFiles = filesRef.current.filter((file) => {
         if (file.upload?.status !== 'uploading') return true
         cancelledUploadIdsRef.current.add(file.upload.clientId)
@@ -158,7 +149,6 @@ export const ChatInputBar = memo(({
       setKnowledgeOpen(false)
       setFileError('')
       onDraftChange(previousConvId, previousDraft, previousFiles)
-      setInput(nextDraft)
       setPendingFiles(draftFiles ?? [])
     }
     if (isConversationUpgrade && submittingConvRef.current === previousConvId) submittingConvRef.current = convId
@@ -174,13 +164,8 @@ export const ChatInputBar = memo(({
     if (conversationChanged) prevConvRef.current = convId
 
     // MentionInput 是 contenteditable，必须显式随 convId 恢复/清空 DOM，避免草稿串会话。
-    if (isMentionMode && !isConversationUpgrade) {
-      mentionTextRef.current = { text: nextDraft, mentions: [] }
-      setMentionText(nextDraft)
-      mentionInputRef.current?.setText(nextDraft)
-    }
-    prevMentionModeRef.current = isMentionMode
-  }, [convId, isMentionMode]) // eslint-disable-line react-hooks/exhaustive-deps
+    if (!isConversationUpgrade) composer.setText(nextDraft)
+  }, [convId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // 新会话页发送后已切到会话、输入框换了一个；发送失败时页面把内容写回该会话草稿，
   // 这里在输入框为空时采用它。切换会话的草稿由上面的 effect 处理。
@@ -190,26 +175,17 @@ export const ChatInputBar = memo(({
     if (previous.convId !== convId) return
     if (previous.draft === draft && previous.draftFiles === draftFiles) return
     if ((!draft && !draftFiles?.length) || isSubmitting) return
-    const current = isMentionMode ? mentionTextRef.current.text : inputRef.current
-    if (current.trim() || filesRef.current.length > 0) return
-    if (isMentionMode) {
-      mentionTextRef.current = { text: draft ?? '', mentions: [] }
-      setMentionText(draft ?? '')
-      mentionInputRef.current?.setText(draft ?? '')
-    } else {
-      setInput(draft ?? '')
-    }
+    if (composer.valueRef.current.text.trim() || filesRef.current.length > 0) return
+    composer.setText(draft ?? '')
     setPendingFiles(draftFiles ?? [])
   }, [convId, draft, draftFiles]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // 高度随内容自适应（输入、粘贴、草稿恢复、清空都会改 composer.text）。
+  const { getScrollHeight } = composer
   useLayoutEffect(() => {
-    const textarea = textareaRef.current
-    if (!textarea) return
-    textarea.style.height = 'auto'
-    const nextHeight = Math.max(CHAT_TEXTAREA_MIN_HEIGHT, Math.min(CHAT_TEXTAREA_MAX_HEIGHT, textarea.scrollHeight))
-    textarea.style.height = `${nextHeight}px`
-    setTextareaHeight(nextHeight)
-  }, [input])
+    const scrollHeight = getScrollHeight() ?? CHAT_TEXTAREA_MIN_HEIGHT
+    setTextareaHeight(Math.max(CHAT_TEXTAREA_MIN_HEIGHT, Math.min(CHAT_TEXTAREA_MAX_HEIGHT, scrollHeight)))
+  }, [composer.text, getScrollHeight])
 
   useEffect(() => {
     if (!roleOpen) return
@@ -344,26 +320,23 @@ export const ChatInputBar = memo(({
   }, [onDeleteUploadedFile])
 
   const clearComposer = () => {
-    if (isMentionMode) {
-      mentionTextRef.current = { text: '', mentions: [] }
-      setMentionText('')
-      mentionInputRef.current?.clear()
-    } else {
-      setInput('')
-    }
+    composer.clear()
     setPendingFiles([])
   }
 
   /** 读取输入框当前内容；没有文字也没有附件时返回 null。 */
   const readComposer = (files: UploadableChatFile[]): QueuedChatMessage<MentionInputSnapshot> | null => {
-    if (isMentionMode) {
-      const { text, mentions } = mentionTextRef.current
-      if (!text.trim() && files.length === 0) return null
-      return { id: crypto.randomUUID(), text: text.trim(), files, mentions, mentionSnapshot: mentionInputRef.current?.snapshot() }
+    const { text, mentions } = composer.valueRef.current
+    if (!text.trim() && files.length === 0) return null
+    return {
+      id: crypto.randomUUID(),
+      text: text.trim(),
+      files,
+      mentions,
+      mentionSnapshot: composer.snapshot(),
+      // 单聊按所选/默认员工路由；群聊没有 employees，由 mentions 决定。
+      employeeId: selectedRoles[0] ?? employees[0]?.employeeId,
     }
-    const text = inputRef.current.trim()
-    if (!text && files.length === 0) return null
-    return { id: crypto.randomUUID(), text, files, employeeId: selectedRoles[0] ?? employees[0]?.employeeId }
   }
 
   const resumeQueue = useCallback((queueConvId: string) => {
@@ -395,8 +368,7 @@ export const ChatInputBar = memo(({
       const { text, mentions, employeeId, mentionSnapshot } = composed
 
       // 点击发送立即清空输入框和附件，失败时再放回。
-      const submittedInMentionMode = isMentionMode
-      const rawText = isMentionMode ? mentionTextRef.current.text : input
+      const rawText = composer.valueRef.current.text
       submittingConvRef.current = prevConvRef.current
       flushSync(() => {
         setIsSubmitting(true)
@@ -413,39 +385,26 @@ export const ChatInputBar = memo(({
       }
       const submittedConversationId = submittingConvRef.current ?? ''
       submittingConvRef.current = null
-      const mentionModeNow = prevMentionModeRef.current
       const target = sent ? { kind: 'none' as const } : composerRestoreTarget({
         mounted: mountedRef.current,
         // 请求期间允许用户从侧栏切换会话；失败的内容回到原会话，不覆盖当前会话。
         sameConversation: prevConvRef.current === submittedConversationId,
-        composerEmpty: !(mentionModeNow ? mentionTextRef.current.text : inputRef.current).trim() && filesRef.current.length === 0,
+        composerEmpty: !composer.valueRef.current.text.trim() && filesRef.current.length === 0,
         submittedConversationId,
       })
       flushSync(() => {
         setIsSubmitting(false)
-        if (target.kind !== 'composer') return
-        if (!mentionModeNow) setInput(rawText)
-        setPendingFiles(files)
+        if (target.kind === 'composer') setPendingFiles(files)
       })
       if (target.kind === 'draft') onDraftChange(target.conversationId, rawText, files)
-      if (target.kind !== 'composer') return
-      if (mentionModeNow) {
-        if (submittedInMentionMode && mentionSnapshot) {
-          mentionInputRef.current?.restore(mentionSnapshot)
-        } else {
-          mentionTextRef.current = { text: rawText, mentions: [] }
-          setMentionText(rawText)
-          mentionInputRef.current?.setText(rawText)
-        }
-      } else if (!document.activeElement || document.activeElement === document.body) {
-        textareaRef.current?.focus()
-      }
+      // 原样放回（含 @ 成员 chip）；焦点没被用户移走时 restore 会聚焦到末尾。
+      if (target.kind === 'composer') composer.restore(mentionSnapshot, rawText)
     })
   }
 
   const isHero = variant === 'hero'
   const hasBlockingUpload = !!onUploadFile && hasBlockingAttachmentUpload(pendingFiles)
-  const hasComposerContent = (isMentionMode ? !!mentionText.trim() : !!input.trim()) || pendingFiles.length > 0
+  const hasComposerContent = !!composer.text.trim() || pendingFiles.length > 0
   // 可排队时提交中也允许继续输入，新消息进入队列。
   const isSubmitBlocking = isSubmitting && !canQueue
   const isSendDisabled = !hasComposerContent
@@ -531,22 +490,9 @@ export const ChatInputBar = memo(({
     setFileError('')
     const current = readComposer(filesRef.current)
     setQueues((previous) => replaceQueuedMessage(previous, convId, id, current))
-    flushSync(() => {
-      if (!isMentionMode) setInput(target.text)
-      setPendingFiles(target.files)
-    })
-    if (isMentionMode) {
-      if (target.mentionSnapshot) {
-        mentionInputRef.current?.restore(target.mentionSnapshot)
-      } else {
-        mentionTextRef.current = { text: target.text, mentions: [] }
-        setMentionText(target.text)
-        mentionInputRef.current?.setText(target.text)
-      }
-      mentionInputRef.current?.focus()
-    } else {
-      textareaRef.current?.focus()
-    }
+    flushSync(() => setPendingFiles(target.files))
+    composer.restore(target.mentionSnapshot, target.text)
+    composer.focus()
   }
 
   // ── 语音输入（按住说话） ─────────────────────────────────────────────────────
@@ -564,14 +510,7 @@ export const ChatInputBar = memo(({
     voiceErrorTimerRef.current = window.setTimeout(() => setVoiceError(null), 2500)
   }, [])
 
-  const insertTranscript = useCallback((transcript: string) => {
-    if (isMentionMode) {
-      mentionInputRef.current?.insertText(transcript)
-    } else {
-      setInput(prev => prev ? prev + transcript : transcript)
-    }
-  }, [isMentionMode])
-  insertTranscriptRef.current = insertTranscript
+  insertTranscriptRef.current = composer.insertText
 
   const transcribe = useCallback(async (recording: VoiceRecording) => {
     const recordingConversationId = voiceConversationRef.current
@@ -738,49 +677,17 @@ export const ChatInputBar = memo(({
               ))}
             </div>
           )}
-          {isMentionMode ? (
-            <MentionInput
-              ref={mentionInputRef}
-              members={members!}
-              placeholder={placeholder}
-              disabled={isInteractionDisabled}
-              className="chat-textarea"
-              style={{ height: textareaHeight }}
-              autoFocus={autoFocus}
-              onEnter={handleSend}
-              onChange={(text, mentions) => {
-                mentionTextRef.current = { text, mentions }
-                setMentionText(text)
-                const scrollH = mentionInputRef.current?.getScrollHeight() ?? CHAT_TEXTAREA_MIN_HEIGHT
-                setTextareaHeight(Math.max(CHAT_TEXTAREA_MIN_HEIGHT, Math.min(CHAT_TEXTAREA_MAX_HEIGHT, scrollH)))
-              }}
-            />
-          ) : (
-            <textarea
-              ref={textareaRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onCompositionStart={() => { isComposingRef.current = true }}
-              onCompositionEnd={() => { isComposingRef.current = false }}
-              onKeyDown={(e) => {
-                if (isImeKeyboardEvent(e.nativeEvent, isComposingRef.current)) return
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault()
-                  handleSend()
-                }
-              }}
-              placeholder={placeholder}
-              style={{ height: textareaHeight }}
-              className="chat-textarea"
-              disabled={isInteractionDisabled}
-              autoFocus={autoFocus}
-              autoCorrect="off"
-              autoComplete="off"
-              autoCapitalize="off"
-              spellCheck={false}
-              aria-label={placeholder}
-            />
-          )}
+          <MentionInput
+            ref={composer.inputRef}
+            members={mentionMembers}
+            placeholder={placeholder}
+            disabled={isInteractionDisabled}
+            className="chat-textarea"
+            style={{ height: textareaHeight }}
+            autoFocus={autoFocus}
+            onEnter={handleSend}
+            onChange={composer.handleChange}
+          />
           <div className="chat-input-actions">
             <div className="chat-input-tools">
               <button type="button" onClick={handlePickFile} disabled={isPickingFile || isInteractionDisabled} title={isHero ? '添加上下文' : '发送文件'} aria-label={isPickingFile ? '正在选择文件' : isHero ? '添加上下文文件' : '添加消息附件'} className="chat-tool-btn">

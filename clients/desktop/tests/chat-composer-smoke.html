@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Chat composer smoke</title></head>
+<body><div id="root" style="height:100vh;display:flex;flex-direction:column;justify-content:flex-end"></div><script type="module">
+import React from 'react'
+import { createRoot } from 'react-dom/client'
+import '../src/styles/globals.css'
+import '../src/pages/Chat/Chat.css'
+import { ChatInputBar } from '../src/components/Chat/ChatInputBar.tsx'
+
+// 单聊/群聊输入框统一后的行为冒烟：?mode=single|group&variant=dock|hero
+// window.__setConv(id) 切会话（草稿走 __drafts）；window.__failNext = true 让下一次发送失败。
+const params = new URLSearchParams(location.search)
+const mode = params.get('mode') ?? 'single'
+const variant = params.get('variant') ?? 'dock'
+window.__sent = []
+window.__drafts = {}
+window.__failNext = false
+
+const members = mode === 'group'
+  ? [
+      { employee_id: 'employee-1', display_name: '数据分析师', handle: 'analyst', can_mention: true },
+      { employee_id: 'employee-2', display_name: '产品经理', handle: 'pm', can_mention: true },
+    ]
+  : undefined
+const employees = mode === 'single' ? [{ employeeId: 'employee-1', displayName: '数据分析师' }] : []
+
+function Harness() {
+  const [convId, setConvId] = React.useState('conversation-1')
+  window.__setConv = setConvId
+  return React.createElement(ChatInputBar, {
+    convId,
+    draft: window.__drafts[convId]?.text ?? '',
+    members,
+    employees,
+    variant,
+    placeholder: variant === 'hero' ? '描述你要完成的任务…' : '输入消息…',
+    onSend: async (text, files, employeeId, mentions) => {
+      if (window.__failNext) { window.__failNext = false; return false }
+      window.__sent.push({ text, employeeId: employeeId ?? null, mentions: mentions ?? [] })
+      return true
+    },
+    onPickFile: async () => null,
+    onDraftChange: (id, text) => { window.__drafts[id] = { text } },
+  })
+}
+createRoot(document.getElementById('root')).render(React.createElement(Harness))
+window.__ready = true
+</script></body></html>

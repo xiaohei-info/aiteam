@@ -21,6 +21,7 @@ export interface MentionInputHandle {
 export type MentionInputSnapshot = readonly Node[]
 
 interface Props {
+  /** 可 @ 的成员；单聊传空数组，@ 菜单不会出现，其余输入行为与群聊完全一致。 */
   members: GroupMember[]
   placeholder?: string
   disabled?: boolean
@@ -47,6 +48,14 @@ function toRichTextNode(node: Node): RichTextNodeLike {
 
 const extract = (el: HTMLDivElement) => extractMentionText(toRichTextNode(el))
 
+/**
+ * 内容全删后 contentEditable 常留下占位 <br>，`:empty` 不再命中、占位文字消失；
+ * 这里按提取结果标记空态，CSS 用 `[data-empty="true"]` 显示占位。
+ */
+function markEmpty(el: HTMLDivElement, value: { text: string; mentions: string[] }): void {
+  el.dataset.empty = String(value.text === '' && value.mentions.length === 0)
+}
+
 const MentionInput = forwardRef<MentionInputHandle, Props>(({
   members, placeholder, disabled, style, className, autoFocus, onEnter, onChange,
 }, ref) => {
@@ -58,6 +67,12 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
   const [selectedIdx, setSelectedIdx] = useState(0)
   const isComposingRef = useRef(false)
   const menuId = useId()
+
+  const emit = useCallback((el: HTMLDivElement) => {
+    const value = extract(el)
+    markEmpty(el, value)
+    onChange(value.text, value.mentions)
+  }, [onChange])
 
   const filtered = useMemo(() => query !== null
     ? members.filter(m => m.can_mention !== false && m.display_name.toLowerCase().includes(query.toLowerCase()))
@@ -124,9 +139,8 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
     sel.addRange(newRange)
 
     closeMenu()
-    const { text: t, mentions } = extract(el)
-    onChange(t, mentions)
-  }, [closeMenu, onChange])
+    emit(el)
+  }, [closeMenu, emit])
 
   const handleInput = useCallback(() => {
     const el = editRef.current
@@ -151,9 +165,8 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
     } else {
       closeMenu()
     }
-    const { text, mentions } = extract(el)
-    onChange(text, mentions)
-  }, [closeMenu, onChange])
+    emit(el)
+  }, [closeMenu, emit])
 
   // 只接收纯文本：浏览器默认粘贴会把富文本结构（<div>/<p>/<span>/style）塞进 contenteditable，
   // 既污染输入内容，也让 extract 拿到与用户所见不一致的文本。
@@ -188,9 +201,8 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
       activeSel.removeAllRanges()
       activeSel.addRange(after)
     }
-    const { text, mentions } = extract(el)
-    onChange(text, mentions)
-  }, [closeMenu, disabled, onChange])
+    emit(el)
+  }, [closeMenu, disabled, emit])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
     // 组词期间让输入法处理回车、方向键和删除键，不选择 @ 成员或发送。
@@ -226,19 +238,24 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
       if (chipToDelete) {
         e.preventDefault()
         chipToDelete.remove()
-        const { text, mentions } = extract(editRef.current!)
-        onChange(text, mentions)
+        emit(editRef.current!)
       }
     }
-  }, [query, filtered, selectedIdx, insertMention, closeMenu, onEnter, onChange])
+  }, [query, filtered, selectedIdx, insertMention, closeMenu, onEnter, emit])
 
   useImperativeHandle(ref, () => ({
-    clear: () => { if (editRef.current) { editRef.current.innerHTML = ''; onChange('', []) } },
+    clear: () => {
+      const el = editRef.current
+      if (!el) return
+      el.replaceChildren()
+      emit(el)
+    },
     focus: () => editRef.current?.focus(),
     setText: (text: string) => {
       if (!editRef.current) return
       // 草稿恢复只写纯文本，不把持久化内容当 HTML 注入。
       editRef.current.textContent = text
+      emit(editRef.current)
     },
     snapshot: () => Array.from(editRef.current?.childNodes ?? [], (node) => node.cloneNode(true)),
     restore: (snapshot: MentionInputSnapshot) => {
@@ -246,8 +263,7 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
       if (!el) return
       // 只放回本输入框自己克隆的节点，不解析任何 HTML。
       el.replaceChildren(...snapshot.map((node) => node.cloneNode(true)))
-      const { text, mentions } = extract(el)
-      onChange(text, mentions)
+      emit(el)
       // 发送期间输入框被禁用、焦点落到 body；用户点了别处就不抢焦点。
       if (document.activeElement && document.activeElement !== document.body) return
       el.focus()
@@ -286,8 +302,7 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
           after.collapse(true)
           activeSel.removeAllRanges()
           activeSel.addRange(after)
-          const { text: t, mentions } = extract(el)
-          onChange(t, mentions)
+          emit(el)
         }
       }
     },
@@ -300,7 +315,7 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
       el.style.height = prev
       return h
     },
-  }), [onChange])
+  }), [emit])
 
   useEffect(() => {
     if (autoFocus) editRef.current?.focus()
@@ -321,11 +336,13 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
         onCompositionEnd={() => { isComposingRef.current = false }}
         onKeyDown={handleKeyDown}
         spellCheck={false}
+        autoCorrect="off"
+        autoCapitalize="off"
         role="textbox"
         aria-label={placeholder ?? '输入消息'}
         aria-multiline="true"
         aria-disabled={disabled || undefined}
-        aria-autocomplete="list"
+        aria-autocomplete={members.length > 0 ? 'list' : undefined}
         aria-expanded={menuOpen}
         aria-controls={menuOpen ? menuId : undefined}
         aria-activedescendant={menuOpen ? `${menuId}-option-${selectedIdx}` : undefined}
