@@ -10,6 +10,12 @@ For every expert template whose payload still carries ``avatar_url``:
 - any other value (legacy external URL, broken data) is dropped; that template shows no
   avatar until an operator uploads one.
 ``avatar_url`` is removed from the payload either way. Re-running is a no-op.
+
+Templates that already have a file-based avatar (``avatar_version`` plus an existing file)
+are never overwritten: the stale ``avatar_url`` key is dropped and the template is reported
+under ``kept``. That keeps a newer operator upload from being clobbered by the legacy image
+if the script runs after someone changed the avatar.
+
 Prints a JSON summary; exits 1 if any template failed.
 """
 
@@ -29,12 +35,22 @@ from .template_avatar_store import TemplateAvatarStore
 
 
 def convert(repo, store: TemplateAvatarStore, *, dry_run: bool = False) -> dict:
-    report = {"converted": [], "dropped": [], "failed": [], "dry_run": dry_run}
+    report = {"converted": [], "dropped": [], "kept": [], "failed": [], "dry_run": dry_run}
     for entry in repo.list(catalog_type=CatalogType.EXPERT_TEMPLATE):
         payload = dict(entry.payload or {})
         if "avatar_url" not in payload:
             continue
         value = payload.pop("avatar_url")
+        # 已有文件态头像的模板不碰图：只清掉旧的内联 avatar_url，避免用旧图覆盖更新的头像。
+        if avatar_version(payload) and store.read(entry.template_id) is not None:
+            try:
+                if not dry_run:
+                    repo.update(entry, payload=payload)
+            except Exception as exc:  # noqa: BLE001 — report and continue with the next template
+                report["failed"].append({"template_id": entry.template_id, "error": type(exc).__name__})
+                continue
+            report["kept"].append(entry.template_id)
+            continue
         try:
             avatar = normalize_avatar(decode_data_url(value)) if isinstance(value, str) and value.startswith("data:") else None
         except AvatarImageError:
