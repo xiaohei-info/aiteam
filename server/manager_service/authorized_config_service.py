@@ -31,7 +31,6 @@ from .member_service import GrantService, MemberDeptService
 from .recruit_repository import RecruitRepository
 from .skill_signing import SkillPackageSigner
 from .employee_avatar_repository import EmployeeAvatarRepository
-from .employee_avatar_service import avatar_projection
 
 _GRANT_EXEMPT_ROLES = frozenset({
     EnterpriseRole.OWNER.value,
@@ -84,7 +83,6 @@ class AuthorizedConfigService:
         skill_signer: SkillPackageSigner | None = None,
         knowledge_policy: KnowledgeAccessPolicy | None = None,
         avatar_repository: EmployeeAvatarRepository | None = None,
-        avatar_public_base: str | None = None,
     ):
         self._config = config_service
         self._knowledge_policy = knowledge_policy or KnowledgeAccessPolicy()
@@ -94,7 +92,6 @@ class AuthorizedConfigService:
         self._capability = capability_catalog
         self._skill_signer = skill_signer if skill_signer is not None else SkillPackageSigner.from_env()
         self._avatars = avatar_repository
-        self._avatar_public_base = avatar_public_base
 
     def pull(
         self, ctx: TenantContext, req: AuthorizedConfigPullRequest
@@ -127,20 +124,13 @@ class AuthorizedConfigService:
         experts: list[dict] = []
         for cfg in authorized_configs:
             avatar = self._avatars.get(ctx, cfg.employee_id) if self._avatars is not None else None
-            avatar_url, avatar_version, avatar_sync_version = avatar_projection(
-                employee_id=cfg.employee_id,
-                config_version=cfg.version,
-                avatar=avatar,
-                source_template_id=cfg.source_template_id,
-                source_template_version=cfg.source_template_version,
-                public_base_url=self._avatar_public_base,
-            )
+            avatar_version = avatar.version if avatar else 0
+            avatar_sync_version = f"{cfg.version}:avatar-{avatar_version}"
             known_ver = req.known_versions.get(cfg.employee_id)
             # The config revision also covers one-time projection backfills. Do
             # not add a second projection revision to the existing sync marker.
             accepted_versions = {avatar_sync_version}
-            # 无任何头像来源（也没继承模板）时，旧客户端持有的配置版本仍算已同步。
-            if avatar_url is None:
+            if avatar_version == 0:
                 accepted_versions.add(str(cfg.version))
             changed = known_ver not in accepted_versions
             if changed:
@@ -150,7 +140,7 @@ class AuthorizedConfigService:
                 experts.append({**cfg.model_dump(mode="json", exclude=_ADMIN_ONLY_FIELDS), "tools": list(policy.tools),
                                 "knowledge_refs": list(policy.refs),
                                 "knowledge_policy": policy.projection.model_dump(mode="json"),
-                                "avatar_url": avatar_url,
+                                "avatar_url": avatar.avatar_url if avatar else None,
                                 "avatar_version": avatar_version,
                                 "avatar_sync_version": avatar_sync_version})
 

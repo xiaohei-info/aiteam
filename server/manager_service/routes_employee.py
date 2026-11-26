@@ -28,7 +28,6 @@ from .avatar_schemas import EmployeeAvatarIn, EmployeeAvatarOut
 from .employee_avatar_repository import EmployeeAvatarRepository
 from .employee_avatar_service import EmployeeAvatarService
 from .knowledge_intake_service import ensure_storage_root, manager_storage_root
-from .template_avatar_cache import TemplateAvatarCache
 
 
 class _ManagerNotConfigured(AppError):
@@ -91,32 +90,6 @@ def _avatar_service(request: Request) -> EmployeeAvatarService:
         )
         request.app.state._employee_avatar_service = cache
     return cache
-
-
-def _template_avatar_cache(request: Request) -> TemplateAvatarCache:
-    """模板头像继承缓存（共享 storage root 与 Operator 目录客户端）。"""
-    cache = getattr(request.app.state, "_template_avatar_cache", None)
-    if cache is None:
-        root = ensure_storage_root(manager_storage_root(request.app.state.settings))
-        cache = TemplateAvatarCache(getattr(request.app.state, "_operator_catalog", None), root)
-        request.app.state._template_avatar_cache = cache
-    return cache
-
-
-def _inherited_avatar(request: Request, ctx, employee_id: str) -> tuple[bytes, str] | None:
-    """员工没有自己的头像行时，按来源模板继承人才市场头像（不改写企业主数据）。"""
-    try:
-        config = _service(request).get(ctx, employee_id=employee_id)
-    except AppError:
-        return None
-    if not config.source_template_id:
-        return None
-    return _template_avatar_cache(request).resolve(
-        ctx,
-        employee_id=employee_id,
-        template_id=config.source_template_id,
-        template_version=config.source_template_version,
-    )
 
 
 def _copy_service(request: Request) -> EmployeeCopyService:
@@ -243,7 +216,7 @@ def build_employee_router(verifier) -> APIRouter:
 
     @router.get(
         "/{employee_id}/avatar/content",
-        description="读取当前租户员工头像对象；企业未上传时继承来源模板头像（按需回源 Operator 目录并缓存）。",
+        description="读取当前租户员工头像对象。",
         summary="读取员工头像对象",
         operation_id="manager_employee_avatar_content",
         response_class=Response,
@@ -264,9 +237,6 @@ def build_employee_router(verifier) -> APIRouter:
     ) -> Response:
         ctx = tenant_context_from(claims)
         result = _avatar_service(request).content(ctx, employee_id)
-        if result is None:
-            # 没有企业头像行 → 继承来源模板头像（人才市场模板），仍然不需要企业上传。
-            result = _inherited_avatar(request, ctx, employee_id)
         if result is None:
             from shared.errors import NotFound
             raise NotFound("employee avatar not found")

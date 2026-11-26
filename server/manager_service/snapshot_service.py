@@ -33,7 +33,6 @@ from .employee_config_service import EmployeeConfigService
 from .member_service import GrantService, MemberDeptService
 from .schemas import EmployeeConfigOut
 from .employee_avatar_repository import EmployeeAvatarRepository
-from .employee_avatar_service import avatar_projection
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +90,6 @@ class SnapshotService:
         knowledge_binding: KnowledgeBindingReader | None = None,
         platform_catalog: PlatformCatalogReader | None = None,
         avatar_repository: EmployeeAvatarRepository | None = None,
-        avatar_public_base: str | None = None,
     ):
         self._config = config_service
         self._grants = grant_service
@@ -101,8 +99,6 @@ class SnapshotService:
         self._knowledge_binding = knowledge_binding
         self._platform_catalog = platform_catalog
         self._avatars = avatar_repository
-        # 头像 URL 的对外前缀（配了就是绝对地址）；未注入 repository 时也用它拼继承态 URL。
-        self._avatar_public_base = avatar_public_base
 
     def _ensure_runnable(self, ctx: TenantContext, *, employee_id: str) -> None:
         """Reject non-active employees before an execution backend is contacted."""
@@ -140,20 +136,13 @@ class SnapshotService:
             ctx, employee_id=employee_id, tools=config.tools, version=current_version,
         )
         avatar = self._avatars.get(ctx, employee_id) if self._avatars is not None else None
-        avatar_url, avatar_version, avatar_sync_version = avatar_projection(
-            employee_id=employee_id,
-            config_version=current_version,
-            avatar=avatar,
-            source_template_id=config.source_template_id,
-            source_template_version=config.source_template_version,
-            public_base_url=self._avatar_public_base,
-        )
+        avatar_version = avatar.version if avatar else 0
         return _to_snapshot(
             config, version=current_version, knowledge_refs=list(policy.refs), knowledge_policy=policy,
             pricing=self._resolve_pricing(config, tenant_id=ctx.tenant_id),
-            avatar_url=avatar_url,
+            avatar_url=avatar.avatar_url if avatar else None,
             avatar_version=avatar_version,
-            avatar_sync_version=avatar_sync_version,
+            avatar_sync_version=f"{current_version}:avatar-{avatar_version}",
         )
 
     def _resolve_pricing(self, config: EmployeeConfigOut, *, tenant_id: str) -> PricingSnapshot | None:
@@ -320,7 +309,6 @@ def build_snapshot_service(
     knowledge_binding: KnowledgeBindingReader | None = None,
     platform_catalog: PlatformCatalogReader | None = None,
     avatar_repository: EmployeeAvatarRepository | None = None,
-    avatar_public_base: str | None = None,
 ) -> SnapshotService:
     return SnapshotService(
         config_service=config_service,
@@ -330,5 +318,4 @@ def build_snapshot_service(
         knowledge_binding=knowledge_binding,
         platform_catalog=platform_catalog,
         avatar_repository=avatar_repository,
-        avatar_public_base=avatar_public_base,
     )

@@ -70,7 +70,6 @@ def _authorized_config_service(request: Request) -> AuthorizedConfigService:
             capability_catalog=capability_catalog,
             knowledge_policy=KnowledgeAccessPolicy(EmployeeKnowledgeBindingRepository(router_pg)),
             avatar_repository=EmployeeAvatarRepository(router_pg),
-            avatar_public_base=str(request.base_url).rstrip("/"),
         )
         request.app.state._authorized_config_service = cache
     return cache
