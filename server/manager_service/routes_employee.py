@@ -9,6 +9,8 @@ verifier 注入：本端 DevTokenService（骨架期）/ 生产 RS256 验签器�
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, Request, status
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict
@@ -88,6 +90,19 @@ def _avatar_service(request: Request) -> EmployeeAvatarService:
     return cache
 
 
+logger = logging.getLogger(__name__)
+
+
+def _with_avatars(request: Request, ctx, items: list[EmployeeConfigOut]) -> list[EmployeeConfigOut]:
+    """给列表/详情补上头像路径。头像不是主链：读失败时照常返回，前端显示占位。"""
+    try:
+        urls = _avatar_service(request).avatar_urls(ctx)
+    except Exception:
+        logger.warning("employee avatar lookup failed; list returned without avatars", exc_info=True)
+        return items
+    return [item.model_copy(update={"avatar_url": urls.get(item.employee_id)}) for item in items]
+
+
 def _copy_service(request: Request) -> EmployeeCopyService:
     cache = getattr(request.app.state, "_employee_copy_service", None)
     if cache is None:
@@ -131,7 +146,7 @@ def build_employee_router(verifier) -> APIRouter:
     ) -> ListEnvelope[EmployeeConfigOut]:
         ctx = tenant_context_from(claims)
         require_admin(ctx)
-        items = _service(request).list_all(ctx, with_status=True)
+        items = _with_avatars(request, ctx, _service(request).list_all(ctx, with_status=True))
         # 发布范围对账要调运营端：放到响应之后，运营端慢或不可用时列表照常返回；结果在下次打开时可见。
         background.add_task(reconcile_for_admin, request, ctx)
         return ListEnvelope[EmployeeConfigOut](data=items)
@@ -154,7 +169,7 @@ def build_employee_router(verifier) -> APIRouter:
             ctx, source_id=employee_id, display_name=body.display_name,
             model_policy=body.model_policy, idempotency_key=idempotency_key or "",
         )
-        return Envelope[EmployeeConfigOut](data=out)
+        return Envelope[EmployeeConfigOut](data=_with_avatars(request, ctx, [out])[0])
 
     @router.get(
         "/{employee_id}", description="仅owner/enterprise_admin取单个 employee 配置。成功响应遵循统一 envelope，失败返回 problem+json。", summary="取单个 employee 配置",
@@ -165,9 +180,10 @@ def build_employee_router(verifier) -> APIRouter:
         request: Request,
         claims: TokenClaims = Depends(require),
     ) -> Envelope[EmployeeConfigOut]:
-        require_admin(tenant_context_from(claims))
-        svc = _service(request)
-        return Envelope[EmployeeConfigOut](data=svc.get(tenant_context_from(claims), employee_id=employee_id, with_status=True))
+        ctx = tenant_context_from(claims)
+        require_admin(ctx)
+        out = _service(request).get(ctx, employee_id=employee_id, with_status=True)
+        return Envelope[EmployeeConfigOut](data=_with_avatars(request, ctx, [out])[0])
 
     @router.post(
         "/{employee_id}/avatar",
@@ -249,11 +265,10 @@ def build_employee_router(verifier) -> APIRouter:
         request: Request,
         claims: TokenClaims = Depends(require),
     ) -> Envelope[EmployeeConfigOut]:
-        require_admin(tenant_context_from(claims))
-        svc = _service(request)
-        return Envelope[EmployeeConfigOut](
-            data=svc.update(tenant_context_from(claims), body, employee_id=employee_id, with_status=True)
-        )
+        ctx = tenant_context_from(claims)
+        require_admin(ctx)
+        out = _service(request).update(ctx, body, employee_id=employee_id, with_status=True)
+        return Envelope[EmployeeConfigOut](data=_with_avatars(request, ctx, [out])[0])
 
     @router.delete(
         "/{employee_id}", description="删 employee 配置。成功响应遵循统一 envelope，失败返回 problem+json。", summary="删 employee 配置",
@@ -319,13 +334,14 @@ def build_employee_router(verifier) -> APIRouter:
         reason = body.reason if body is not None else None
         if transition == "archive" and not reason:
             raise _LifecycleValidationError("archive transition requires 'reason' in body")
+        ctx = tenant_context_from(claims)
         out = svc.transition(
-            tenant_context_from(claims),
+            ctx,
             employee_id=employee_id,
             transition=transition,
             archive_reason=reason,
         )
-        return Envelope[EmployeeConfigOut](data=out)
+        return Envelope[EmployeeConfigOut](data=_with_avatars(request, ctx, [out])[0])
 
     @router.get(
         "/{employee_id}/transitions",

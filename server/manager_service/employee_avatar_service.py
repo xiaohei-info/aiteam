@@ -131,6 +131,10 @@ class EmployeeAvatarService:
         # Already a normalized WebP: copy the bytes as-is (re-encoding would change them).
         self._store(ctx, target_id, AvatarFile(data=content.data, sha256=content.sha256))
 
+    def avatar_urls(self, ctx: TenantContext) -> dict[str, str]:
+        """{employee_id: 带版本的内容路径}，供员工列表/详情展示；没有头像的员工不在其中。"""
+        return {eid: avatar_content_path(eid, v) for eid, v in self._repo.versions(ctx).items()}
+
     def content(self, ctx: TenantContext, employee_id: str) -> AvatarContent | None:
         employee_id = normalize_employee_id(employee_id)
         row = self._repo.get(ctx, employee_id)

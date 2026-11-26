@@ -47,6 +47,9 @@ class MemoryRepository:
     def employee_origin(self, _ctx, employee_id):
         return self.origins.get(employee_id)
 
+    def versions(self, _ctx):
+        return {eid: row.version for eid, row in self.rows.items()}
+
     def upsert(self, _ctx, *, employee_id, storage_key, mime_type, byte_size, sha256):
         if self.fail_upsert:
             raise RuntimeError("metadata unavailable")
@@ -159,3 +162,10 @@ def test_projection_is_relative_path_with_version(repo):
     assert avatar_projection(row) == (f"/api/manager/employees/{EMPLOYEE}/avatar/content?v=3", 3)
     assert avatar_content_path(EMPLOYEE, 3).startswith("/api/manager/")
     assert replace(row, version=4).version == 4
+
+
+def test_avatar_urls_for_list_pages(service):
+    assert service.avatar_urls(ctx()) == {}
+    _upload(service)
+    _upload(service, color=(200, 0, 0))
+    assert service.avatar_urls(ctx()) == {EMPLOYEE: f"/api/manager/employees/{EMPLOYEE}/avatar/content?v=2"}
