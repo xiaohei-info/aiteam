@@ -179,3 +179,68 @@ test("login 其他本地校验失败仍是 manager_unavailable，不带时钟信
   assert.match(body.detail, /authentication is unavailable/u);
   assert.equal(body.meta, undefined);
 });
+
+async function withRejectingManager(
+  managerClient: Record<string, unknown>,
+  run: (base: string) => Promise<void>,
+): Promise<void> {
+  const fixture = await createFixture();
+  const http = new AgentHttpServer({
+    host: fixture.host,
+    store: fixture.store,
+    managerClient: managerClient as never,
+    authenticate: () => ({ callerId: "member-1", userId: "member-1", tenantId: "tenant-1", roles: ["member"] }),
+  });
+  await http.listen(0);
+  const address = http.server.address();
+  assert(address && typeof address === "object");
+  try {
+    await run(`http://127.0.0.1:${address.port}`);
+  } finally {
+    await http.close();
+    await fixture.close();
+  }
+}
+
+const SELECTION_REQUIRED = new ManagerAuthError(409, {
+  code: "tenant_selection_required",
+  detail: "account belongs to multiple tenants",
+  meta: {
+    candidates: [
+      { tenant_id: "tenant-a", enterprise_name: "甲企业", secret: "must-not-leak" },
+      { tenant_id: "", enterprise_name: "坏数据" },
+      { enterprise_name: "缺 tenant_id" },
+    ],
+    internal: "must-not-leak",
+  },
+});
+
+for (const path of ["/api/auth/resolve-tenant-by-account", "/api/agent/login"]) {
+  test(`${path} 透传 tenant_selection_required 的候选企业，只放行校验过的字段`, async () => {
+    await withRejectingManager({
+      resolveTenantByAccount: async () => { throw SELECTION_REQUIRED; },
+      login: async () => { throw new Error("login must not be called when resolution fails"); },
+    }, async (base) => {
+      const response = await post(base, path, { account: "alice", password: "pw" });
+      assert.equal(response.status, 409);
+      const body = (await response.json()) as { code: string; meta?: unknown };
+      assert.equal(body.code, "tenant_selection_required");
+      assert.deepEqual(body.meta, { candidates: [{ tenant_id: "tenant-a", enterprise_name: "甲企业" }] });
+    });
+  });
+}
+
+for (const status of [401, 403, 404, 409, 422, 429]) {
+  test(`Manager 认证 ${status} 不会被本地 Agent 映射成 5xx`, async () => {
+    await withRejectingManager({
+      resolveTenantByAccount: async () => ({ data: { tenant_id: "tenant-a" } }),
+      login: async () => { throw new ManagerAuthError(status, { code: `manager_${status}`, detail: "rejected" }); },
+    }, async (base) => {
+      const response = await post(base, "/api/agent/login", { account: "alice", password: "pw" });
+      assert.equal(response.status, status);
+      const body = (await response.json()) as { code: string; meta?: unknown };
+      assert.equal(body.code, `manager_${status}`);
+      assert.equal(body.meta, undefined);
+    });
+  });
+}

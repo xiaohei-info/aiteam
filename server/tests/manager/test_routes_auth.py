@@ -182,6 +182,19 @@ def test_resolve_tenant_by_account_selection_required_409():
     assert r.json()["code"] == "tenant_selection_required"
 
 
+
+def test_resolve_tenant_by_account_selection_required_carries_candidates():
+    candidates = [{"tenant_id": "t-a", "enterprise_name": "甲"}, {"tenant_id": "t-b", "enterprise_name": "乙"}]
+    fake = _fake_auth_svc()
+    fake.resolve_tenant_by_account.side_effect = TenantSelectionRequired("multiple", candidates=candidates)
+    with patch("manager_service.routes_auth.build_auth_service", return_value=fake):
+        c = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin")
+        r = c.post("/api/auth/resolve-tenant-by-account", json={"account": "13800138000"})
+    assert r.status_code == 409
+    assert r.headers["content-type"].startswith("application/problem+json")
+    assert r.json()["meta"] == {"candidates": candidates}
+
+
 def test_owner_reset_enterprise_ambiguous_409():
     fake = _fake_auth_svc()
     fake.owner_reset.side_effect = EnterpriseAmbiguous("enterprise identifier is ambiguous: acme")

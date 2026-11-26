@@ -29,7 +29,7 @@ export interface AgentProblem {
   detail?: string
   code?: string
   errors?: unknown
-  meta?: Record<string, string | number | boolean | null>
+  meta?: Record<string, string | number | boolean | null | Array<{ tenant_id: string; enterprise_name: string }>>
 }
 
 // application/problem+json → Error 的封装,业务侧 catch 后可读 status/code 分支处理。

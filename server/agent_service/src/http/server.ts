@@ -887,7 +887,7 @@ const ApprovalRecordSchema = Type.Object({
 const ApprovalListEnvelope = Type.Object({ data: Type.Array(Type.Ref("ApprovalRecord")) }, { $id: "ApprovalListEnvelope" });
 const ApprovalEnvelope = Type.Object({ data: Type.Ref("ApprovalRecord") }, { $id: "ApprovalEnvelope" });
 const ApprovalDecisionRequest = Type.Object({ decision: Type.Union([Type.Literal("approve"), Type.Literal("deny")]), expected_revision: Type.Optional(Type.Integer({ minimum: 0 })), capability_resolution: Type.Optional(CapabilityResolution), credential: Type.Optional({ ...McpBearerCredentialIn, description: "批准安装需要访问令牌的 MCP 时填写的令牌；只在内存中交给安装步骤，不写入审批记录。" }), remember: Type.Optional(Type.Boolean({ description: "批准并记住：以后从平台目录安装同种能力（MCP 或技能）时直接安装。只对来源为平台目录的 capability_install 的批准有效。" })), session_allow: Type.Optional(Type.Boolean({ description: "批准并记住：本会话内该外部工具（MCP 连接器等）不再询问。只对 risk_level 为 external 的批准有效；会话删除后失效。" })) }, { $id: "ApprovalDecisionRequest", additionalProperties: false });
-const ProblemSchema = Type.Object({ type: Type.String({ description: "错误类型 URI。" }), title: Type.String({ description: "错误标题。" }), status: Type.Integer({ description: "HTTP 状态码。" }), code: Type.String({ description: "机器可读错误码。" }), detail: Type.String({ description: "人类可读错误说明。" }), instance: Type.String({ description: "错误实例或请求关联 ID。" }), request_id: Type.String({ description: "请求关联 ID。" }), errors: Type.Optional(Type.Array(Type.Object({ loc: Type.Array(Type.Union([Type.String(), Type.Integer()]), { description: "错误字段路径。" }), message: Type.String({ description: "字段错误说明。" }), type: Type.String({ description: "校验错误类型。" }) }, { additionalProperties: false }), { description: "字段级错误。" })), meta: Type.Optional(Type.Record(Type.String({ description: "元数据键。" }), Type.Union([Type.String(), Type.Number(), Type.Boolean(), Type.Null()]), { description: "非敏感诊断元数据。" })) }, { $id: "Problem", additionalProperties: false, description: "统一 problem+json 错误。" });
+const ProblemSchema = Type.Object({ type: Type.String({ description: "错误类型 URI。" }), title: Type.String({ description: "错误标题。" }), status: Type.Integer({ description: "HTTP 状态码。" }), code: Type.String({ description: "机器可读错误码。" }), detail: Type.String({ description: "人类可读错误说明。" }), instance: Type.String({ description: "错误实例或请求关联 ID。" }), request_id: Type.String({ description: "请求关联 ID。" }), errors: Type.Optional(Type.Array(Type.Object({ loc: Type.Array(Type.Union([Type.String(), Type.Integer()]), { description: "错误字段路径。" }), message: Type.String({ description: "字段错误说明。" }), type: Type.String({ description: "校验错误类型。" }) }, { additionalProperties: false }), { description: "字段级错误。" })), meta: Type.Optional(Type.Record(Type.String({ description: "元数据键。" }), Type.Union([Type.String(), Type.Number(), Type.Boolean(), Type.Null(), Type.Array(Type.Object({ tenant_id: Type.String({ description: "候选企业的租户 ID，可直接作为登录的 tenant_id。" }), enterprise_name: Type.String({ description: "候选企业名称。" }) }, { additionalProperties: false }), { description: "tenant_selection_required 时的候选企业（meta.candidates）。" })]), { description: "非敏感诊断元数据。" })) }, { $id: "Problem", additionalProperties: false, description: "统一 problem+json 错误。" });
 const LOCAL_FILE_DOWNLOAD_CONTENT = Object.fromEntries([...ALLOWED_FILE_MIMES].map((mime) => [mime, { schema: { type: "string", format: "binary", description: `${mime} 文件内容。` } }]));
 const LOCAL_AVATAR_DOWNLOAD_CONTENT = Object.fromEntries(["image/jpeg", "image/png", "image/webp"].map((mime) => [mime, { schema: { type: "string", format: "binary", description: `本机 ${mime} 员工头像内容。` } }]));
 const OPENAPI_SCHEMAS = [ConversationFailureOut, CustomGroupCreateRequest, GroupOrchestration, GroupOrchestrationUpdateRequest, GroupMembersUpdateRequest, GroupMembersUpdateEnvelope,...WORK_RECORD_SCHEMAS, ...CONVERSATION_READ_SCHEMAS, ...CONVERSATION_WORKSPACE_SCHEMAS, ConversationSchedule, ConversationScheduleInput, ResolveTenantRequest, AgentLoginRequest, AgentResetPasswordRequest, ConversationMetadata, ConversationCreateRequest, ConversationUpdateRequest, ConversationStateUpdateRequest, ConversationProjectFolderRequest, ConversationState, ConversationEnvelope, ConversationListEnvelope, ConversationStateOut, ConversationStateEnvelope, ThinkingLevel, ConversationContextOut, ConversationContextEnvelope, ConversationThinkingLevelRequest, ContextResetMemoryReason, ConversationContextResetRequest, ConversationContextResetParticipantOut, ConversationContextResetOut, ConversationContextResetEnvelope, GrantSyncRequest, UsageFlushRequest, ConversationDeleteEnvelope, ConversationContentPart, ConversationMessage, ConversationEntry, ConversationEntriesEnvelope, BoundedJsonValue, PiSseToolCall, PiSseAssistantMessageEvent, PiSseEventData, PiSseReconciliation, AbortEnvelope, AuthClaims, AuthResult, AuthResultEnvelope, TenantResolution, TenantResolutionEnvelope, PingEnvelope, ClaimsEnvelope, ModelPolicy, SkillSigningKeyMetadata, ExpertProjection, SolutionProjection, SnapshotProjection, ExpertListEnvelope, SolutionListEnvelope, LocalCapability, LocalCapabilityListEnvelope, InstallableSkillOut, InstallableSkillListEnvelope, CapabilityAutoInstall, CapabilityAutoInstallListEnvelope, LocalCapabilityDeleteEnvelope, McpLoginOut, McpLoginEnvelope, McpLoginStartEnvelope, McpLoginCancelEnvelope, McpProbeRequest, McpProbeOut, McpProbeEnvelope, McpInstallRequest, McpInstallEnvelope, CatalogMcpOut, CatalogMcpListEnvelope, CatalogMcpInstallRequest, McpTokenRequest, McpTokenEnvelope, SkillInstallRequest, SkillInstallEnvelope, CustomSkillImportRequest, CustomSkillPreviewOut, CustomSkillScanItem, CustomSkillInstallResultItem, CustomSkillClawHubCandidate, CustomSkillClawHubSecurity, CustomSkillClawHubPreview, CustomSkillImportEnvelope, LocalSkillPathEnvelope, SnapshotListEnvelope, ReadinessState, SkillReadiness, CapabilityReadiness, ExpertReadiness, ReadinessEnvelope, ExpertReadinessEnvelope, GrantSyncEnvelope, UsageFlushEnvelope, OrgTreeNode, OrgTreeEnvelope, OrgDepartmentCreateRequest, OrgDepartmentUpdateRequest, OrgDepartmentPromoteRequest, OrgDepartmentEnvelope, OrgDepartmentDeleteEnvelope, OrgAssignmentRequest, OrgAssignmentEnvelope, OfficeSceneEnvelope, OfficeFeedEnvelope, GoneEnvelope, PromptImage, PromptRequest, PromptAccepted, PromptAcceptedEnvelope, LocalFileUpload, AudioTranscriptionRequest, AudioTranscriptionResponse, AudioTranscriptionEnvelope, EmployeeAvatarRequest, EmployeeAvatarResponse, LocalFileMetadata, LocalFileEnvelope, Page, LocalFileListEnvelope, LocalFileDeleteEnvelope, MarketplaceOutputType, MarketplaceTemplate, MarketplaceTemplateEnvelope, MarketplaceTemplateListEnvelope, UsageSummary, UsageOutboxItem, UsageOutboxListEnvelope, ApprovalRecordSchema, ApprovalListEnvelope, ApprovalEnvelope, ApprovalDecisionRequest, ProblemSchema] as const;
@@ -1257,8 +1257,36 @@ export interface AgentHttpServerOptions {
   globalActivityKeepAliveMs?: number;
 }
 
+/** Manager 认证类错误 → 本端 problem：透传状态 / code / detail / errors；meta 只放行校验过的候选企业。 */
+function managerAuthProblem(error: ManagerAuthError, fallbackCode: string, fallbackDetail: string): HttpProblem {
+  const body = error.body && typeof error.body === "object" ? error.body as Record<string, unknown> : undefined;
+  const candidates = tenantCandidates(body?.meta);
+  return new HttpProblem(
+    error.status,
+    typeof body?.code === "string" ? body.code : fallbackCode,
+    typeof body?.detail === "string" ? body.detail : fallbackDetail,
+    body?.errors,
+    candidates ? { candidates } : undefined,
+  );
+}
+
+function tenantCandidates(meta: unknown): TenantCandidate[] | undefined {
+  const raw = meta && typeof meta === "object" ? (meta as { candidates?: unknown }).candidates : undefined;
+  if (!Array.isArray(raw)) return undefined;
+  const candidates = raw.flatMap((item): TenantCandidate[] => {
+    const value = item && typeof item === "object" ? item as Record<string, unknown> : {};
+    return typeof value.tenant_id === "string" && value.tenant_id && typeof value.enterprise_name === "string"
+      ? [{ tenant_id: value.tenant_id, enterprise_name: value.enterprise_name }]
+      : [];
+  });
+  return candidates.length ? candidates.slice(0, 50) : undefined;
+}
+
+export type TenantCandidate = { tenant_id: string; enterprise_name: string };
+export type ProblemMeta = Record<string, string | number | boolean | null | TenantCandidate[]>;
+
 export class HttpProblem extends Error {
-  constructor(readonly status: number, readonly code: string, message: string, readonly errors?: unknown, readonly meta?: Record<string, string | number | boolean | null>) {
+  constructor(readonly status: number, readonly code: string, message: string, readonly errors?: unknown, readonly meta?: ProblemMeta) {
     super(message);
     this.name = "HttpProblem";
   }
@@ -1943,10 +1971,7 @@ export class AgentHttpServer {
       if (typeof tenantId !== "string" || !tenantId.trim()) throw new ManagerUnavailableError("Manager returned an invalid tenant resolution");
       this.writeJson(response, 200, payload);
     } catch (error) {
-      if (error instanceof ManagerAuthError) {
-        const body = error.body && typeof error.body === "object" ? error.body as Record<string, unknown> : undefined;
-        throw new HttpProblem(error.status, typeof body?.code === "string" ? body.code : "tenant_resolution_failed", typeof body?.detail === "string" ? body.detail : "Manager tenant resolution failed", body?.errors);
-      }
+      if (error instanceof ManagerAuthError) throw managerAuthProblem(error, "tenant_resolution_failed", "Manager tenant resolution failed");
       if (error instanceof ManagerUnavailableError) throw new HttpProblem(503, "manager_unavailable", "Manager tenant resolution is unavailable");
       throw error;
     }
@@ -1983,10 +2008,7 @@ export class AgentHttpServer {
       if (typeof resolved !== "string" || !resolved.trim()) throw new ManagerUnavailableError("Manager returned an invalid tenant resolution");
       return resolved;
     } catch (error) {
-      if (error instanceof ManagerAuthError) {
-        const body = error.body && typeof error.body === "object" ? error.body as Record<string, unknown> : undefined;
-        throw new HttpProblem(error.status, typeof body?.code === "string" ? body.code : "tenant_resolution_failed", typeof body?.detail === "string" ? body.detail : "Manager tenant resolution failed", body?.errors);
-      }
+      if (error instanceof ManagerAuthError) throw managerAuthProblem(error, "tenant_resolution_failed", "Manager tenant resolution failed");
       if (error instanceof ManagerUnavailableError) throw new HttpProblem(503, "manager_unavailable", "Manager tenant resolution is unavailable");
       throw error;
     }
@@ -2003,10 +2025,7 @@ export class AgentHttpServer {
       await this.validateAuthTenant(payload, tenantId);
       this.writeJson(response, 200, payload);
     } catch (error) {
-      if (error instanceof ManagerAuthError) {
-        const body = error.body && typeof error.body === "object" ? error.body as Record<string, unknown> : undefined;
-        throw new HttpProblem(error.status, typeof body?.code === "string" ? body.code : "authentication_failed", typeof body?.detail === "string" ? body.detail : "Manager authentication failed", body?.errors);
-      }
+      if (error instanceof ManagerAuthError) throw managerAuthProblem(error, "authentication_failed", "Manager authentication failed");
       if (error instanceof ManagerUnavailableError) throw new HttpProblem(503, "manager_unavailable", "Manager authentication is unavailable");
       throw error;
     }
@@ -2027,10 +2046,7 @@ export class AgentHttpServer {
       await this.validateAuthTenant(payload, input.tenant_id);
       this.writeJson(response, 200, payload);
     } catch (error) {
-      if (error instanceof ManagerAuthError) {
-        const body = error.body && typeof error.body === "object" ? error.body as Record<string, unknown> : undefined;
-        throw new HttpProblem(error.status, typeof body?.code === "string" ? body.code : "password_reset_failed", typeof body?.detail === "string" ? body.detail : "Manager password reset failed", body?.errors);
-      }
+      if (error instanceof ManagerAuthError) throw managerAuthProblem(error, "password_reset_failed", "Manager password reset failed");
       if (error instanceof ManagerUnavailableError) throw new HttpProblem(503, "manager_unavailable", "Manager authentication is unavailable");
       throw error;
     }
@@ -3514,7 +3530,7 @@ export class AgentHttpServer {
 
   private writeError(response: ServerResponse, error: unknown, requestId: string): void {
     if (response.writableEnded) return;
-    let problem: { status: number; code: string; detail: string; errors?: unknown; meta?: Record<string, string | number | boolean | null> };
+    let problem: { status: number; code: string; detail: string; errors?: unknown; meta?: ProblemMeta };
     if (error instanceof AgentUpgradeRequiredError) problem = { status: 426, code: "agent_upgrade_required", detail: error.message };
     else if (error instanceof HttpProblem || error instanceof AutomationError) problem = { status: error.status, code: error.code, detail: error.message, errors: error instanceof HttpProblem ? error.errors : undefined, meta: error instanceof HttpProblem ? error.meta : undefined };
     else if (error instanceof IdempotencyConflictError) problem = { status: 409, code: "idempotency_conflict", detail: error.message };

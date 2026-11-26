@@ -12,7 +12,8 @@ import { useAgentAuthStore } from '../../stores/agentAuth'
 import { AgentApiError } from '../../api/agent'
 import { readAuthDiagnostics } from '../../lib/authDiagnostics'
 import { SessionPersistenceError } from '../../lib/authSession'
-import { loginUnavailableMessage } from '../../lib/loginServiceError'
+import { describeLoginApiFailure, tenantSelectionCandidates, type TenantCandidate } from '../../lib/loginFailure'
+import TenantPickerDialog from './TenantPickerDialog'
 import {
   deleteSavedLoginCredentials,
   listSavedLoginCredentialProfiles,
@@ -33,18 +34,7 @@ function describeLoginFailure(err: unknown, resettingPassword: boolean): string 
   if (err instanceof SessionPersistenceError) return err.message
   // 非 AgentApiError:通常是 fetch 层异常(相对路径 + tauri http、CORS、DNS、断网)。
   if (!(err instanceof AgentApiError)) return '网络异常,请检查连接或稍后重试'
-  const problemCode = err.problem?.code ?? err.code
-  const problemDetail = err.problem?.detail ?? ''
-  if (err.status === 401) return resettingPassword ? '当前密码不正确，请重新输入' : '企业标识、账号或密码错误，请重试'
-  if (err.status === 403) return '当前账号无法完成此操作，请联系管理员'
-  if (err.status === 404) return '账号不存在或所属企业未开通,请联系管理员'
-  if (err.status === 422 && problemCode === 'validation_error' && /password policy violation/i.test(problemDetail)) {
-    return '新密码不符合企业密码策略（长度、大小写字母、数字和符号）'
-  }
-  if (err.status === 422) return '提交的信息不符合要求，请检查后重试'
-  if (err.status === 503) return loginUnavailableMessage(problemDetail, problemCode, err.problem?.meta)
-  if (err.status >= 500) return '后端服务异常,请稍后重试'
-  return err.problem?.detail ?? err.message ?? '登录失败'
+  return describeLoginApiFailure(err, resettingPassword)
 }
 
 export default function Login() {
@@ -60,6 +50,8 @@ export default function Login() {
   const [showNewPassword, setShowNewPassword] = useState(false)
   const [showConfirmPassword, setShowConfirmPassword] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
+  // 账号属于多个企业时由用户选择；选中后用企业名重新登录，并按该企业保存登录信息。
+  const [tenantChoice, setTenantChoice] = useState<{ input: LoginInput; candidates: TenantCandidate[] } | null>(null)
   // 自动登录在内部页进行，失败后才来到这里，第一屏就要说明原因。
   const [error, setError] = useState<string | null>(() => {
     const failure = useAgentAuthStore.getState().autoLoginFailure
@@ -183,8 +175,26 @@ export default function Login() {
       navigate('/chat')
     } catch (err) {
       setIsLoading(false)
+      const candidates = !pendingPasswordReset && err instanceof AgentApiError ? tenantSelectionCandidates(err) : []
+      if (candidates.length > 0) {
+        setTenantChoice({ input, candidates })
+        return
+      }
       setError(describeLoginFailure(err, Boolean(pendingPasswordReset)))
     }
+  }
+
+  const handlePickTenant = (candidate: TenantCandidate) => {
+    const pending = tenantChoice
+    setTenantChoice(null)
+    if (!pending) return
+    setEnterprise(candidate.enterprise_name)
+    void runLogin({ ...pending.input, enterprise: candidate.enterprise_name })
+  }
+
+  const handleCancelTenantPick = () => {
+    setTenantChoice(null)
+    setError('该账号属于多个企业，请在「企业标识」中填写要登录的企业')
   }
 
   const handleCancelPasswordReset = () => {
@@ -463,6 +473,14 @@ export default function Login() {
           </button>
         )}
       </form>
+      {tenantChoice && (
+        <TenantPickerDialog
+          account={tenantChoice.input.account.trim()}
+          candidates={tenantChoice.candidates}
+          onPick={handlePickTenant}
+          onCancel={handleCancelTenantPick}
+        />
+      )}
     </div>
   )
 }

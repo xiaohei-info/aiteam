@@ -19,6 +19,8 @@ logger = logging.getLogger(__name__)
 
 ACTIVE = "active"
 STATUSES = ("active", "suspended", "banned", "closed", "deleted")
+# 注销 / 删除的企业：登录身份归档，不再参与「按账号解析企业」。暂停 / 封禁可恢复且需要明确提示，不归档。
+IDENTITY_ARCHIVED_STATUSES = frozenset({"closed", "deleted"})
 _CODES = {
     "suspended": "tenant_suspended", "banned": "tenant_banned",
     "closed": "tenant_closed", "deleted": "tenant_deleted",
@@ -120,14 +122,27 @@ class TenantStatusStore:
             ).fetchone()
 
     def set_status(self, tenant_id: str, status: str, reason: str | None) -> bool:
+        """写状态，并在同一事务内归档 / 取消归档该企业的登录身份（见 IDENTITY_ARCHIVED_STATUSES）。"""
         import psycopg
 
-        with psycopg.connect(self._dsn, autocommit=True) as conn:
+        with psycopg.connect(self._dsn) as conn:
             cur = conn.execute(
                 "UPDATE tenant_registry SET status = %s, status_reason = %s, status_changed_at = now() "
                 "WHERE tenant_id = %s", (status, reason, tenant_id),
             )
             changed = cur.rowcount > 0
+            if changed:
+                conn.execute("SELECT set_config('app.tenant_id', %s, true)", (tenant_id,))
+                if status in IDENTITY_ARCHIVED_STATUSES:
+                    conn.execute(
+                        "UPDATE auth_identity SET archived_at = now() "
+                        "WHERE tenant_id = %s::uuid AND archived_at IS NULL", (tenant_id,),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE auth_identity SET archived_at = NULL "
+                        "WHERE tenant_id = %s::uuid AND archived_at IS NOT NULL", (tenant_id,),
+                    )
         self.invalidate(tenant_id)
         return changed
 

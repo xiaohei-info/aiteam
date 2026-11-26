@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -24,10 +26,12 @@ class AppError(Exception):
     code: str = "internal_error"
     title: str = "Internal Server Error"
 
-    def __init__(self, detail: str | None = None, *, errors: list[ProblemFieldError] | None = None):
+    def __init__(self, detail: str | None = None, *, errors: list[ProblemFieldError] | None = None,
+                 meta: dict[str, Any] | None = None):
         super().__init__(detail or self.title)
         self.detail = detail
         self.errors = errors
+        self.meta = meta
 
 
 class Unauthorized(AppError):
@@ -75,7 +79,7 @@ class ServiceUnavailable(AppError):
 
 def _to_problem(*, status: int, code: str, title: str, detail: str | None,
                 instance: str | None, request_id: str | None,
-                errors: list[ProblemFieldError] | None) -> Problem:
+                errors: list[ProblemFieldError] | None, meta: dict[str, Any] | None = None) -> Problem:
     return Problem(
         type=f"{_PROBLEM_BASE}{code}",
         title=title,
@@ -85,6 +89,7 @@ def _to_problem(*, status: int, code: str, title: str, detail: str | None,
         instance=instance,
         request_id=request_id,
         errors=errors,
+        meta=meta,
     )
 
 
@@ -100,7 +105,7 @@ def problem_response(exc: AppError, *, instance: str | None, request_id: str | N
     """在异常处理器之外（如 ASGI 中间件）生成与 handler 同形的 problem+json 响应。"""
     return _response(_to_problem(
         status=exc.status, code=exc.code, title=exc.title, detail=exc.detail,
-        instance=instance, request_id=request_id, errors=exc.errors,
+        instance=instance, request_id=request_id, errors=exc.errors, meta=getattr(exc, "meta", None),
     ))
 
 

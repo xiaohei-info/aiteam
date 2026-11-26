@@ -64,7 +64,12 @@ class TooManyAttempts(TooManyRequests):
 
 
 class TenantSelectionRequired(Conflict):
+    """账号命中多个企业。`meta.candidates` 列出可选企业（tenant_id + 企业名），供登录页让用户选择。"""
+
     code, title = "tenant_selection_required", "Tenant Selection Required"
+
+    def __init__(self, detail: str | None = None, *, candidates: list[dict[str, str]] | None = None):
+        super().__init__(detail, meta={"candidates": candidates} if candidates else None)
 
 
 class EnterpriseAmbiguous(Conflict):
@@ -384,64 +389,70 @@ class AuthService:
         return self._keys.jwks(tenant_id)
 
     def resolve_tenant(self, enterprise: str) -> str:
-        """企业代码/名称 → tenant_id。代码精确匹配优先；slug 收集全部匹配，歧义 409。"""
+        """企业代码/名称 → tenant_id。代码精确匹配优先（重名时只看 active 企业）；slug 唯一。"""
         import psycopg
 
         value = (enterprise or "").strip()
         if not value:
             raise ValidationProblem("enterprise is required")
         with psycopg.connect(self._admin_dsn, autocommit=True) as conn:
-            code_rows = conn.execute(
-                "SELECT tenant_id FROM tenant_registry WHERE enterprise_code = %s",
-                (value,),
-            ).fetchall()
-            code_ids = list({str(row[0]) for row in code_rows})
-            if len(code_ids) == 1:
-                return code_ids[0]
-            if len(code_ids) > 1:
-                raise EnterpriseAmbiguous(f"enterprise identifier is ambiguous: {value}")
-            slug_rows = conn.execute(
-                "SELECT tenant_id FROM tenant_registry WHERE enterprise_slug = %s",
-                (value,),
-            ).fetchall()
-            slug_ids = list({str(row[0]) for row in slug_rows})
-            if len(slug_ids) == 1:
-                return slug_ids[0]
-            if len(slug_ids) > 1:
-                raise EnterpriseAmbiguous(f"enterprise identifier is ambiguous: {value}")
+            for column in ("enterprise_code", "enterprise_slug"):
+                rows = conn.execute(
+                    f"SELECT tenant_id, status FROM tenant_registry WHERE {column} = %s",  # noqa: S608 - 固定列名
+                    (value,),
+                ).fetchall()
+                tenant_id = _single_preferring_active({str(r[0]): r[1] for r in rows})
+                if tenant_id is not None:
+                    return tenant_id
+                if rows:
+                    raise EnterpriseAmbiguous(f"enterprise identifier is ambiguous: {value}")
         raise NotFound(f"enterprise not found: {value}")
 
     def resolve_tenant_by_account(self, account: str, enterprise: str | None = None) -> str:
-        """Resolve an account to one tenant; optional enterprise disambiguates duplicates."""
+        """账号 → 唯一 tenant。已归档身份（企业注销 / 删除）不参与；命中多个企业时优先 active，
+        仍有多个则 409 并在 meta.candidates 给出候选企业。可选 enterprise 用于消歧。"""
         import psycopg
 
         scoped = None
         if enterprise and enterprise.strip():
             scoped = self.resolve_tenant(enterprise.strip())
+        query = (
+            "SELECT DISTINCT ai.tenant_id, tr.status, tr.enterprise_slug FROM auth_identity ai "
+            "JOIN tenant_registry tr ON tr.tenant_id = ai.tenant_id "
+            "WHERE ai.provider IN ('phone', 'password') AND ai.external_id = %s AND ai.archived_at IS NULL"
+        )
+        params: tuple = (account,)
+        if scoped is not None:
+            query += " AND ai.tenant_id = %s"
+            params = (account, scoped)
         with psycopg.connect(self._admin_dsn, autocommit=True) as conn:
-            if scoped is None:
-                rows = conn.execute(
-                    "SELECT tenant_id FROM auth_identity "
-                    "WHERE provider IN ('phone', 'password') AND external_id = %s "
-                    "ORDER BY provider = 'phone' DESC, created_at DESC",
-                    (account,),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    "SELECT tenant_id FROM auth_identity "
-                    "WHERE tenant_id = %s AND provider IN ('phone', 'password') AND external_id = %s "
-                    "ORDER BY provider = 'phone' DESC, created_at DESC",
-                    (scoped, account),
-                ).fetchall()
+            rows = conn.execute(query, params).fetchall()
         if not rows:
             raise NotFound(f"account not bound to any tenant: {account}")
-        tenant_ids = list({str(r[0]) for r in rows})
-        if len(tenant_ids) > 1:
-            raise TenantSelectionRequired(
-                f"account belongs to multiple tenants, enterprise must be specified: {account}"
-            )
-        return tenant_ids[0]
+        tenants = {str(r[0]): (r[1], r[2]) for r in rows}
+        tenant_id = _single_preferring_active({tid: status for tid, (status, _) in tenants.items()})
+        if tenant_id is not None:
+            return tenant_id
+        pool = _prefer_active({tid: status for tid, (status, _) in tenants.items()})
+        candidates = sorted(
+            ({"tenant_id": tid, "enterprise_name": tenants[tid][1]} for tid in pool),
+            key=lambda c: c["enterprise_name"],
+        )
+        raise TenantSelectionRequired(
+            f"account belongs to multiple tenants, enterprise must be specified: {account}",
+            candidates=candidates,
+        )
 
+
+def _prefer_active(statuses: dict[str, str]) -> list[str]:
+    """有 active 企业时只留 active；否则原样保留（让登录给出“企业已暂停/封禁”等明确提示）。"""
+    active = [tid for tid, status in statuses.items() if status == "active"]
+    return active or list(statuses)
+
+
+def _single_preferring_active(statuses: dict[str, str]) -> str | None:
+    pool = _prefer_active(statuses)
+    return pool[0] if len(pool) == 1 else None
 
 
 def record_attempt(audit, ctx, *, provider, external_id, actor, success, detail):

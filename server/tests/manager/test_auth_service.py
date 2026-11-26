@@ -249,7 +249,7 @@ def test_resolve_tenant_blank_enterprise_is_validation_problem(enterprise):
 @patch("psycopg.connect")
 def test_resolve_tenant_unique_code_skips_slug_lookup(mock_connect):
     conn = MagicMock()
-    conn.execute.return_value.fetchall.return_value = [("t-code",)]
+    conn.execute.return_value.fetchall.return_value = [("t-code", "active")]
     mock_connect.return_value.__enter__.return_value = conn
     assert _svc().resolve_tenant("acme") == "t-code"
     assert conn.execute.call_count == 1
@@ -259,7 +259,7 @@ def test_resolve_tenant_unique_code_skips_slug_lookup(mock_connect):
 @patch("psycopg.connect")
 def test_resolve_tenant_duplicate_code_rows_same_tenant_are_unique(mock_connect):
     conn = MagicMock()
-    conn.execute.return_value.fetchall.return_value = [("t-1",), ("t-1",)]
+    conn.execute.return_value.fetchall.return_value = [("t-1", "active"), ("t-1", "active")]
     mock_connect.return_value.__enter__.return_value = conn
     assert _svc().resolve_tenant("acme") == "t-1"
     assert conn.execute.call_count == 1
@@ -268,7 +268,7 @@ def test_resolve_tenant_duplicate_code_rows_same_tenant_are_unique(mock_connect)
 @patch("psycopg.connect")
 def test_resolve_tenant_code_collision_is_enterprise_ambiguous(mock_connect):
     conn = MagicMock()
-    conn.execute.return_value.fetchall.return_value = [("t-1",), ("t-2",)]
+    conn.execute.return_value.fetchall.return_value = [("t-1", "active"), ("t-2", "active")]
     mock_connect.return_value.__enter__.return_value = conn
     with pytest.raises(EnterpriseAmbiguous) as exc:
         _svc().resolve_tenant("dup-code")
@@ -281,7 +281,7 @@ def test_resolve_tenant_code_collision_is_enterprise_ambiguous(mock_connect):
 @patch("psycopg.connect")
 def test_resolve_tenant_unique_slug_after_no_code(mock_connect):
     conn = MagicMock()
-    conn.execute.return_value.fetchall.side_effect = [[], [("t-slug",)]]
+    conn.execute.return_value.fetchall.side_effect = [[], [("t-slug", "active")]]
     mock_connect.return_value.__enter__.return_value = conn
     assert _svc().resolve_tenant("acme") == "t-slug"
     assert conn.execute.call_count == 2
@@ -290,7 +290,7 @@ def test_resolve_tenant_unique_slug_after_no_code(mock_connect):
 @patch("psycopg.connect")
 def test_resolve_tenant_slug_collision_is_enterprise_ambiguous(mock_connect):
     conn = MagicMock()
-    conn.execute.return_value.fetchall.side_effect = [[], [("t-1",), ("t-2",)]]
+    conn.execute.return_value.fetchall.side_effect = [[], [("t-1", "active"), ("t-2", "active")]]
     mock_connect.return_value.__enter__.return_value = conn
     with pytest.raises(EnterpriseAmbiguous) as exc:
         _svc().resolve_tenant("dup-slug")
@@ -310,7 +310,7 @@ def test_resolve_tenant_unknown_enterprise_is_not_found(mock_connect):
 @patch("psycopg.connect")
 def test_resolve_tenant_by_account_duplicate_is_tenant_selection_required(mock_connect):
     conn = MagicMock()
-    conn.execute.return_value.fetchall.return_value = [("t-1",), ("t-2",)]
+    conn.execute.return_value.fetchall.return_value = [("t-1", "active", "a"), ("t-2", "active", "b")]
     mock_connect.return_value.__enter__.return_value = conn
     with pytest.raises(TenantSelectionRequired) as exc:
         _svc().resolve_tenant_by_account("13800000000")
