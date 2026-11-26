@@ -81,7 +81,7 @@ test('active logout clears only the current saved credential and auto-login pref
 
     assert.equal(f.storage.get(AUTO_LOGIN_STORAGE_KEY), undefined)
     const activeDelete = f.credentialCalls.find(item => item.command === 'secure_login_credentials_delete')
-    assert.deepEqual(activeDelete?.args, { enterprise: 'acme', account: 'A' })
+    assert.deepEqual(activeDelete?.args, { enterprise: 'acme', account: 'A', exact: true })
 
     await f.store.getState().setSession(session('B', 'beta'))
     writeAutoLoginPreference(true)
@@ -91,6 +91,18 @@ test('active logout clears only the current saved credential and auto-login pref
 
     assert.equal(f.storage.get(AUTO_LOGIN_STORAGE_KEY), 'true')
     assert.equal(f.credentialCalls.some(item => item.command === 'secure_login_credentials_delete'), false)
+  } finally { f.close() }
+})
+
+test('logging out of an enterprise picked from the dialog deletes only that saved record, not the account everywhere', async () => {
+  const f = await fixture()
+  try {
+    // 弹窗选企业登录时保存的企业标识为空串；退出必须精确删 ("", account)，不能按账号删全部企业。
+    await f.store.getState().setSession(session('multi', ''))
+    f.credentialCalls.length = 0
+    await f.store.getState().logout()
+    const activeDelete = f.credentialCalls.find(item => item.command === 'secure_login_credentials_delete')
+    assert.deepEqual(activeDelete?.args, { enterprise: null, account: 'multi', exact: true })
   } finally { f.close() }
 })
 

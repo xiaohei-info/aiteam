@@ -24,6 +24,7 @@ import {
   resolveAuthenticatedTenantId,
 } from '../lib/authSession'
 import { deleteSavedLoginCredentials, readSavedLoginCredentials } from '../lib/loginCredentials'
+import { isEnterpriseLoginFailure } from '../lib/loginFailure'
 
 // 旧版 WebView 持久化 key,只用于一次性迁移和清理,禁止再写入。
 const LEGACY_STORAGE_KEY = 'aifred.agent-auth.v1'
@@ -225,7 +226,8 @@ async function attemptPendingAutoLogin(): Promise<void> {
     // 带上次实际登录的企业；没有时（旧记录）按企业标识或账号密码匹配。
     await store.getState().login(saved.enterprise, saved.account, saved.password, saved.tenantId)
   } catch (error) {
-    store.setState({ autoLoginFailure: error, autoLoginTenantRejected: Boolean(saved?.tenantId) })
+    // 只有企业本身的原因（停用、需重新选择）才提示重新选企业；网络抖动、503、密码错误保留原提示。
+    store.setState({ autoLoginFailure: error, autoLoginTenantRejected: Boolean(saved?.tenantId) && isEnterpriseLoginFailure(error) })
   } finally {
     store.setState({ isConnecting: false, connectingAccount: null })
   }

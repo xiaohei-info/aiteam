@@ -131,7 +131,7 @@ test('auto login: the enterprise picked last time is used directly, so a multi-e
 test('auto login: when the saved enterprise is unavailable the login page asks to pick again', async () => {
   const f = await launch({ saved: JSON.stringify({ enterprise: '', account: 'saved', password: 'pw', tenantId: 'gone-tenant' }) })
   try {
-    const failure = Object.assign(new Error('tenant closed'), { status: 403 })
+    const failure = Object.assign(new Error('tenant closed'), { status: 403, code: 'tenant_closed' })
     f.adapter.login = async (body: any) => { f.logins.push(body); throw failure }
     await f.store.getState().restoreSession()
     await f.store.getState().runPendingAutoLogin()
@@ -143,6 +143,18 @@ test('auto login: when the saved enterprise is unavailable the login page asks t
     f.adapter.login = async (body: any) => { f.logins.push(body); return { token: body.account, claims: claims(body.account) } }
     await f.store.getState().login('', 'saved', 'pw')
     assert.deepEqual(f.logins.at(-1), { account: 'saved', password: 'pw' })
+    assert.equal(f.store.getState().autoLoginTenantRejected, false)
+  } finally { f.close() }
+})
+
+test('auto login: a network or server failure with a saved enterprise keeps the original reason', async () => {
+  const f = await launch({ saved: JSON.stringify({ enterprise: '', account: 'saved', password: 'pw', tenantId: 'tenant' }) })
+  try {
+    const failure = Object.assign(new Error('unavailable'), { status: 503, code: 'service_unavailable' })
+    f.adapter.login = async () => { throw failure }
+    await f.store.getState().restoreSession()
+    await f.store.getState().runPendingAutoLogin()
+    assert.equal(f.store.getState().autoLoginFailure, failure)
     assert.equal(f.store.getState().autoLoginTenantRejected, false)
   } finally { f.close() }
 })

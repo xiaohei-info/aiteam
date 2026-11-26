@@ -138,6 +138,8 @@ export async function deleteSavedLoginCredentials(
   const account = filter?.account?.trim() || null
   await invalidateSecureCredential(
     () => invoke<void>('secure_login_credentials_write', { credentials: '' }),
-    () => invoke<void>('secure_login_credentials_delete', { enterprise, account }),
+    // 给了账号就精确删 (企业标识, 账号) 这一条：企业标识为空（弹窗选企业登录）时也只删这条，
+    // 不能落到「按账号删全部企业」，否则会把该账号在其他企业下记住的密码一起删掉。
+    () => invoke<void>('secure_login_credentials_delete', { enterprise, account, exact: Boolean(account) }),
   )
 }

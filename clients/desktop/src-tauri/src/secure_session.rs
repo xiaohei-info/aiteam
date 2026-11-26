@@ -739,10 +739,14 @@ pub fn credentials_write_in_dir(vault_dir: &Path, credentials: &str) -> Result<(
     write_json_file(&vault_path, &vault)
 }
 
+/// `exact`：按 `(enterprise, account)` 精确删除一条，企业标识为空也只删 `("", account)` 那条。
+/// 退出登录、取消「记住密码」都走精确删除：多企业账号从弹窗选企业登录时保存的企业标识是空串，
+/// 若按「只给了账号」处理会把该账号在所有企业下记住的密码一起删掉。
 pub fn credentials_delete_in_dir(
     vault_dir: &Path,
     enterprise: Option<&str>,
     account: Option<&str>,
+    exact: bool,
 ) -> Result<(), String> {
     let _guard = VAULT_LOCK
         .lock()
@@ -757,7 +761,7 @@ pub fn credentials_delete_in_dir(
     let filter_enterprise = enterprise.map(str::trim).unwrap_or("");
     let filter_account = account.map(str::trim).unwrap_or("");
 
-    if !filter_enterprise.is_empty() && !filter_account.is_empty() {
+    if !filter_account.is_empty() && (exact || !filter_enterprise.is_empty()) {
         let key = build_identity_key(filter_enterprise, filter_account);
         vault.entries.remove(&key);
         if vault.last_active_key.as_deref() == Some(key.as_str()) {
@@ -884,9 +888,15 @@ pub fn secure_login_credentials_delete(
     app: tauri::AppHandle,
     enterprise: Option<String>,
     account: Option<String>,
+    exact: Option<bool>,
 ) -> Result<(), String> {
     let vault_dir = resolve_vault_dir(&app)?;
-    credentials_delete_in_dir(&vault_dir, enterprise.as_deref(), account.as_deref())
+    credentials_delete_in_dir(
+        &vault_dir,
+        enterprise.as_deref(),
+        account.as_deref(),
+        exact.unwrap_or(false),
+    )
 }
 
 #[tauri::command]
@@ -1065,7 +1075,7 @@ mod tests {
         );
 
         // Deleting one specific (enterprise, account) preserves the others.
-        credentials_delete_in_dir(&vault_dir, Some("acme"), Some("alice@acme.com"))
+        credentials_delete_in_dir(&vault_dir, Some("acme"), Some("alice@acme.com"), false)
             .expect("delete alice");
         assert_eq!(
             credentials_read_in_dir(&vault_dir, Some("acme"), Some("alice@acme.com"))
@@ -1081,6 +1091,36 @@ mod tests {
 
         let profiles = credentials_list_in_dir(&vault_dir).expect("list profiles");
         assert_eq!(profiles.len(), 2);
+
+        let _ = fs::remove_dir_all(&vault_dir);
+    }
+
+    #[test]
+    fn exact_delete_with_empty_enterprise_keeps_the_same_account_in_other_enterprises() {
+        let vault_dir = temp_vault_dir();
+        let with_code = r#"{"enterprise":"acme","account":"multi","password":"a"}"#;
+        let picked = r#"{"enterprise":"","account":"multi","password":"b","tenantId":"t-b"}"#;
+        credentials_write_in_dir(&vault_dir, with_code).expect("write acme");
+        credentials_write_in_dir(&vault_dir, picked).expect("write picked");
+
+        // 从弹窗选的企业退出：只删 ("", multi)，用企业标识 acme 记住的那条保留。
+        credentials_delete_in_dir(&vault_dir, None, Some("multi"), true).expect("exact delete");
+        let profiles = credentials_list_in_dir(&vault_dir).expect("list");
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].enterprise, "acme");
+        assert_eq!(
+            credentials_read_in_dir(&vault_dir, Some("acme"), Some("multi"))
+                .expect("read acme")
+                .as_deref(),
+            Some(with_code)
+        );
+
+        // 非精确的「只给账号」仍按账号清空（保留给明确清空该账号的调用方）。
+        credentials_write_in_dir(&vault_dir, picked).expect("write picked again");
+        credentials_delete_in_dir(&vault_dir, None, Some("multi"), false).expect("account delete");
+        assert!(credentials_list_in_dir(&vault_dir)
+            .expect("list")
+            .is_empty());
 
         let _ = fs::remove_dir_all(&vault_dir);
     }

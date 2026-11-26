@@ -31,6 +31,16 @@ export function tenantCandidateLabel(candidate: TenantCandidate): string {
 
 const TENANT_STATUS_CODES = new Set(['tenant_suspended', 'tenant_banned', 'tenant_closed', 'tenant_deleted', 'tenant_unavailable', 'no_active_enterprise'])
 
+/** 自动登录失败是否因为企业本身（停用、需重新选择等），而不是网络、服务异常或密码错误。 */
+export function isEnterpriseLoginFailure(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false
+  const value = err as { code?: unknown; problem?: { code?: unknown } }
+  const code = value.problem?.code ?? value.code
+  return typeof code === 'string' && (ENTERPRISE_FAILURE_CODES.has(code) || TENANT_STATUS_CODES.has(code))
+}
+
+const ENTERPRISE_FAILURE_CODES = new Set(['tenant_selection_required', 'tenant_not_found', 'no_active_enterprise'])
+
 /** `tenant_selection_required` 携带的候选企业（只含密码通过的企业）；没有或格式不对时返回空数组。 */
 export function tenantSelectionCandidates(err: LoginApiFailure): TenantCandidate[] {
   const code = err.problem?.code ?? err.code
