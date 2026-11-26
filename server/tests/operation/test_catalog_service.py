@@ -10,14 +10,17 @@ import pytest
 
 from operation_service.catalog_scope import VisibleScope
 
+from io import BytesIO
+
+from PIL import Image
+
 from operation_service.catalog_avatar import (
-    AVATAR_MAX_BYTES,
-    AVATAR_MAX_DATA_URL_LENGTH,
-    canonical_avatar_data_url,
-    normalize_avatar_for_service,
-    safe_avatar_for_response,
+    KEEP_AVATAR,
+    parse_avatar_upload,
     validate_avatar_value,
 )
+from operation_service.template_avatar_store import TemplateAvatarStore
+from shared.avatar_image import MAX_AVATAR_BYTES
 from operation_service.catalog_gateway import CatalogManagerGateway
 from operation_service.catalog_repository import CatalogEntry, CatalogRepository
 from operation_service.catalog_schemas import (
@@ -54,13 +57,14 @@ def manager():
 
 
 @pytest.fixture
-def service(manager):
+def service(manager, tmp_path):
     class PlatformSkillStore:
         def get_package(self, *, skill_id, version, published_only=False):
             return {"content_hash": "abc123"}
     return CatalogService(
         CatalogRepository(), manager,
         platform_skills=PlatformSkillStore(), platform_providers=PlatformProviderStore(),
+        avatars=TemplateAvatarStore(tmp_path),
     )
 
 
@@ -69,7 +73,7 @@ def _expert(**kw):
         template_id="tpl-cmo",
         display_name="CMO",
         category="marketing",
-        avatar_url="https://example.com/cmo.png",
+        avatar_url="",
         system_prompt="market lead",
        
         platform_skill_refs=[],
@@ -110,72 +114,105 @@ def _multi_solution(**kw):
 
 # ---- 注册（草稿态，不通知 Manager）----
 
-@pytest.mark.parametrize("mime, data", [
-    ("image/jpeg", b"\xff\xd8\xff\x00"),
-    ("image/gif", b"GIF89a\x00"),
-    ("image/webp", b"RIFF\x00\x00\x00\x00WEBP"),
-])
-def test_avatar_signature_variants_are_accepted(mime, data):
-    value = f"data:{mime};base64,{base64.b64encode(data).decode()}"
-    assert canonical_avatar_data_url(value) == value
+def _image_data_url(fmt: str = "PNG", color=(200, 30, 30), size=(8, 8), frames: int = 1) -> str:
+    out = BytesIO()
+    images = [Image.new("RGB", size, (color[0], color[1], (color[2] + i * 60) % 256)) for i in range(frames)]
+    images[0].save(out, format=fmt, save_all=frames > 1, append_images=images[1:])
+    mime = {"PNG": "image/png", "JPEG": "image/jpeg", "GIF": "image/gif", "WEBP": "image/webp"}[fmt]
+    return f"data:{mime};base64,{base64.b64encode(out.getvalue()).decode()}"
 
 
-def test_avatar_validation_rejects_empty_noncanonical_and_unsupported_values():
-    with pytest.raises(ValueError, match="too large"):
-        canonical_avatar_data_url("data:image/png;base64," + "A" * AVATAR_MAX_DATA_URL_LENGTH)
-    with pytest.raises(ValueError, match="empty"):
-        canonical_avatar_data_url("data:image/png;base64,")
-    with pytest.raises(ValueError, match="canonical"):
-        canonical_avatar_data_url("data:image/png;base64,iVBORw0KGgo")
-    with pytest.raises(ValueError, match="MIME"):
-        canonical_avatar_data_url("data:image/png;base64,R0lGODlh")
-    with pytest.raises(ValueError, match="legacy"):
-        validate_avatar_value("javascript:alert(1)")
+def test_avatar_request_values():
+    assert validate_avatar_value("") == ""
+    path = "/api/operation/catalog/expert-templates/tpl-cmo/avatar/content?v=3"
+    assert validate_avatar_value(path) == path
+    assert parse_avatar_upload(path) is KEEP_AVATAR
+    assert parse_avatar_upload("") is None
+    for bad in ("javascript:alert(1)", "https://cdn.example/a.png", "/etc/passwd", "data:image/png;base64,/9j/"):
+        with pytest.raises(ValueError):
+            validate_avatar_value(bad)
     with pytest.raises(ValidationProblem, match="string"):
-        normalize_avatar_for_service(None)
-    assert safe_avatar_for_response("data:image/png;base64,AAAA") == ""
-    assert safe_avatar_for_response("https://legacy.example/avatar.png") == "https://legacy.example/avatar.png"
+        parse_avatar_upload(None)
 
 
-def test_register_expert_accepts_valid_local_avatar_data(service):
-    avatar = "data:image/png;base64,iVBORw0KGgo="
-    entry = service.register_expert_template(_expert(avatar_url=avatar))
-    assert entry.avatar_url == avatar
+@pytest.mark.parametrize("fmt", ["PNG", "JPEG", "GIF", "WEBP"])
+def test_register_stores_avatar_file_not_bytes_in_payload(service, tmp_path, fmt):
+    entry = service.register_expert_template(_expert(avatar_url=_image_data_url(fmt)))
+    assert entry.avatar_version == 1
+    assert entry.avatar_url == "/api/operation/catalog/expert-templates/tpl-cmo/avatar/content?v=1"
     stored = service._repo.get(CatalogType.EXPERT_TEMPLATE, "tpl-cmo")
-    assert stored.payload["avatar_url"] == avatar
+    assert "avatar_url" not in stored.payload
+    assert stored.payload["avatar_version"] == 1 and len(stored.payload["avatar_sha256"]) == 64
+    data = (tmp_path / "template-avatars" / "tpl-cmo.webp").read_bytes()
+    assert data[:4] == b"RIFF" and data[8:12] == b"WEBP"
 
 
-def test_register_expert_rejects_invalid_local_avatar_data(service):
+def test_gif_avatar_keeps_first_frame_only(service, tmp_path):
+    service.register_expert_template(_expert(avatar_url=_image_data_url("GIF", frames=3)))
+    with Image.open(tmp_path / "template-avatars" / "tpl-cmo.webp") as image:
+        assert getattr(image, "n_frames", 1) == 1
+
+
+def test_avatar_is_downscaled(service, tmp_path):
+    service.register_expert_template(_expert(avatar_url=_image_data_url(size=(1200, 800))))
+    with Image.open(tmp_path / "template-avatars" / "tpl-cmo.webp") as image:
+        assert max(image.size) == 512
+
+
+def test_register_rejects_undecodable_and_oversized_avatar():
     with pytest.raises(ValueError, match="avatar"):
         _expert(avatar_url="data:image/png;base64,not-base64")
-
-
-def test_register_expert_rejects_oversized_local_avatar_data(service):
     signature = b"\x89PNG\r\n\x1a\n"
-    raw = signature + b"x" * (AVATAR_MAX_BYTES - len(signature) + 1)
-    encoded = base64.b64encode(raw).decode("ascii")
-    with pytest.raises(ValueError, match="too large"):
-        _expert(avatar_url=f"data:image/png;base64,{encoded}")
+    raw = signature + b"x" * (MAX_AVATAR_BYTES - len(signature) + 1)
+    with pytest.raises(ValueError, match="5 MB"):
+        _expert(avatar_url=f"data:image/png;base64,{base64.b64encode(raw).decode()}")
 
 
-def test_response_omits_invalid_inline_avatar_from_legacy_row(service):
-    service._repo.create(
-        CatalogEntry(
-            catalog_type=CatalogType.EXPERT_TEMPLATE,
-            template_id="legacy-avatar",
-            version="1",
-            display_name="Legacy",
-            payload={"avatar_url": "data:image/png;base64,AAAA"},
-        )
-    )
-    assert service.get_entry(CatalogType.EXPERT_TEMPLATE, "legacy-avatar").avatar_url == ""
+def test_register_rejects_signature_valid_but_corrupt_image(service):
+    corrupt = "data:image/png;base64," + base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 32).decode()
+    with pytest.raises(ValidationProblem, match="decoded"):
+        service.register_expert_template(_expert(avatar_url=corrupt))
 
 
-def test_update_expert_validates_and_persists_avatar(service):
-    service.register_expert_template(_expert())
-    avatar = "data:image/png;base64,iVBORw0KGgo="
-    updated = service.update_entry(CatalogType.EXPERT_TEMPLATE, "tpl-cmo", {"avatar_url": avatar})
-    assert updated.avatar_url == avatar
+def test_update_avatar_bumps_version_only_on_new_content(service, tmp_path):
+    service.register_expert_template(_expert(avatar_url=_image_data_url(color=(1, 2, 3))))
+    same = service.update_entry(CatalogType.EXPERT_TEMPLATE, "tpl-cmo", {"avatar_url": _image_data_url(color=(1, 2, 3))})
+    assert same.avatar_version == 1
+    echoed = service.update_entry(CatalogType.EXPERT_TEMPLATE, "tpl-cmo", {"avatar_url": same.avatar_url, "display_name": "CMO2"})
+    assert echoed.avatar_version == 1 and echoed.display_name == "CMO2"
+    changed = service.update_entry(CatalogType.EXPERT_TEMPLATE, "tpl-cmo", {"avatar_url": _image_data_url(color=(250, 2, 3))})
+    assert changed.avatar_version == 2
+    assert changed.avatar_url.endswith("?v=2")
+    data, version, sha = service.read_template_avatar("tpl-cmo")
+    assert version == 2 and data[:4] == b"RIFF" and len(sha) == 64
+
+
+def test_update_empty_avatar_removes_file(service, tmp_path):
+    service.register_expert_template(_expert(avatar_url=_image_data_url()))
+    cleared = service.update_entry(CatalogType.EXPERT_TEMPLATE, "tpl-cmo", {"avatar_url": ""})
+    assert cleared.avatar_url == "" and cleared.avatar_version is None
+    assert not (tmp_path / "template-avatars" / "tpl-cmo.webp").exists()
+    with pytest.raises(NotFound):
+        service.read_template_avatar("tpl-cmo")
+
+
+def test_pull_avatar_requires_published_and_visible(service):
+    service.register_expert_template(_expert(avatar_url=_image_data_url()))
+    with pytest.raises(NotFound, match="not published"):
+        service.read_template_avatar("tpl-cmo", tenant_id="t-1")
+    service.publish_template(CatalogType.EXPERT_TEMPLATE, "tpl-cmo", PublishTemplateRequest())
+    data, version, _ = service.read_template_avatar("tpl-cmo", tenant_id="t-1")
+    assert version == 1 and data
+    detail = service.pull_expert_template_detail(template_id="tpl-cmo", tenant_id="t-1")
+    assert detail.avatar_version == 1
+    assert detail.avatar_url == "/api/operation/catalog/pull/expert-templates/tpl-cmo/avatar/content?v=1"
+
+
+def test_upload_without_storage_is_unavailable(manager):
+    from shared.errors import ServiceUnavailable
+    svc = CatalogService(CatalogRepository(), manager)
+    with pytest.raises(ServiceUnavailable):
+        svc.register_expert_template(_expert(avatar_url=_image_data_url()))
 
 
 
@@ -431,7 +468,7 @@ def test_register_expert_stores_minimal_fields_and_pinned_skills(service):
     ref = {"skill_id": "00000000-0000-0000-0000-000000000101", "version": "1.0.0", "content_hash": "abc123"}
     req = _expert(
         category="marketing",
-        avatar_url="https://example.com/avatar.png",
+        avatar_url="",
         system_prompt="You are CMO",
         platform_skill_refs=[ref],
         description="营销高管",
@@ -439,7 +476,7 @@ def test_register_expert_stores_minimal_fields_and_pinned_skills(service):
     service.register_expert_template(req)
     entry = service._repo.get(CatalogType.EXPERT_TEMPLATE, "tpl-cmo")
     assert entry.payload["category"] == "marketing"
-    assert entry.payload["avatar_url"] == "https://example.com/avatar.png"
+    assert "avatar_version" not in entry.payload
     assert entry.payload["system_prompt"] == "You are CMO"
     assert "platform_model_ref" not in entry.payload
     assert entry.payload["skill_ids"] == []
@@ -454,7 +491,7 @@ def test_register_expert_default_fields(service):
     service.register_expert_template(_expert())
     entry = service._repo.get(CatalogType.EXPERT_TEMPLATE, "tpl-cmo")
     assert entry.payload["category"] == "marketing"
-    assert entry.payload["avatar_url"] == "https://example.com/cmo.png"
+    assert "avatar_version" not in entry.payload
     assert entry.payload["system_prompt"] == "market lead"
     assert "platform_model_ref" not in entry.payload
     assert entry.payload["skill_ids"] == []
@@ -588,7 +625,7 @@ def _auto_expert(**kw):
     base = dict(
         display_name="Auto",
         category="x",
-        avatar_url="h",
+        avatar_url="",
         system_prompt="s",
        
         skill_ids=["sk"],

@@ -48,7 +48,7 @@ def service(enterprises):
 def _expert(service, template_id, scope=None):
     service.register_expert_template(RegisterExpertTemplateRequest(
         template_id=template_id, display_name=template_id, category="c",
-        avatar_url="https://example.com/a.png", system_prompt="p", description="d",
+        avatar_url="", system_prompt="p", description="d",
         platform_skill_refs=[],
     ))
     service.publish_template(

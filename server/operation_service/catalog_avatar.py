@@ -1,130 +1,69 @@
-"""Validated local avatar data for Operator catalog templates.
+"""Operator catalog template avatar: request parsing and response projection.
 
-The northbound catalog keeps the historical ``avatar_url`` string field. New
-uploads use a canonical ``data:image/...;base64,...`` value in that field so
-existing Catalog consumers do not need a second upload protocol. Legacy URL
-values remain readable for API compatibility, but are never produced by the
-Operator UI.
+Requests still carry the avatar in the ``avatar_url`` field as a ``data:image/...`` URL (the
+upload). The service decodes it, normalizes it to a static WebP file (``TemplateAvatarStore``)
+and keeps only ``avatar_version`` / ``avatar_sha256`` in the payload. Responses expose the
+same-origin content path in ``avatar_url`` plus ``avatar_version``.
+
+``avatar_url`` request values:
+- ``""``: remove the avatar;
+- ``data:image/...``: new upload;
+- the template's own content path (echoed back by an edit form): no change.
+Anything else (external URLs, other schemes) is rejected at the trust boundary.
 """
 
 from __future__ import annotations
 
-import base64
-import binascii
 import re
 
+from shared.avatar_image import MAX_AVATAR_DATA_URL_LENGTH, AvatarImageError, decode_data_url
 from shared.errors import ValidationProblem
 
-AVATAR_MIME_TYPES = frozenset(
-    {
-        "image/gif",
-        "image/jpeg",
-        "image/png",
-        "image/webp",
-    }
-)
-AVATAR_MAX_BYTES = 2 * 1024 * 1024
-_AVATAR_DATA_PREFIX = re.compile(
-    r"^data:(image/(?:gif|jpeg|png|webp));base64,([A-Za-z0-9+/]*={0,2})$"
-)
-_AVATAR_DATA_PREFIX_LENGTH = max(
-    len(f"data:{mime};base64,") for mime in AVATAR_MIME_TYPES
-)
-AVATAR_MAX_DATA_URL_LENGTH = _AVATAR_DATA_PREFIX_LENGTH + 4 * (
-    (AVATAR_MAX_BYTES + 2) // 3
-)
-_LEGACY_AVATAR_PREFIXES = ("http://", "https://", "/")
+from .template_avatar_store import template_avatar_path
+
+AVATAR_MAX_DATA_URL_LENGTH = MAX_AVATAR_DATA_URL_LENGTH
+_OWN_CONTENT_PATH = re.compile(r"^/api/operation/catalog/expert-templates/[^/?#]+/avatar/content(?:\?v=\d+)?$")
 
 
-def _has_image_signature(mime_type: str, data: bytes) -> bool:
-    if mime_type == "image/png":
-        return data.startswith(b"\x89PNG\r\n\x1a\n")
-    if mime_type == "image/jpeg":
-        return data.startswith(b"\xff\xd8\xff")
-    if mime_type == "image/gif":
-        return data.startswith((b"GIF87a", b"GIF89a"))
-    if mime_type == "image/webp":
-        return len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP"
-    return False
+class KeepAvatar:
+    """Marker: the request echoed the current avatar path; leave the avatar unchanged."""
 
 
-def canonical_avatar_data_url(value: str) -> str:
-    """Validate and canonicalize an inline avatar data URL.
-
-    The function intentionally accepts one exact data URL shape: an allowlisted
-    raster MIME type, standard base64 without parameters, and bytes whose magic
-    signature matches the declared MIME type. It never includes the input in an
-    exception message.
-    """
-
-    if len(value) > AVATAR_MAX_DATA_URL_LENGTH:
-        raise ValueError("avatar image is too large")
-    match = _AVATAR_DATA_PREFIX.fullmatch(value)
-    if match is None:
-        raise ValueError("avatar must be a PNG, JPEG, GIF, or WEBP data URL")
-    mime_type, encoded = match.groups()
-    if not encoded:
-        raise ValueError("avatar data must not be empty")
-    try:
-        data = base64.b64decode(encoded, validate=True)
-    except (ValueError, binascii.Error) as exc:
-        raise ValueError("avatar data must be canonical base64") from exc
-    if not data:
-        raise ValueError("avatar data must not be empty")
-    if len(data) > AVATAR_MAX_BYTES:
-        raise ValueError("avatar image is too large")
-    if base64.b64encode(data).decode("ascii") != encoded:
-        raise ValueError("avatar data must be canonical base64")
-    if not _has_image_signature(mime_type, data):
-        raise ValueError("avatar MIME type does not match image content")
-    return f"data:{mime_type};base64,{encoded}"
+KEEP_AVATAR = KeepAvatar()
 
 
 def validate_avatar_value(value: str) -> str:
-    """Validate a new avatar value while retaining old Catalog URL values.
-
-    ``avatar_url`` predates local uploads and is part of the public Catalog
-    response. HTTP and root-relative values therefore remain accepted for old
-    API clients; all newly encoded image data takes the strict path above.
-    Other schemes (for example ``javascript:``) are rejected at the trust
-    boundary.
-    """
-
-    if not value:
-        return ""
-    if value.startswith("data:"):
-        return canonical_avatar_data_url(value)
-    if value.startswith(_LEGACY_AVATAR_PREFIXES) or ":" not in value:
+    """Schema-level check (Pydantic validator); raises ``ValueError`` on bad input."""
+    if not value or _OWN_CONTENT_PATH.fullmatch(value):
         return value
-    raise ValueError(
-        "avatar must be a local image data URL or a legacy HTTP/path reference"
-    )
+    if value.startswith("data:"):
+        try:
+            decode_data_url(value)
+        except AvatarImageError as exc:
+            raise ValueError(str(exc)) from exc
+        return value
+    raise ValueError("avatar must be an uploaded PNG, JPEG, GIF or WebP image")
 
 
-def normalize_avatar_for_service(value: object) -> str:
-    """Convert schema ``ValueError`` failures into the API's business error."""
-
+def parse_avatar_upload(value: object) -> bytes | None | KeepAvatar:
+    """Service-level parse: raw image bytes for an upload, ``None`` to remove, or KEEP_AVATAR."""
     if not isinstance(value, str):
         raise ValidationProblem("avatar must be a string")
+    if not value:
+        return None
+    if _OWN_CONTENT_PATH.fullmatch(value):
+        return KEEP_AVATAR
     try:
-        return validate_avatar_value(value)
-    except ValueError as exc:
+        return decode_data_url(value)
+    except AvatarImageError as exc:
         raise ValidationProblem(str(exc)) from exc
 
 
-def safe_avatar_for_response(value: object) -> str:
-    """Return only valid inline data or compatible legacy string values.
+def avatar_version(payload: dict | None) -> int | None:
+    value = (payload or {}).get("avatar_version")
+    return value if isinstance(value, int) and value > 0 else None
 
-    Legacy rows may have been written before validation existed. Invalid inline
-    data is omitted rather than reflected to clients; no avatar bytes or secret
-    material are included in the error path.
-    """
 
-    if not isinstance(value, str) or not value:
-        return ""
-    if value.startswith("data:"):
-        try:
-            return canonical_avatar_data_url(value)
-        except ValueError:
-            return ""
-    return value if value.startswith(_LEGACY_AVATAR_PREFIXES) else ""
+def avatar_url_for(template_id: str, payload: dict | None, *, pull: bool = False) -> str:
+    version = avatar_version(payload)
+    return template_avatar_path(template_id, version, pull=pull) if version else ""

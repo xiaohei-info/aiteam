@@ -14,13 +14,16 @@ from datetime import datetime, timezone
 from shared.contracts.crosstier import CatalogReleaseNotify
 from shared.contracts.enums import CatalogStatus, CatalogType
 from shared.contracts.expert_profile import EXPERT_PROFILE_FIELDS, profile_from_payload
-from shared.errors import Conflict, NotFound, ValidationProblem
+from shared.errors import Conflict, NotFound, ServiceUnavailable, ValidationProblem
 from shared.solution_authoring.orchestration import (
     OrchestrationRefError,
     validate_member_refs,
 )
 
-from .catalog_avatar import normalize_avatar_for_service, safe_avatar_for_response
+from shared.avatar_image import AvatarFile, AvatarImageError, normalize_avatar
+
+from .catalog_avatar import KEEP_AVATAR, avatar_url_for, avatar_version, parse_avatar_upload
+from .template_avatar_store import TemplateAvatarStore
 from .catalog_gateway import CatalogManagerGateway
 from .catalog_repository import CatalogEntry, CatalogRepository
 from .catalog_schemas import (
@@ -122,7 +125,8 @@ def _to_response(entry: CatalogEntry) -> CatalogEntryResponse:
         status=entry.status,
         visible_scope=entry.visible_scope,
         category=payload.get("category", ""),
-        avatar_url=safe_avatar_for_response(payload.get("avatar_url", "")),
+        avatar_url=avatar_url_for(entry.template_id, payload),
+        avatar_version=avatar_version(payload),
         system_prompt=payload.get("system_prompt", ""),
         skill_ids=payload.get("skill_ids", []),
         platform_skill_refs=payload.get("platform_skill_refs", []),
@@ -189,7 +193,8 @@ def _to_detail_view(entry: CatalogEntry) -> CatalogDetailView:
         status=entry.status,
         visible_scope=entry.visible_scope,
         category=payload.get("category", ""),
-        avatar_url=safe_avatar_for_response(payload.get("avatar_url", "")),
+        avatar_url=avatar_url_for(entry.template_id, payload),
+        avatar_version=avatar_version(payload),
         system_prompt=payload.get("system_prompt", ""),
         skill_ids=payload.get("skill_ids", []),
         platform_skill_refs=payload.get("platform_skill_refs", []),
@@ -208,8 +213,9 @@ def _to_detail_view(entry: CatalogEntry) -> CatalogDetailView:
 class CatalogService:
     """无状态编排器；依赖注入 repository 与 Manager 网关（对端可 mock）。"""
 
-    def __init__(self, repo: CatalogRepository, manager: CatalogManagerGateway, *, platform_skills=None, platform_providers=None, enterprises=None):
+    def __init__(self, repo: CatalogRepository, manager: CatalogManagerGateway, *, platform_skills=None, platform_providers=None, enterprises=None, avatars: TemplateAvatarStore | None = None):
         self._repo = repo
+        self._avatars = avatars
         self._manager = manager
         self._platform_skills = platform_skills
         self._platform_providers = platform_providers
@@ -221,7 +227,9 @@ class CatalogService:
         self, req: RegisterExpertTemplateRequest
     ) -> CatalogEntryResponse:
         self._validate_platform_skill_refs(req.platform_skill_refs)
-        avatar_url = normalize_avatar_for_service(req.avatar_url)
+        avatar = self._prepare_avatar(req.avatar_url)
+        avatar = avatar if isinstance(avatar, AvatarFile) else None
+        avatar_meta = {"avatar_version": 1, "avatar_sha256": avatar.sha256} if avatar else {}
 
         def make(candidate: str) -> CatalogEntry:
             return CatalogEntry(
@@ -231,7 +239,7 @@ class CatalogService:
                 display_name=req.display_name,
                 payload={
                     "category": req.category,
-                    "avatar_url": avatar_url,
+                    **avatar_meta,
                     "system_prompt": req.system_prompt,
                     "skill_ids": [],
                     "platform_skill_refs": [ref.model_dump(mode="json") for ref in req.platform_skill_refs],
@@ -243,9 +251,53 @@ class CatalogService:
             )
 
         if req.template_id and req.template_id.strip():
-            return _to_response(self._repo.create(make(req.template_id.strip())))
-        entry = _with_auto_id(self._repo, make, req.display_name)
+            entry = self._repo.create(make(req.template_id.strip()))
+        else:
+            entry = _with_auto_id(self._repo, make, req.display_name)
+        if avatar is not None:
+            self._write_avatar_for_new_entry(entry, avatar)
         return _to_response(entry)
+
+    # ---- 模板头像（文件存储，payload 只记版本与摘要）----
+
+    def _prepare_avatar(self, value: object):
+        """请求里的 avatar_url → 规范化后的 AvatarFile / None（删除）/ KEEP_AVATAR（不变）。"""
+        parsed = parse_avatar_upload(value)
+        if parsed is None or parsed is KEEP_AVATAR:
+            return parsed
+        if self._avatars is None:
+            raise ServiceUnavailable("template avatar storage is not configured on this Operator")
+        try:
+            return normalize_avatar(parsed)
+        except AvatarImageError as exc:
+            raise ValidationProblem(str(exc)) from exc
+
+    def _write_avatar_for_new_entry(self, entry: CatalogEntry, avatar: AvatarFile) -> None:
+        """新建模板后落盘头像文件；落盘失败则撤掉 payload 里的头像版本，避免指向不存在的文件。"""
+        try:
+            self._avatars.write(entry.template_id, avatar.data)
+        except Exception:
+            payload = {k: v for k, v in (entry.payload or {}).items() if k not in {"avatar_version", "avatar_sha256"}}
+            self._repo.update(entry, payload=payload)
+            raise
+
+    def read_template_avatar(self, template_id: str, *, tenant_id: str | None = None) -> tuple[bytes, int, str]:
+        """读取专家模板头像文件：返回 (字节, 版本, sha256)。
+
+        tenant_id 不为空表示 Manager 服务间拉取：只给已发布且对该租户可见的模板。
+        """
+        entry = self._repo.get(CatalogType.EXPERT_TEMPLATE, template_id)
+        if tenant_id is not None:
+            if entry.status != CatalogStatus.PUBLISHED:
+                raise NotFound(f"expert template not published: {template_id}")
+            if not self._visible_to(entry, tenant_id):
+                raise TemplateOutOfScope(f"expert template not visible: {template_id}")
+        payload = entry.payload or {}
+        version = avatar_version(payload)
+        data = self._avatars.read(template_id) if (version and self._avatars is not None) else None
+        if data is None:
+            raise NotFound(f"expert template has no avatar: {template_id}")
+        return data, version, str(payload.get("avatar_sha256") or "")
 
     def register_solution_template(
         self, req: RegisterSolutionTemplateRequest
@@ -315,7 +367,6 @@ class CatalogService:
         if catalog_type == CatalogType.EXPERT_TEMPLATE:
             from shared.contracts.platform_skill import PlatformSkillRef
             payload = entry.payload or {}
-            normalize_avatar_for_service(payload.get("avatar_url") or "")
             refs = [PlatformSkillRef.model_validate(ref) for ref in payload.get("platform_skill_refs", [])]
             self._validate_platform_skill_refs(refs)
         if entry.status == CatalogStatus.PUBLISHED:
@@ -388,8 +439,20 @@ class CatalogService:
         entry = self._repo.get(catalog_type, template_id)
         if catalog_type == CatalogType.SOLUTION_TEMPLATE and set(changes) & set(EXPERT_PROFILE_FIELDS):
             raise ValidationProblem("talent market profile fields apply to expert templates only")
+        avatar_write: AvatarFile | None = None
+        avatar_delete = False
         if catalog_type == CatalogType.EXPERT_TEMPLATE and "avatar_url" in changes:
-            changes = {**changes, "avatar_url": normalize_avatar_for_service(changes["avatar_url"])}
+            changes = dict(changes)
+            avatar = self._prepare_avatar(changes.pop("avatar_url"))
+            current = entry.payload or {}
+            if avatar is None and avatar_version(current):
+                changes.update(avatar_version=None, avatar_sha256=None)
+                avatar_delete = True
+            elif isinstance(avatar, AvatarFile) and avatar.sha256 != current.get("avatar_sha256"):
+                changes.update(avatar_version=(avatar_version(current) or 0) + 1, avatar_sha256=avatar.sha256)
+                avatar_write = avatar
+        elif "avatar_url" in changes:
+            raise ValidationProblem("avatar applies to expert templates only")
         if catalog_type == CatalogType.EXPERT_TEMPLATE and "platform_skill_refs" in changes:
             from shared.contracts.platform_skill import PlatformSkillRef
             self._validate_platform_skill_refs([PlatformSkillRef.model_validate(ref) for ref in changes["platform_skill_refs"]])
@@ -418,7 +481,12 @@ class CatalogService:
             and top_updates.get("payload") is not None
         ):
             self._validate_solution_coordinator_integrity(top_updates["payload"])
+        # 先落盘再提交新版本号：读到新版本的一方一定能拿到新文件。
+        if avatar_write is not None:
+            self._avatars.write(template_id, avatar_write.data)
         updated = self._repo.update(entry, **top_updates)
+        if avatar_delete and self._avatars is not None:
+            self._avatars.delete(template_id)
         return _to_response(updated)
 
     @staticmethod
@@ -537,7 +605,8 @@ class CatalogService:
             persona=persona,
             recommended_config=recommended,
             category=payload.get("category", ""),
-            avatar_url=safe_avatar_for_response(payload.get("avatar_url", "")),
+            avatar_url=avatar_url_for(entry.template_id, payload, pull=True),
+            avatar_version=avatar_version(payload),
             system_prompt=payload.get("system_prompt", ""),
             skill_ids=payload.get("skill_ids", []),
             platform_skill_refs=payload.get("platform_skill_refs", []),
@@ -646,7 +715,8 @@ class CatalogService:
                     persona=persona,
                     recommended_config=recommended,
                     category=payload.get("category", ""),
-                    avatar_url=safe_avatar_for_response(payload.get("avatar_url", "")),
+                    avatar_url=avatar_url_for(entry.template_id, payload, pull=True),
+                    avatar_version=avatar_version(payload),
                     system_prompt=payload.get("system_prompt", ""),
                     skill_ids=payload.get("skill_ids", []),
                     platform_skill_refs=payload.get("platform_skill_refs", []),
