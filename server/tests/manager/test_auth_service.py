@@ -16,6 +16,7 @@ from manager_service.auth_service import (
     EnterpriseAmbiguous,
     LoginInput,
     OwnerResetInput,
+    NoActiveEnterprise,
     TenantSelectionRequired,
 )
 from shared.contracts.enums import AuthProvider, EnterpriseRole
@@ -330,3 +331,49 @@ def test_login_without_enterprise_duplicate_password_match_is_tenant_selection_r
         svc.login(LoginInput(account="13800000000", password="Pw1!"))
     assert exc.value.status == 409
     assert exc.value.code == "tenant_selection_required"
+
+
+def test_login_without_enterprise_all_matched_enterprises_inactive_is_no_active_enterprise():
+    # 密码在多家企业都通过但它们都不可用：不再列候选让人选（选了也登不上），直接说明没有可登录的企业。
+    svc = _svc()
+    secret = hash_password("Pw1!")
+    svc._account_tenants = MagicMock(return_value={
+        "550e8400-e29b-41d4-a716-446655440001": ("suspended", "a"),
+        "550e8400-e29b-41d4-a716-446655440002": ("banned", "b"),
+    })
+    svc._repo.find_identity.return_value = IdentityRow(
+        identity_id="i", user_id="u", secret=secret, must_reset=False, roles=["member"],
+    )
+    with pytest.raises(NoActiveEnterprise) as exc:
+        svc.login(LoginInput(account="13800000000", password="Pw1!"))
+    assert exc.value.status == 403
+    assert exc.value.code == "no_active_enterprise"
+    assert "没有可登录的企业" in exc.value.detail
+    assert getattr(exc.value, "meta", None) in (None, {})
+
+
+def test_login_without_enterprise_one_active_among_inactive_logs_into_the_active_one():
+    svc = _svc()
+    secret = hash_password("Pw1!")
+    active = "550e8400-e29b-41d4-a716-446655440001"
+    svc._account_tenants = MagicMock(return_value={
+        active: ("active", "a"),
+        "550e8400-e29b-41d4-a716-446655440002": ("suspended", "b"),
+    })
+    svc._repo.find_identity.return_value = IdentityRow(
+        identity_id="i", user_id="u", secret=secret, must_reset=False, roles=["member"],
+    )
+    tid, _ctx, _identity = svc._authenticate(tenant_id=None, enterprise=None, account="13800000000", password="Pw1!")
+    assert tid == active
+
+
+@patch("psycopg.connect")
+def test_resolve_tenant_identifier_shared_by_only_inactive_enterprises_is_no_active_enterprise(mock_connect):
+    conn = MagicMock()
+    conn.execute.return_value.fetchall.return_value = [("t-1", "suspended"), ("t-2", "closed")]
+    mock_connect.return_value.__enter__.return_value = conn
+    with pytest.raises(NoActiveEnterprise) as exc:
+        _svc().resolve_tenant("dup-code")
+    assert exc.value.status == 403
+    assert exc.value.code == "no_active_enterprise"
+    assert "没有可登录的企业" in exc.value.detail

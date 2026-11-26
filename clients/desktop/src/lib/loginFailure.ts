@@ -29,7 +29,7 @@ export function tenantCandidateLabel(candidate: TenantCandidate): string {
   return candidate.enterprise_name.trim() || candidate.tenant_id
 }
 
-const TENANT_STATUS_CODES = new Set(['tenant_suspended', 'tenant_banned', 'tenant_closed', 'tenant_deleted', 'tenant_unavailable'])
+const TENANT_STATUS_CODES = new Set(['tenant_suspended', 'tenant_banned', 'tenant_closed', 'tenant_deleted', 'tenant_unavailable', 'no_active_enterprise'])
 
 /** `tenant_selection_required` 携带的候选企业（只含密码通过的企业）；没有或格式不对时返回空数组。 */
 export function tenantSelectionCandidates(err: LoginApiFailure): TenantCandidate[] {
@@ -52,6 +52,7 @@ export function describeLoginApiFailure(err: LoginApiFailure, resettingPassword:
   if (err.status === 403) {
     if (code === 'principal_inactive') return '账号已停用，请联系企业管理员'
     if (TENANT_STATUS_CODES.has(code) && detail) return detail
+    if (code === 'no_active_enterprise') return '没有可登录的企业：该账号所在的企业都已停用。如有疑问，请联系平台运营。'
     return '当前账号无法完成此操作，请联系管理员'
   }
   if (err.status === 404) return '账号不存在或所属企业未开通,请联系管理员'

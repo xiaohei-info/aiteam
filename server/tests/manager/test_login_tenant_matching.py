@@ -178,21 +178,22 @@ def test_enterprise_code_shared_with_deleted_tenant_prefers_active(mock_connect)
     assert svc.resolve_tenant("ACME") == "t-live"
 
 
-@pytest.mark.parametrize(("statuses", "code"), [
-    (["suspended", "banned"], "tenant_suspended"),
-    (["banned", "closed"], "tenant_banned"),
-    (["closed", "deleted"], "tenant_closed"),
+@pytest.mark.parametrize("statuses", [
+    ["suspended", "banned"],
+    ["banned", "closed"],
+    ["closed", "deleted"],
 ])
 @patch("psycopg.connect")
-def test_enterprise_identifier_hitting_only_inactive_tenants_reports_status(mock_connect, statuses, code):
-    """同一标识命中多家且全都不可用：报企业状态，而不是让用户改填企业代码的 enterprise_ambiguous。"""
+def test_enterprise_identifier_hitting_only_inactive_tenants_reports_no_active_enterprise(mock_connect, statuses):
+    """同一标识命中多家且全都不可用：报「没有可登录的企业」，而不是让用户改填企业代码的 enterprise_ambiguous。"""
     conn = MagicMock()
     conn.execute.return_value.fetchall.return_value = [(f"t-{i}", s) for i, s in enumerate(statuses)]
     mock_connect.return_value.__enter__.return_value = conn
     svc = AuthService(dsn="postgresql://f/f", repo=MagicMock(), keys=MagicMock(), admin_dsn="postgresql://admin/a")
     with pytest.raises(Exception) as exc:
         svc.resolve_tenant("ACME")
-    assert exc.value.code == code
+    assert exc.value.code == "no_active_enterprise"
+    assert exc.value.status == 403
 
 
 # ---------------------------------------------------------------------------

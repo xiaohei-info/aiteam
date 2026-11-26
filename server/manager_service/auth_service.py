@@ -84,6 +84,19 @@ class ClientUpgradeRequired(AppError):
 
 
 CLIENT_UPGRADE_DETAIL = "客户端版本过旧，请升级后登录"
+
+
+class NoActiveEnterprise(AppError):
+    """匹配到的企业不止一家且全部不可用（暂停 / 封禁 / 注销 / 删除）：没有可登录的企业。
+
+    只有一家时仍按该企业的状态报 tenant_suspended 等，原因更具体。
+    """
+
+    status, code, title = 403, "no_active_enterprise", "No Active Enterprise"
+
+
+NO_ACTIVE_ENTERPRISE_FOR_ACCOUNT = "没有可登录的企业：该账号所在的企业都已暂停或封禁。如有疑问，请联系平台运营。"
+NO_ACTIVE_ENTERPRISE_FOR_IDENTIFIER = "没有可登录的企业：该企业标识对应的企业都已停用。如有疑问，请联系平台运营。"
 # 账号不存在与密码错误必须返回完全相同的 401（同 code / detail / 无 meta），不泄漏账号是否存在。
 _INVALID_CREDENTIALS = "invalid credentials"
 _dummy_secret: str | None = None
@@ -302,7 +315,11 @@ class AuthService:
                                actor="anon", success=False, detail="invalid credentials")
         if not matched:
             raise Unauthorized(_INVALID_CREDENTIALS)
-        pool = _prefer_active({tid: tenants[tid][0] for tid in matched})
+        statuses = {tid: tenants[tid][0] for tid in matched}
+        pool = _prefer_active(statuses)
+        if len(pool) > 1 and "active" not in statuses.values():
+            # 密码已通过，可以说明原因；列出这些企业让用户选也登录不了。
+            raise NoActiveEnterprise(NO_ACTIVE_ENTERPRISE_FOR_ACCOUNT)
         if len(pool) == 1:
             ctx, identity = matched[pool[0]]
             return pool[0], ctx, identity
@@ -486,12 +503,10 @@ class AuthService:
     def resolve_tenant(self, enterprise: str) -> str:
         """企业代码/名称 → tenant_id。代码精确匹配优先（重名时只看 active 企业）；slug 唯一。
 
-        同一标识命中多家且全都不可用（暂停 / 封禁 / 注销 / 删除）时，报企业状态而不是「标识歧义」：
-        改填企业代码也登录不了，真正原因是这些企业都不可用。
+        同一标识命中多家且全都不可用（暂停 / 封禁 / 注销 / 删除）时，报「没有可登录的企业」而不是
+        「标识歧义」：改填企业代码也登录不了，真正原因是这些企业都不可用。
         """
         import psycopg
-
-        from .tenant_status import TenantUnavailable
 
         value = (enterprise or "").strip()
         if not value:
@@ -506,20 +521,12 @@ class AuthService:
                 tenant_id = _single_preferring_active(statuses)
                 if tenant_id is not None:
                     return tenant_id
+                # 只命中一家时上面已返回（不可用的企业由登录按状态提示）；到这里是多家。
                 if rows and "active" not in statuses.values():
-                    raise TenantUnavailable(_most_relevant_status(statuses.values()), at_login=True)
+                    raise NoActiveEnterprise(NO_ACTIVE_ENTERPRISE_FOR_IDENTIFIER)
                 if rows:
                     raise EnterpriseAmbiguous(f"enterprise identifier is ambiguous: {value}")
         raise NotFound(f"enterprise not found: {value}")
-
-
-# 多家不可用企业共用一个标识时，按可恢复程度给出最相关的状态（暂停可恢复，最值得提示）。
-_INACTIVE_STATUS_PRIORITY = ("suspended", "banned", "closed", "deleted")
-
-
-def _most_relevant_status(statuses) -> str:
-    present = set(statuses)
-    return next((s for s in _INACTIVE_STATUS_PRIORITY if s in present), next(iter(present)))
 
 
 def _prefer_active(statuses: dict[str, str]) -> list[str]:

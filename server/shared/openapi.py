@@ -1719,6 +1719,7 @@ def enrich_openapi(schema: dict[str, Any], tier: str) -> dict[str, Any]:
                             "passwordResetRequired": {"summary": "首次登录需要重置密码", "value": _problem_example(403, "password_reset_required", "Password reset is required before login.")},
                             "passwordExpired": {"summary": "密码已过期", "value": _problem_example(403, "password_expired", "Password reset is required because the password expired.")},
                             "principalInactive": {"summary": "账号已停用", "value": _problem_example(403, "principal_inactive", "The account is not active.")},
+                            "noActiveEnterprise": {"summary": "匹配到的企业不止一家且全部不可用，没有可登录的企业", "value": _problem_example(403, "no_active_enterprise", "没有可登录的企业：该账号所在的企业都已暂停或封禁。如有疑问，请联系平台运营。")},
                         },
                     }
                 },
