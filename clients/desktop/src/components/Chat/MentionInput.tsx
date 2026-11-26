@@ -6,6 +6,7 @@ import { useGlobalShortcutClose } from '../../hooks/useGlobalShortcut'
 import type { GroupMember } from '../../stores/chat'
 import { isImeKeyboardEvent } from '../../lib/imeKeyboard'
 import { extractMentionText, type RichTextNodeLike } from './mentionRichText'
+import { carriesFiles, composePaste, fetchImage, filesOf, htmlToParts } from './clipboardContent'
 
 export interface MentionInputHandle {
   clear: () => void
@@ -70,25 +71,6 @@ function caretToEnd(el: HTMLDivElement): void {
   const sel = window.getSelection()
   sel?.removeAllRanges()
   sel?.addRange(range)
-}
-
-/**
- * Files carried by a paste or a drop. `DataTransfer.files` is empty for a dragged file until the
- * drop itself fires, so `items` is the one that answers "is a file coming" during dragover.
- */
-function filesOf(data: DataTransfer | null | undefined): File[] {
-  if (!data) return []
-  if (data.files && data.files.length > 0) return Array.from(data.files)
-  return Array.from(data.items ?? [])
-    .filter((item) => item.kind === 'file')
-    .map((item) => item.getAsFile())
-    .filter((file): file is File => file !== null)
-}
-
-function carriesFiles(data: DataTransfer | null | undefined): boolean {
-  if (!data) return false
-  if (data.files && data.files.length > 0) return true
-  return Array.from(data.items ?? []).some((item) => item.kind === 'file')
 }
 
 /** 松手位置对应的插入点；WebKit 提供 caretRangeFromPoint，标准实现是 caretPositionFromPoint。 */
@@ -259,44 +241,56 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
     emit(el)
   }, [closeMenu, emit])
 
-  /** Files go to the attachment list; text keeps being inserted as text. */
-  const takeFiles = useCallback((data: DataTransfer | null | undefined, source: 'paste' | 'drop'): boolean => {
-    if (!carriesFiles(data)) return false
+  /**
+   * 粘贴与拖入共用：文字照常插入，图片和文件走附件（与点「+ 导入」同一路径）。
+   * 图文混在一起时（网页/文档里复制的一段），每张图、每个文件在原位置留下 `[图片：名称]` /
+   * `[文件：名称]` 占位，发出去后仍看得出哪段话配哪张图。访达复制文件时剪贴板顺带的文件名文字不算内容。
+   */
+  const takeTransfer = useCallback((el: HTMLDivElement, data: DataTransfer | null | undefined, source: 'paste' | 'drop', at?: Range | null) => {
+    if (!data) return
     const files = filesOf(data)
-    if (onFiles && files.length > 0) {
-      onFiles(files)
-      return true
+    const composed = composePaste({
+      plain: data.getData('text/plain') ?? '',
+      parts: htmlToParts(data.getData('text/html') ?? ''),
+      files,
+    })
+    const hasAttachments = composed.files.length > 0 || composed.pending.length > 0
+    if (hasAttachments && !onFiles) {
+      showHint(source === 'paste'
+        ? '这里不支持粘贴图片或文件，请用附件按钮上传'
+        : '这里不支持拖入图片或文件，请用附件按钮上传')
+      // 只插入用户写的文字，不留指向不存在附件的占位。
+      const words = composed.text.replace(/\[(?:图片|文件)：[^\]]*\]/g, '').trim()
+      if (words) insertPlainText(el, words, at)
+      return
     }
-    showHint(source === 'paste'
-      ? '输入框不支持粘贴图片或文件，请用附件按钮上传'
-      : '输入框不支持拖入图片或文件，请用附件按钮上传')
-    return true
-  }, [onFiles, showHint])
+    if (composed.text) insertPlainText(el, composed.text, at)
+    if (composed.files.length > 0) onFiles?.(composed.files)
+    if (composed.pending.length > 0 && onFiles) {
+      void Promise.all(composed.pending.map(({ name, src }) => fetchImage(src, name))).then((fetched) => {
+        const ok = fetched.filter((file): file is File => file !== null)
+        if (ok.length > 0) onFiles(ok)
+        const missed = fetched.length - ok.length
+        if (missed > 0) showHint(`有 ${missed} 张图片只有网址、取不到，请另存后再添加`)
+      })
+    }
+  }, [insertPlainText, onFiles, showHint])
 
   const handlePaste = useCallback((e: React.ClipboardEvent<HTMLDivElement>) => {
     const el = editRef.current
     if (!el || disabled) return
     // 无论剪贴板里是什么都先拦掉浏览器默认粘贴：文本由我们插入，图片/文件走附件。
     e.preventDefault()
-    // 同时带文字和图片（如从网页/文档复制的一段图文）时只贴文字；只有图片/文件时才作附件。
-    const pasted = e.clipboardData?.getData('text/plain') ?? ''
-    if (pasted) {
-      insertPlainText(el, pasted)
-      return
-    }
-    takeFiles(e.clipboardData, 'paste')
-  }, [disabled, insertPlainText, takeFiles])
+    takeTransfer(el, e.clipboardData, 'paste')
+  }, [disabled, takeTransfer])
 
-  // 拖入同理：默认行为会把图片/文件/富文本直接落进 contenteditable。
+  // 拖入同理：默认行为会把图片/文件/富文本直接落进 contenteditable；文字落在松手位置。
   const handleDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     const el = editRef.current
     if (!el || disabled) return
     e.preventDefault()
-    if (takeFiles(e.dataTransfer, 'drop')) return
-    const dropped = e.dataTransfer?.getData('text/plain') ?? ''
-    if (!dropped) return
-    insertPlainText(el, dropped, dropRange(e.clientX, e.clientY))
-  }, [disabled, insertPlainText, takeFiles])
+    takeTransfer(el, e.dataTransfer, 'drop', dropRange(e.clientX, e.clientY))
+  }, [disabled, takeTransfer])
 
   /** Without this the browser refuses the drop and shows a “no entry” cursor over the box. */
   const handleDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {

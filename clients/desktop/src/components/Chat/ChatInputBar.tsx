@@ -42,6 +42,7 @@ import {
 } from '../../lib/chatSendQueue'
 import { KnowledgeFilePicker } from './KnowledgeFilePicker'
 import { FileChip } from './FileChip'
+import { carriesFiles, filesOf } from './clipboardContent'
 
 const CHAT_TEXTAREA_MIN_HEIGHT = 60
 const CHAT_TEXTAREA_MAX_HEIGHT = 240
@@ -436,6 +437,19 @@ export const ChatInputBar = memo(({
     || !!disabled
     || isSubmitBlocking
   const isInteractionDisabled = !!disabled || isSubmitBlocking
+  // 文件拖到输入栏任意位置（附件区、工具栏、输入框边缘）都算拖入对话；落在输入框正文上的由 MentionInput 处理。
+  const canDropFiles = Boolean(onImportFile) && !isInteractionDisabled
+  const handleBarDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    if (!canDropFiles || !carriesFiles(e.dataTransfer)) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+  }, [canDropFiles])
+  const handleBarDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    if (e.defaultPrevented || !canDropFiles || !carriesFiles(e.dataTransfer)) return
+    e.preventDefault()
+    handleImportFiles(filesOf(e.dataTransfer))
+  }, [canDropFiles, handleImportFiles])
+
 
   // ── 待发送队列 ───────────────────────────────────────────────────────────────
   const activeQueue = canQueue ? queues[convId] ?? [] : []
@@ -639,7 +653,11 @@ export const ChatInputBar = memo(({
   const isVoiceActive = enableVoiceInput && !isHero
 
   return (
-    <div className={`chat-input-bar${isHero ? ' chat-input-bar-hero' : ''}${disabled ? ' chat-input-bar-disabled' : ''}`}>
+    <div
+      className={`chat-input-bar${isHero ? ' chat-input-bar-hero' : ''}${disabled ? ' chat-input-bar-disabled' : ''}`}
+      onDragOver={handleBarDragOver}
+      onDrop={handleBarDrop}
+    >
       {!isHero && (
         <div
           className="chat-resize-handle"
