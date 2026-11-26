@@ -57,6 +57,57 @@ describe("ProtectedAvatar", () => {
     expect(container.querySelector("img")).toBeNull();
   });
 
+  it("fetches one avatar once for every instance showing it, and revokes only after the last one leaves", async () => {
+    const client = streamClient(async () => new Response(new Blob(["RIFF"], { type: "image/webp" })));
+    const three = (
+      <>
+        <ProtectedAvatar client={client} isProtected={isProtected} name="Alice" src={PROTECTED} />
+        <ProtectedAvatar client={client} isProtected={isProtected} name="Alice" src={PROTECTED} />
+        <ProtectedAvatar client={client} isProtected={isProtected} name="Alice" src={PROTECTED} />
+      </>
+    );
+    const { container, rerender, unmount } = render(three);
+    await waitFor(() => expect(container.querySelectorAll("img")).toHaveLength(3));
+    expect(client.stream).toHaveBeenCalledTimes(1);
+    expect(created).toBe(1);
+    expect([...container.querySelectorAll("img")].map((img) => img.getAttribute("src"))).toEqual([
+      "blob:avatar-1", "blob:avatar-1", "blob:avatar-1",
+    ]);
+
+    // 少一个实例还在用，不能把共享的 objectURL 撤掉。
+    rerender(
+      <>
+        <ProtectedAvatar client={client} isProtected={isProtected} name="Alice" src={PROTECTED} />
+      </>,
+    );
+    expect(revoked).toEqual([]);
+    expect(container.querySelector("img")?.getAttribute("src")).toBe("blob:avatar-1");
+
+    unmount();
+    expect(revoked).toEqual(["blob:avatar-1"]);
+
+    // 全部离开后再挂回来：缓存已释放，重新取一次。
+    const again = render(<ProtectedAvatar client={client} isProtected={isProtected} name="Alice" src={PROTECTED} />);
+    await waitFor(() => expect(again.container.querySelector("img")?.getAttribute("src")).toBe("blob:avatar-2"));
+    expect(client.stream).toHaveBeenCalledTimes(2);
+    again.unmount();
+  });
+
+  it("keeps separate caches per client, so two ends never share one blob", async () => {
+    const agent = streamClient(async () => new Response(new Blob(["A"], { type: "image/webp" })));
+    const manager = streamClient(async () => new Response(new Blob(["M"], { type: "image/webp" })));
+    const { container } = render(
+      <>
+        <ProtectedAvatar client={agent} isProtected={isProtected} name="Alice" src={PROTECTED} />
+        <ProtectedAvatar client={manager} isProtected={isProtected} name="Alice" src={PROTECTED} />
+      </>,
+    );
+    await waitFor(() => expect(container.querySelectorAll("img")).toHaveLength(2));
+    expect(agent.stream).toHaveBeenCalledTimes(1);
+    expect(manager.stream).toHaveBeenCalledTimes(1);
+    expect(created).toBe(2);
+  });
+
   it("ignores a response that arrives after unmount", async () => {
     let release: (value: Response) => void = () => {};
     const client = streamClient(() => new Promise<Response>((resolve) => { release = resolve; }));
