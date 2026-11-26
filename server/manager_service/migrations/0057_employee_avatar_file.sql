@@ -7,6 +7,15 @@
 -- 幂等、可回滚：新代码写的行 storage_key 恒为固定路径，不会被匹配；代码回滚到旧版本期间旧代码再写的行，
 -- 下次部署照样只清这些新代码读不到的行。
 -- 开发阶段不回填：存量员工头像（含从模板继承的）部署后变为首字占位，重新招募或上传后恢复（见 PR #231 发布说明）。
-ALTER TABLE employee_avatar ALTER COLUMN avatar_url DROP NOT NULL;
+-- 列可能已被下一次发布的收缩型迁移删掉，迁移每次启动都重跑，所以要先看列还在不在。
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'employee_avatar' AND column_name = 'avatar_url'
+  ) THEN
+    EXECUTE 'ALTER TABLE employee_avatar ALTER COLUMN avatar_url DROP NOT NULL';
+  END IF;
+END $$;
 DELETE FROM employee_avatar
 WHERE storage_key IS DISTINCT FROM 'avatars/' || tenant_id::text || '/' || employee_id::text || '.webp';
