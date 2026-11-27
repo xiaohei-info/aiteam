@@ -494,6 +494,26 @@ for (const mode of ['single', 'group']) {
     s = await read()
     assert.deepEqual(s.sent.at(-1)?.mentions, ['analyst'], `群聊: 重发应仍 @ 原成员，实际 ${JSON.stringify(s.sent.at(-1))}`)
   }
+  // 14e. 「+」选择的文件走同一条路：选中后立刻显示正在导入；导入中切走，文件只回到原会话
+  await evaluate(`window.__hold('import'); window.__pickNext = '/Users/me/合同-大.pdf'`)
+  await evaluate(`document.querySelector('[aria-label="添加消息附件"]').click()`)
+  await pause(150)
+  s = await read()
+  assert.deepEqual(s.attachments, ['合同-大.pdf'], `${mode}: 选中文件后附件区应立刻出现，实际 ${JSON.stringify(s.attachments)}`)
+  assert.match(s.chipStates[0], /正在导入/, `${mode}: 「+」选择的文件应显示正在导入`)
+  assert.equal(s.sendDisabled, true, `${mode}: 「+」导入中发送键应禁用`)
+  await evaluate(`window.__setConv('conversation-2')`)
+  await pause(150)
+  await evaluate(`window.__release('import')`)
+  await pause(250)
+  s = await read()
+  assert.deepEqual(s.attachments, [], `${mode}: 「+」导入完成不应串到会话 2，实际 ${JSON.stringify(s.attachments)}`)
+  assert.deepEqual(s.drafts['conversation-1'].files, [{ name: '合同-大.pdf', status: 'queued' }], `${mode}: 「+」导入的文件应留在会话 1 草稿，实际 ${JSON.stringify(s.drafts['conversation-1'].files)}`)
+  await evaluate(`window.__setConv('conversation-1')`)
+  await pause(250)
+  s = await read()
+  assert.match(s.chipStates[0] ?? '', /上传完成/, `${mode}: 切回会话 1 后应完成上传，实际 ${JSON.stringify(s.chipStates)}`)
+
   report[`${mode}-in-flight`] = { sent: (await read()).sent }
 }
 

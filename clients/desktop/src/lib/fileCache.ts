@@ -14,13 +14,16 @@ export interface CachedFile {
  * {app_data}/{userId}/{chatId}/file/, return metadata.
  * Returns null if user cancelled.
  */
-export async function pickAndCacheFile(userId: string, chatId: string): Promise<CachedFile | null> {
+/**
+ * Opens the file picker and returns the chosen path (null when cancelled). Copying is left to the
+ * caller, so a picked file takes the same import route as one dragged in (see ChatInputBar importInto).
+ */
+export async function pickFilePath(): Promise<string | null> {
   const selected = await open({
     multiple: false,
     directory: false,
   })
-  if (!selected || typeof selected !== 'string') return null
-  return cacheFileFromPath(userId, chatId, selected)
+  return selected && typeof selected === 'string' ? selected : null
 }
 
 /**

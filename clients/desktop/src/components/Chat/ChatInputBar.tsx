@@ -52,7 +52,8 @@ const CHAT_TEXTAREA_MAX_HEIGHT = 240
 
 export interface ChatInputBarProps {
   onSend: (text: string, files: UploadableChatFile[], employeeId?: string, mentions?: string[]) => boolean | Promise<boolean>
-  onPickFile: () => Promise<CachedFile | null>
+  /** Opens the file picker and returns the chosen path; the file is then imported like a dropped one. */
+  onPickFile: () => Promise<string | null>
   /** Caches a file the WebView holds (pasted or dropped) so it becomes an ordinary attachment. */
   onImportFile?: (file: File) => Promise<CachedFile | null>
   /** Caches a file dragged in from Finder/Explorer by its path, like「+ 导入」(no size limit). */
@@ -389,13 +390,16 @@ export const ChatInputBar = memo(({
     if (isPickingFile || isSubmitting) return
     setFileError('')
     setIsPickingFile(true)
+    let path: string | null = null
     try {
-      const cached = await onPickFile()
-      if (!cached) return
-      if (onUploadFile) handleUploadFile(cached)
-      else setPendingFiles(prev => [...prev, cached])
-    } catch { setFileError('选择文件失败，请重试') }
-    finally { setIsPickingFile(false) }
+      path = await onPickFile()
+    } catch {
+      setFileError('选择文件失败，请重试')
+    } finally {
+      setIsPickingFile(false)
+    }
+    // Same route as a dropped file: 「正在导入」 chip at once, result stays with this conversation.
+    if (path) importPathsRef.current([path])
   }
 
   /** Pasted and dropped files take the very same route as a file chosen with the attachment button. */

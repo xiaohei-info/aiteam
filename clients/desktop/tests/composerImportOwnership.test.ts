@@ -65,6 +65,16 @@ test('paste and drop show the import chip before copying', () => {
   assert.ok(bar.includes('() => onImportPath(path)'))
 })
 
+test('the「+」picker only returns a path and imports it like a dropped file', () => {
+  const pick = bar.slice(bar.indexOf('const handlePickFile = async'), bar.indexOf('const handleImportFiles'))
+  assert.ok(pick.includes('path = await onPickFile()'))
+  assert.ok(pick.includes('importPathsRef.current([path])'))
+  assert.ok(!pick.includes('handleUploadFile('), 'picked files must not skip the import chip / ownership handling')
+  const cache = readFileSync(new URL('../src/lib/fileCache.ts', import.meta.url), 'utf8')
+  assert.ok(cache.includes('export async function pickFilePath(): Promise<string | null>'))
+  assert.ok(!cache.includes('pickAndCacheFile'))
+})
+
 test('a failed send keeps the @ mentions in the draft it goes back to', () => {
   assert.ok(bar.includes("if (target.kind === 'draft') onDraftChange(target.conversationId, rawText, files, mentionSnapshot)"))
 })

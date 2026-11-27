@@ -5,7 +5,7 @@ import { useChatStore, type Message, type ConversationItem } from '../../stores/
 import { employeeSendFailure, employeeUnavailableMessage } from '../../lib/employeeAvailability'
 import { projectSendFailure } from '../../lib/projectConversation'
 import { useAgentAuthStore } from '../../stores/agentAuth'
-import { pickAndCacheFile, cacheFileFromBlob, cacheFileFromPath, readCachedFileBlob, type CachedFile } from '../../lib/fileCache'
+import { pickFilePath, cacheFileFromBlob, cacheFileFromPath, readCachedFileBlob, type CachedFile } from '../../lib/fileCache'
 import {
   uploadedAttachmentIds,
   uploadedMessageAttachments,
@@ -119,7 +119,7 @@ function isSameSendAttempt(
 
 interface NewSessionPageProps {
   onSend: (text: string, files: UploadableChatFile[], employeeId?: string) => boolean | Promise<boolean>
-  onPickFile: () => Promise<CachedFile | null>
+  onPickFile: () => Promise<string | null>
   onImportFile: (file: File) => Promise<CachedFile | null>
   onImportPath: (path: string) => Promise<CachedFile | null>
   onUploadFile: (file: CachedFile, employeeId?: string) => Promise<string>
@@ -623,10 +623,7 @@ export default function Chat() {
 
   // ── Pick & send file ─────────────────────────────────────────────────────────
 
-  const pickFileAction = useCallback(
-    () => pickAndCacheFile(userId, activeConvId || 'new-session'),
-    [userId, activeConvId]
-  )
+  const pickFileAction = pickFilePath
 
   /** Paste / drag-and-drop: the WebView hands over bytes, not a path, so cache them directly. */
   const importFileAction = useCallback(

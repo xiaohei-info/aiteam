@@ -58,7 +58,8 @@ function Harness() {
       window.__sent.push({ text, employeeId: employeeId ?? null, mentions: mentions ?? [], files: files.map((f) => f.name) })
       return true
     },
-    onPickFile: async () => null,
+    // window.__pickNext = '/path' 模拟在文件选择框里选中这个文件。
+    onPickFile: async () => { const picked = window.__pickNext ?? null; window.__pickNext = null; return picked },
     // 浏览器里没有 Tauri invoke：假装缓存成功，记录下来供断言。
     onImportFile: async (file) => {
       window.__imported.push({ name: file.name, size: file.size, mime: file.type })
