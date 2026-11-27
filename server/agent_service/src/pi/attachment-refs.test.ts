@@ -94,6 +94,18 @@ test("a folder merely named like the last part of a credential entry is not a cr
   assert.equal(credentialFolderForPath("C:\\Users\\u\\.config\\gcloud\\a.json", "C:\\Users\\u", "win32"), ".config/gcloud");
 });
 
+// On Windows gcloud keeps its credentials under %APPDATA%\gcloud. Only that folder is refused: the rest of
+// AppData, where cached screenshots live, stays attachable.
+test("the Windows default gcloud folder is refused, the rest of AppData is not", () => {
+  const judge = (path: string) => credentialFolderForPath(path, "C:\\Users\\u", "win32");
+  assert.equal(judge("C:\\Users\\u\\AppData\\Roaming\\gcloud\\credentials.db"), "AppData/Roaming/gcloud");
+  assert.equal(judge("c:\\users\\u\\appdata\\roaming\\GCloud\\legacy_credentials\\a\\adc.json"), "AppData/Roaming/gcloud");
+  assert.equal(judge("D:\\backup\\u\\AppData\\Roaming\\gcloud\\access_tokens.db"), "AppData/Roaming/gcloud");
+  assert.equal(judge("C:\\Users\\u\\AppData\\Roaming\\com.aiteam.desktop\\u\\c\\file\\shot.png"), undefined);
+  assert.equal(judge("C:\\Users\\u\\AppData\\Roaming\\gcloud-notes\\a.txt"), undefined);
+  assert.equal(judge("C:\\Users\\u\\Documents\\Roaming\\gcloud\\a.pdf"), undefined);
+});
+
 // A hard link to a key carries no trace of the key in its own path, so realpath + the credential list
 // cannot judge it: a file with more than one link is refused instead.
 test("an attachment with more than one hard link is refused", () => {
@@ -162,12 +174,14 @@ test("attachment type is taken from the real file, not from the name the client 
   }
 });
 
-// One source of truth: the credential list is the subset of the project-folder policy that applies here.
-test("credential_home_roots is the credential subset of home_roots", () => {
+// One source of truth: the credential list only narrows the project-folder policy that applies here.
+test("every credential_home_roots entry is a home root or a folder inside one", () => {
   const policy = projectPathPolicyForTests();
   for (const platform of [policy.macos, policy.windows]) {
     assert(platform.credential_home_roots && platform.credential_home_roots.length > 0);
-    for (const root of platform.credential_home_roots) assert(platform.home_roots.includes(root), root);
+    for (const root of platform.credential_home_roots) {
+      assert(platform.home_roots.some((home) => root === home || root.startsWith(`${home}/`)), root);
+    }
   }
   assert.equal(policy.macos.credential_home_roots!.includes("Library"), false);
   assert.equal(policy.windows.credential_home_roots!.includes("AppData"), false);
