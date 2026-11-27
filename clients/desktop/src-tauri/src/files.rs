@@ -7,8 +7,9 @@ use tauri::{Emitter, Manager};
 
 const PREVIEW_MAX_CHARS: usize = 30_000;
 
-/// Guard for attachments handed over as bytes (paste / drag-and-drop): they travel through the
-/// IPC bridge in one piece, unlike files the native picker copies straight from disk.
+/// Guard for attachments handed over as bytes — only pasted content with no file on disk
+/// (screenshots, pictures recovered from RTF). They travel through the IPC bridge in one piece.
+/// Dropped, picked and Finder/Explorer-copied files are referenced by path and have no cap.
 const MAX_PASTED_FILE_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Longest base64 text that can still decode to `MAX_PASTED_FILE_BYTES` or less: standard
@@ -136,9 +137,10 @@ pub struct CachedFile {
 }
 
 /// Reserves the on-disk copy for one chat attachment: `{app_data}/{user}/{chat}/file/{name}_{suffix}.{ext}`.
-/// Both the native picker (`cache_file`) and bytes handed over by the webview
-/// (`cache_file_bytes`, used by paste and drag-and-drop) land in the same place, so everything
-/// downstream — preview, upload, send — sees one kind of attachment.
+/// Both `cache_file` and bytes handed over by the webview (`cache_file_bytes`, used for pasted
+/// screenshots and RTF pictures) land in the same place, so everything downstream — preview,
+/// send — sees one kind of attachment. Dropped / picked / copied files skip this entirely
+/// (`describe_local_file`: referenced where they are).
 fn prepare_cache_destination(
     app: &tauri::AppHandle,
     user_id: &str,
@@ -250,8 +252,9 @@ pub fn describe_local_file(app: tauri::AppHandle, src_path: String) -> Result<Ca
     Ok(cached_file_result(&src, String::new(), file_name, size, mime))
 }
 
-/// Caches bytes the webview already holds: a pasted screenshot has no path on disk, and a
-/// dropped file is only handed over as bytes. The name is sanitised like any other path
+/// Caches bytes the webview already holds: a pasted screenshot (or a picture recovered from a
+/// rich-text copy) has no path on disk, so it is written here and then referenced by this path.
+/// The name is sanitised like any other path
 /// segment, so the webview cannot write outside this chat's attachment directory.
 #[tauri::command]
 pub fn cache_file_bytes(
@@ -1166,7 +1169,7 @@ mod tests {
         }
     }
 
-    /// Names for pasted and dropped attachments come from the WebView, so they go through the
+    /// Names for pasted attachments without a file on disk come from the WebView, so they go through the
     /// same segment check as a user or chat id: no separators, no traversal, no control bytes.
     #[test]
     fn pasted_attachment_names_cannot_escape_the_chat_directory() {

@@ -632,13 +632,13 @@ export default function Chat() {
 
   const pickFileAction = pickFilePath
 
-  /** Paste / drag-and-drop: the WebView hands over bytes, not a path, so cache them directly. */
+  /** Pasted content with no file on disk (screenshot, RTF picture): cache the bytes, then reference the cached path. */
   const importFileAction = useCallback(
     (file: File) => cacheFileFromBlob(userId, activeConvId || 'new-session', file, file.name),
     [userId, activeConvId]
   )
 
-  /** Dragged in or picked: the message refers to the file where it is (attachment by path), nothing is copied. */
+  /** Dragged in, picked, or copied in Finder/Explorer and pasted: the message refers to the file where it is (attachment by path), nothing is copied. */
   const importPathAction = useCallback(
     (path: string) => describeLocalFile(path),
     [],

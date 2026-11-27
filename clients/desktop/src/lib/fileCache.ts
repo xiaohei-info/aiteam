@@ -77,9 +77,10 @@ function fallbackFileName(mime: string): string {
 }
 
 /**
- * Cache a file the WebView already holds (clipboard paste, drag-and-drop) into the same
- * per-chat attachment directory the native picker writes to, so the result is an ordinary
- * attachment: same preview, same upload, same send.
+ * Cache content the WebView already holds and that has no file on disk (pasted screenshot,
+ * pictures recovered from a rich-text copy) into the per-chat attachment directory, so it can be
+ * referenced by path like any other attachment. Capped at 64 MB because the bytes go through IPC.
+ * Files that exist on disk (dropped, picked, copied in Finder/Explorer) never come here.
  */
 export async function cacheFileFromBlob(
   userId: string,

@@ -33,8 +33,8 @@ interface Props {
   onEnter: () => void
   onChange: (text: string, mentions: string[]) => void
   /**
-   * Images and files pasted or dropped into the box. They are handed over as attachments — the
-   * same thing the attachment button produces — instead of being dropped into the text.
+   * Pasted images that have no file on disk (screenshots, RTF pictures). They are handed over as
+   * attachments instead of being dropped into the text; files on disk go through `onPaths`.
    * Without this callback the input falls back to a hint telling the user to use that button.
    */
   onFiles?: (files: File[]) => void

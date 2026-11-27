@@ -60,7 +60,7 @@
 
 ### 3.5 桌面端
 - 拖入 / 「+ 导入」：直接拿原文件路径，**不再 `cache_file` 复制**，不再上传，附件立即可发（不转圈）。
-- 粘贴截图 / 粘贴文件（没有路径）：仍 `cache_file_bytes` 写进会话目录，用缓存文件的路径（粘贴的 64 MB 限制保留，来自 IPC 传输）。
+- ~~粘贴截图 / 粘贴文件（没有路径）：仍 `cache_file_bytes` 写进会话目录~~（见 §8.2 修订）：访达 / 资源管理器复制的文件粘贴时也按原路径引用；只有本机没有对应文件的粘贴内容（截图、WPS/Word 图文里的图片）才 `cache_file_bytes` 写进会话目录、按缓存路径引用（64 MB 限制只剩这一类，来自 IPC 传输）。
 - 删除 `ChatInputBar` 的上传状态机（`handleUploadFile` / `beginAttachmentUpload` / 取消后删除远端附件）在桌面端的使用；`singleChatPrompt.ts` / `groupPrompt.ts` 改发 `attachment_paths`。
 - 历史消息里的附件 chip：显示名称；点击用路径打开，文件不在了显示"文件已移动或删除"。
 
@@ -108,7 +108,7 @@
 | 消息末尾追加「用户附件」清单（编号、文件名、类型、大小），不含路径 | `attachmentManifest` |
 | 5 MiB 以内的图片仍随消息作为图片输入（与原来一致）；更大的图片不缩放，`attachment_read` 返回「超过 5 MiB 无法查看」 | `loadInlineImage` |
 | `attachment_read(attachment, offset, limit)` 给所有员工、免审批（只读）；文本 / PDF / Word 整体提取后按字分段（默认 2 万字，最多 6.4 万字）；PDF 不再限 50 页；超过 256 MiB 的纯文本按字节窗口读取；视频、音频、压缩包等只给文件名和大小；文件被移动 / 删除 / 修改都会如实告诉员工 | `src/pi/attachment-refs.ts`、`src/pi/session-host.ts`、`src/approval-service.ts` |
-| 桌面端拖入、「+ 导入」只记录原文件位置（新命令 `describe_local_file`，不复制、不上传），粘贴仍写入会话缓存后按缓存路径引用；历史消息里点按路径引用的附件直接打开本机文件 | `clients/desktop/src-tauri/src/files.rs`、`src/lib/fileCache.ts`、`src/lib/chatAttachmentUpload.ts`、`ChatInputBar.tsx`、`AttachmentBar.tsx`、单聊 / 群聊页面 |
+| 桌面端拖入、「+ 导入」只记录原文件位置（新命令 `describe_local_file`，不复制、不上传），粘贴仍写入会话缓存后按缓存路径引用（§8.2 已修订：复制的文件粘贴也按原路径）；历史消息里点按路径引用的附件直接打开本机文件 | `clients/desktop/src-tauri/src/files.rs`、`src/lib/fileCache.ts`、`src/lib/chatAttachmentUpload.ts`、`ChatInputBar.tsx`、`AttachmentBar.tsx`、单聊 / 群聊页面 |
 | 契约快照 `docs/api.json` 的 `PromptRequest` 增加 `attachment_paths` | `clients/desktop/docs/api.json` |
 
 已知边界：历史消息里的附件点开依赖系统授权范围（拖入 / 选择后本次启动内可打开；重启后可能提示需要重新授权或文件已移动）；Agent 只在员工调用工具时读取文件，所以发送后再改动文件，员工读到的是改动后的内容（工具结果会注明「发送后被修改过」）。
@@ -129,3 +129,36 @@
 | 历史消息点开附件 | 用系统默认应用打开原文件 |
 | 群聊拖入 + @成员 | 被 @ 的员工读到附件并回答 |
 | 同一文件拖入两次 | 只出现一张卡片 |
+
+### 8.2 粘贴复制的文件也按原路径引用（2026-11-27，提交 `e2c29750`）
+
+问题：8.1 之后，从访达复制文件再粘贴仍走 WebView 交来的文件字节（`cache_file_bytes`，base64 过 IPC），110 MB 的 zip 报「超过 64 MB 上限」，小一些的大文件也要整份复制、转圈。拖入和粘贴是两条路。
+
+修订后，**本机上有文件的，一律按原路径引用**；只有本机没有文件的粘贴内容才写缓存：
+
+| 来源 | 拿到什么 | 走哪条路 | 大小限制 |
+| --- | --- | --- | --- |
+| 拖入 | Tauri 原生拖放给出路径 | `importPathsRef` → `describe_local_file` | 无 |
+| 「+ 导入」 | 系统选择器给出路径 | 同上 | 无 |
+| 访达 / 资源管理器复制后粘贴 | 新命令 `read_clipboard_file_paths` 从系统剪贴板读路径 | 同上（去重、「正在导入」、出错文案与拖入相同） | 无 |
+| 截图、WPS/Word 图文里的图片 | 只有字节，本机没有文件 | `onFiles` → `cache_file_bytes` 写会话缓存，再按缓存路径引用 | 64 MB（IPC 传输） |
+
+实现：
+
+- `clients/desktop/src-tauri/src/clipboard_files.rs`：
+  - macOS 读每个 `NSPasteboardItem` 的 `public.file-url`。访达放的是文件引用地址 `file:///.file/id=…`（按 inode，不是路径），先用 `NSURL::filePathURL` 解析成真实路径，否则会去打开 `/.file/id=…` 报 `Not a directory (os error 20)`。
+  - Windows 读 `CF_HDROP`（`DragQueryFileW`）。
+  - 其它平台返回空。
+  - `Cargo.toml`：`url` 提到通用依赖；macOS 增加 `NSPasteboardItem`、`NSURL` 特性；Windows 增加 `Win32_System_DataExchange`、`Win32_System_Ole`、`Win32_UI_Shell`。
+- `src/components/Chat/MentionInput.tsx` `takeTransfer`：剪贴板里有文件时先调 `readClipboardFilePaths()`，拿到路径就交给 `onPaths`，**不读字节**；拿不到（截图等）才按原来的内容规则处理。因为多了一次异步，文字插入回到粘贴时的光标位置。
+- `ChatInputBar.tsx`：`onPaths={canDropFiles ? handlePastePaths : undefined}`，`handlePastePaths` 直接调用拖入用的 `importPathsRef`。
+- 路径同样经 `describe_local_file` → `canonicalize_scoped_path` 校验（必须是存在的普通文件，文件夹提示不能作为附件）。
+- 添加失败的提示统一由 `importErrorMessage`（`src/lib/chatAttachmentUpload.ts`）给出原因（超限 / 文件夹 / 宿主错误原文），不再只说「请重试」。
+
+验证：
+
+- `cargo test --lib clipboard_files`：`file://` 地址解码（中文、空格）、跳过非 file 地址；macOS 用真实文件生成 `file:///.file/id=…` 引用并解析回原路径。
+- `tests/composerImportOwnership.test.ts`：守卫粘贴路径必须走 `readClipboardFilePaths` → `onPaths` → `importPathsRef`，不读字节；`importErrorMessage` 文案。
+- 全量：desktop 971/971、`cargo test --lib` 98 通过、agent_service 569 中 567 通过 0 失败。
+- 真机（macOS，用户实测）：访达复制 `cc-haha-main.zip`（110 MB）粘贴，立即加入、无转圈，发送后员工能读到。
+- 未验证：Windows 的 `CF_HDROP` 只在独立小工程里交叉编译通过，未上 Windows 真机。

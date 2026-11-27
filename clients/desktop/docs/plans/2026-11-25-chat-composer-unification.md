@@ -140,8 +140,8 @@ mentionRoster?: MentionRosterExpert[]
 
 - `MentionInput` 新增 `onFiles`：粘贴 / 拖入里的文件交给宿主，纯文本仍然插入输入框（两者同时存在时都不丢）；宿主没接 `onFiles` 时才回到「请用附件按钮」提示。
 - `ChatInputBar.onImportFile` 把 `File` 缓存成 `CachedFile`，之后复用 `handlePickFile` 的上传与待发送列表逻辑。
-- 剪贴板截图没有磁盘路径，因此新增 Tauri 命令 `cache_file_bytes`（base64 传入，文件名按路径段校验，上限 64 MB），与 `cache_file` 写入同一个会话附件目录。
-- ~~`tauri.conf.json` 设 `dragDropEnabled: false`~~（2026-11-27 owner 改定）：保留 Tauri 默认的原生拖放。从访达/资源管理器拖入的文件由 `src/lib/nativeFileDrop.ts` 监听 `onDragDropEvent`，按松手坐标判断是否落在输入栏，按路径走 `cache_file`（与「+ 导入」相同，复制到会话目录这一步不限大小；但随后上传给本机 Agent 仍受其单文件 5 MiB 限制，附件改为按路径引用另开 PR 处理）。文字拖入不接收（原生拖放吞掉；`MentionInput` 的 `onDrop` 也拦掉应用内拖动），文字请粘贴。`cache_file_bytes` 的 64 MB 上限只剩粘贴路径。
+- 剪贴板截图没有磁盘路径，因此新增 Tauri 命令 `cache_file_bytes`（base64 传入，文件名按路径段校验，上限 64 MB），写入会话附件目录。2026-11-27 起它**只用于本机没有文件的粘贴内容**（截图、WPS/Word 图文里的图片）；访达 / 资源管理器复制的文件粘贴时读系统剪贴板拿路径，与拖入同一条路（见 `2026-11-27-attachment-by-path.md` §8.2）。
+- ~~`tauri.conf.json` 设 `dragDropEnabled: false`~~（2026-11-27 owner 改定）：保留 Tauri 默认的原生拖放。从访达/资源管理器拖入的文件由 `src/lib/nativeFileDrop.ts` 监听 `onDragDropEvent`，按松手坐标判断是否落在输入栏，按路径导入（与「+ 导入」相同）。~~随后上传给本机 Agent 仍受 5 MiB 限制~~：附件按路径引用（原 #235）已并入本 PR，拖入 / 「+ 导入」/ 粘贴复制的文件都只记原路径（`describe_local_file`），不复制、不上传、不限大小，Agent 用 `attachment_read` 按需读取，见 `2026-11-27-attachment-by-path.md`。文字拖入不接收（原生拖放吞掉；`MentionInput` 的 `onDrop` 也拦掉应用内拖动），文字请粘贴。`cache_file_bytes` 的 64 MB 上限只剩截图等本机没有文件的粘贴内容。
 
 ### 验证
 

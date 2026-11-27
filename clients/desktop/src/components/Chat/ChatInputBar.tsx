@@ -64,7 +64,7 @@ export interface ChatInputBarProps {
   onSend: (text: string, files: UploadableChatFile[], employeeId?: string, mentions?: string[]) => boolean | Promise<boolean>
   /** Opens the file picker and returns the chosen path; the file is then imported like a dropped one. */
   onPickFile: () => Promise<string | null>
-  /** Caches a file the WebView holds (pasted or dropped) so it becomes an ordinary attachment. */
+  /** Caches pasted content that has no file on disk (screenshot, RTF picture) so it can be referenced by path. */
   onImportFile?: (file: File) => Promise<CachedFile | null>
   /** Caches a file dragged in from Finder/Explorer by its path, like「+ 导入」(no size limit). */
   onImportPath?: (path: string) => Promise<CachedFile | null>
@@ -460,7 +460,7 @@ export const ChatInputBar = memo(({
     if (path) importPathsRef.current([path])
   }
 
-  /** Pasted and dropped files take the very same route as a file chosen with the attachment button. */
+  /** Pasted content without a file on disk (screenshot, RTF picture). Files on disk go through importPathsRef. */
   const handleImportFiles = useCallback((files: File[]) => {
     if (!onImportFile || files.length === 0) return
     setFileError('')

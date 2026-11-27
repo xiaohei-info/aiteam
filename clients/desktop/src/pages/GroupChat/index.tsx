@@ -212,13 +212,13 @@ export default function GroupChat() {
     return true
   }, [activeGroupId, group, appendMessage, updateMessageStatus, beginAssistantStream])
 
-  /** Paste / drag-and-drop: the WebView hands over bytes, not a path, so cache them directly. */
+  /** Pasted content with no file on disk (screenshot, RTF picture): cache the bytes, then reference the cached path. */
   const handleImportFile = useCallback(
     (file: File) => cacheFileFromBlob(userId, activeGroupId || 'group', file, file.name),
     [userId, activeGroupId],
   )
 
-  /** Dragged in or picked: the message refers to the file where it is (attachment by path), nothing is copied. */
+  /** Dragged in, picked, or copied in Finder/Explorer and pasted: the message refers to the file where it is (attachment by path), nothing is copied. */
   const handleImportPath = useCallback(
     (path: string) => describeLocalFile(path),
     [],
