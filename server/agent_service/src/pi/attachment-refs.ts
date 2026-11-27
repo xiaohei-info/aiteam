@@ -1,4 +1,4 @@
-import { closeSync, openSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
+import { closeSync, openSync, readFileSync, readSync, realpathSync, statSync, type Stats } from "node:fs";
 import { basename, isAbsolute } from "node:path";
 import type { AgentToolResult, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { AgentSqliteStore, LocalFileRef } from "../storage/sqlite.js";
@@ -34,7 +34,7 @@ const EXTRA_MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
 };
 
 export class AttachmentPathError extends Error {
-  constructor(readonly code: "invalid_attachment_paths" | "attachment_not_found" | "attachment_not_a_file" | "attachment_in_credential_folder", message: string) {
+  constructor(readonly code: "invalid_attachment_paths" | "attachment_not_found" | "attachment_not_a_file" | "attachment_in_credential_folder" | "attachment_has_hard_links" | "attachment_path_changed", message: string) {
     super(message);
     this.name = "AttachmentPathError";
   }
@@ -73,28 +73,45 @@ export function parseAttachmentPaths(value: unknown): AttachmentPathInput[] {
 }
 
 /**
- * Follows links first, then requires an ordinary file: a folder or a device is never attached.
- * Credential folders are refused here as well as in the client, because the path arrives from the
- * renderer: were it ever compromised, `~/.ssh/id_rsa` must not become readable through `attachment_read`.
+ * Resolves links, then insists on an ordinary, singly-linked file that sits in no credential folder.
+ * Run both when an attachment is registered and again on every read, because the path arrives from the
+ * renderer and one check at registration does not hold: a path that passed can be replaced by a link
+ * afterwards, and a hard link to `~/.ssh/id_rsa` carries no trace of its target in its own path. Refusing
+ * multiply-linked files is what lets the credential check cover that second route. This narrows the risk of
+ * a stolen renderer having an employee read a key; it does not remove it. What keeps the ordinary case
+ * safe is the client side: Tauri hands over only paths the user dragged in or picked themselves
+ * (`canonicalize_scoped_path` + the fs scope), so a key is not reachable without the user choosing it.
  */
-export function resolveAttachmentPath(input: AttachmentPathInput): ResolvedAttachmentPath {
+export function checkAttachmentFile(path: string, label?: string): { real: string; stats: Stats } {
   let real: string;
   try {
-    real = realpathSync(input.path);
+    real = realpathSync(path);
   } catch {
-    throw new AttachmentPathError("attachment_not_found", `附件不存在：${input.name ?? basename(input.path)}`);
+    throw new AttachmentPathError("attachment_not_found", `附件不存在：${label ?? basename(path)}`);
   }
   const credential = credentialFolderForPath(real);
   if (credential) {
     throw new AttachmentPathError(
       "attachment_in_credential_folder",
-      `为保护密钥与凭据，${credential} 目录里的文件不能作为附件：${input.name ?? basename(real)}`,
+      `为保护密钥与凭据，${credential} 目录里的文件不能作为附件：${label ?? basename(real)}`,
     );
   }
   const stats = statSync(real);
-  if (!stats.isFile()) throw new AttachmentPathError("attachment_not_a_file", `只能附加文件，不能附加文件夹：${input.name ?? basename(input.path)}`);
+  if (!stats.isFile()) throw new AttachmentPathError("attachment_not_a_file", `只能附加文件，不能附加文件夹：${label ?? basename(path)}`);
+  if (stats.nlink > 1) {
+    throw new AttachmentPathError(
+      "attachment_has_hard_links",
+      `${label ?? basename(real)} 有多个硬链接，无法确认它真正指向哪个文件，不能作为附件。`,
+    );
+  }
+  return { real, stats };
+}
+
+/** The type is taken from the file on disk, never from the name the client sent: that name is a label only. */
+export function resolveAttachmentPath(input: AttachmentPathInput): ResolvedAttachmentPath {
+  const { real, stats } = checkAttachmentFile(input.path, input.name);
   const name = input.name ?? basename(real);
-  return { path: real, name, mime_type: mimeForAttachment(name), byte_size: stats.size, mtime_ms: Math.trunc(stats.mtimeMs) };
+  return { path: real, name, mime_type: mimeForAttachment(basename(real)), byte_size: stats.size, mtime_ms: Math.trunc(stats.mtimeMs) };
 }
 
 /** Loads a small, genuine image so it can go to the model with the message; anything else is left to the tool. */
@@ -202,13 +219,20 @@ export function readAttachmentRef(store: AgentSqliteStore, owner: AttachmentRefO
   const refs = store.listOwnedLocalFileRefs(owner.conversationId, owner.tenantId, owner.memberId);
   const ref = refs.find((item) => item.id === wanted) ?? [...refs].reverse().find((item) => item.name === wanted);
   if (!ref) return textResult(`没有找到附件「${wanted}」。本会话的附件：${refs.length ? refs.map((item) => `${item.id}（${item.name}）`).join("、") : "无"}`, { attachment: wanted }, true);
-  let stats;
+  // The stored path passed resolveAttachmentPath once; check it again here, since it may have been
+  // swapped for a link to somewhere else in the meantime.
+  let stats: Stats;
   try {
-    stats = statSync(ref.path);
-  } catch {
-    return textResult(`附件 ${ref.name} 已被移动或删除，无法读取。`, { attachment_id: ref.id }, true);
+    const checked = checkAttachmentFile(ref.path, ref.name);
+    if (checked.real !== ref.path) {
+      throw new AttachmentPathError("attachment_path_changed", `附件 ${ref.name} 现在指向另一个文件，为安全起见不再读取。`);
+    }
+    stats = checked.stats;
+  } catch (error) {
+    const moved = !(error instanceof AttachmentPathError) || error.code === "attachment_not_found" || error.code === "attachment_not_a_file";
+    const message = moved ? `附件 ${ref.name} 已被移动或删除，无法读取。` : (error as AttachmentPathError).message;
+    return textResult(message, { attachment_id: ref.id }, true);
   }
-  if (!stats.isFile()) return textResult(`附件 ${ref.name} 已被移动或删除，无法读取。`, { attachment_id: ref.id }, true);
   const mtimeMs = Math.trunc(stats.mtimeMs);
   const changed = stats.size !== ref.byte_size || mtimeMs !== ref.mtime_ms ? `（注意：文件在发送后被修改过，以下是当前内容）\n` : "";
   const details = { attachment_id: ref.id, filename: ref.name, mime_type: ref.mime_type, byte_size: stats.size };

@@ -163,3 +163,23 @@
 - 全量：desktop 971/971、`cargo test --lib` 98 通过、agent_service 569 中 567 通过 0 失败。
 - 真机（macOS，用户实测）：访达复制 `cc-haha-main.zip`（110 MB）粘贴，立即加入、无转圈，发送后员工能读到。
 - 未验证：Windows 的 `CF_HDROP` 只在独立小工程里交叉编译通过，未上 Windows 真机。
+
+### 8.3 读取侧也要重新判定路径（2026-11-27，复核必改）
+
+问题（用户复核，成立）：`a5fd85b0` 只在**登记时**（`resolveAttachmentPath`）解析软链并拒绝凭据目录，`attachment_read` 的读取侧只 `statSync`。于是 `attachment-refs.ts` 原注释里「渲染进程被攻破时 `~/.ssh/id_rsa` 不可读」这句承诺有两条绕法：
+
+1. **登记后换软链**：登记时是普通文件、通过检查；随后把该路径换成指向 `~/.ssh/id_rsa` 的软链，读取时 `statSync` 跟随软链，照读。
+2. **硬链接**：把密钥硬链接到 `~/Documents/report.pdf` 再附加。硬链接在自己的路径里不留目标痕迹，`realpathSync` 返回的就是 `report.pdf`，凭据目录判定命不中。
+
+另外 MIME 由客户端传来的 `name` 决定（`mimeForAttachment(name)`），客户端可以给真实文件任意换类型。
+
+改法（`server/agent_service/src/pi/attachment-refs.ts`）：
+
+- 抽出 `checkAttachmentFile(path, label)`：解析软链 → 凭据目录判定 → 必须是普通文件 → **`nlink > 1` 一律拒绝**（新错误码 `attachment_has_hard_links`，422）。登记与读取共用它，读取时**再判一次**。
+- 读取侧额外比对身份：`realpathSync(ref.path) !== ref.path` 即路径已指向别处 → 拒绝（`attachment_path_changed`，工具返回「现在指向另一个文件，为安全起见不再读取」）。
+- MIME 改由**磁盘上的真实文件名**推断（`mimeForAttachment(basename(real))`）；客户端的 `name` 只作显示标签。
+- 注释改为如实口径：这些检查**收窄**风险，对同时能写文件的被攻破渲染进程并不能消除风险。真正让普通情况安全的是客户端侧——Tauri 只交出用户自己拖入或选择过的路径（`canonicalize_scoped_path` + fs scope），没有用户亲自选中就拿不到密钥；桌面端并没有凭据目录黑名单。
+
+代价：确实有多个硬链接的正常文件会被拒（提示说明原因）。普通用户文档 `nlink` 基本为 1，而放过硬链接就等于放弃凭据目录这道检查。
+
+验证（`src/pi/attachment-refs.test.ts`，3 个新用例）：硬链接到 `.ssh/id_rsa` 的 `report.pdf` 登记即拒；登记后换软链指向 `.ssh/id_rsa` → 读取报「凭据」且内容不外泄，换软链指向普通文件 → 报「指向另一个文件」且内容不外泄；`{ path: notes.txt, name: 报告.pdf }` 的 MIME 为 `text/plain`。

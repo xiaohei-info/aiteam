@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -77,6 +77,74 @@ test("attachment paths inside a credential folder are refused, other folders are
     const shot = join(dir, "Library", "Caches", "shot.png");
     writeFileSync(shot, Buffer.alloc(4));
     assert.equal(resolveAttachmentPath({ path: shot }).name, "shot.png");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// A hard link to a key carries no trace of the key in its own path, so realpath + the credential list
+// cannot judge it: a file with more than one link is refused instead.
+test("an attachment with more than one hard link is refused", () => {
+  const dir = mkdtempSync(join(tmpdir(), "attach-link-"));
+  try {
+    mkdirSync(join(dir, ".ssh"));
+    const key = join(dir, ".ssh", "id_rsa");
+    writeFileSync(key, "PRIVATE");
+    const disguised = join(dir, "report.pdf");
+    linkSync(key, disguised);
+    assert.throws(() => resolveAttachmentPath({ path: disguised }), (error: unknown) => {
+      assert.equal((error as { code?: string }).code, "attachment_has_hard_links");
+      return true;
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Registration is not the last check: the same file is judged again on every read.
+test("attachment_read refuses a path that was swapped for a link after it was attached", async () => {
+  const fixture = await createFixture();
+  const dir = mkdtempSync(join(tmpdir(), "attach-swap-"));
+  try {
+    mkdirSync(join(dir, ".ssh"));
+    const key = join(dir, ".ssh", "id_rsa");
+    writeFileSync(key, "PRIVATE KEY");
+    const plain = join(dir, "other.txt");
+    writeFileSync(plain, "harmless");
+
+    const swap = (target: string) => {
+      const notes = join(dir, "notes.txt");
+      writeFileSync(notes, "hello");
+      const ref = fixture.store.upsertLocalFileRefs(owner, [resolveAttachmentPath({ path: notes })])[0]!;
+      rmSync(notes);
+      symlinkSync(target, notes);
+      const result = readAttachmentRef(fixture.store, owner, { attachment: ref.id });
+      rmSync(notes);
+      return result;
+    };
+
+    const stolen = swap(key);
+    assert.equal((stolen as { isError?: boolean }).isError, true);
+    assert.match(text(stolen), /凭据/u);
+    assert.equal(text(stolen).includes("PRIVATE KEY"), false);
+
+    const elsewhere = swap(plain);
+    assert.equal((elsewhere as { isError?: boolean }).isError, true);
+    assert.match(text(elsewhere), /指向另一个文件/u);
+    assert.equal(text(elsewhere).includes("harmless"), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    await fixture.close();
+  }
+});
+
+// The name the client sends is a label; the type comes from the file on disk.
+test("attachment type is taken from the real file, not from the name the client sent", () => {
+  const dir = mkdtempSync(join(tmpdir(), "attach-mime-"));
+  try {
+    const file = join(dir, "notes.txt");
+    writeFileSync(file, "plain");
+    assert.equal(resolveAttachmentPath({ path: file, name: "报告.pdf" }).mime_type, "text/plain");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
