@@ -7,7 +7,7 @@ import type { GroupMember } from '../../stores/chat'
 import { isImeKeyboardEvent } from '../../lib/imeKeyboard'
 import { extractMentionText, type RichTextNodeLike } from './mentionRichText'
 import { composePaste, filesOf, htmlToParts, type ComposedPaste } from './clipboardContent'
-import { readClipboardRtfImages } from '../../lib/fileCache'
+import { readClipboardFilePaths, readClipboardRtfImages } from '../../lib/fileCache'
 
 export interface MentionInputHandle {
   clear: () => void
@@ -38,6 +38,11 @@ interface Props {
    * Without this callback the input falls back to a hint telling the user to use that button.
    */
   onFiles?: (files: File[]) => void
+  /**
+   * Files copied in Finder / Explorer, by path — the same hand-off a dropped file gets, so a pasted
+   * file is referenced in place instead of being copied as bytes (and has no size cap).
+   */
+  onPaths?: (paths: string[]) => void
 }
 
 /** 粘贴/换行会插入 <div>、<p>、<br> 等结构，展开逻辑见 mentionRichText（递归遍历子树）。 */
@@ -75,7 +80,7 @@ function caretToEnd(el: HTMLDivElement): void {
 }
 
 const MentionInput = forwardRef<MentionInputHandle, Props>(({
-  members, placeholder, disabled, style, className, autoFocus, onEnter, onChange, onFiles,
+  members, placeholder, disabled, style, className, autoFocus, onEnter, onChange, onFiles, onPaths,
 }, ref) => {
   const editRef = useRef<HTMLDivElement>(null)
   const [query, setQuery] = useState<string | null>(null)
@@ -230,7 +235,9 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
   /**
    * 粘贴：文字照常插入，图片和文件走附件（与点「+ 导入」同一路径）。
    * 拖入不经过这里：文件由 Tauri 原生拖放按路径交给输入栏（见 nativeFileDrop），文字拖入不接收。
-   * - 纯图片、访达复制的文件：作附件（剪贴板顺带的文件名文字不算内容）。
+   * - 访达/资源管理器复制的文件：从系统剪贴板读出路径，和拖入走同一条路（按路径导入，不拷字节、不限大小）；
+   *   剪贴板顺带的文件名文字不算内容。
+   * - 纯图片（截图等没有本机文件的）：作附件。
    * - 富文本带图片且拿得到图片数据（含 WPS/Word 从 RTF 补回）：图文都加，图片在原位置留 `[图片：名称]` 占位。
    * - 复制表格（有文字、富文本里没图片，只多一张截图）：只贴文字。
    * - 网页图文（图片只有网址）、飞书内部引用：只贴文字，不下载、不留占位，提示图片没带过来。
@@ -257,21 +264,38 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
       }
     }
 
-    const composed = composePaste({ plain, parts, files })
-    if (composed.unavailable === 0 || !onFiles) {
-      apply(composed)
-      return
-    }
-    // WPS/Word 复制图文：HTML 里的图片指向源应用沙盒里的临时文件，页面读不到；
-    // 图片本身在剪贴板的 RTF 里，由本机端读出后按原顺序补回占位。
     const selection = window.getSelection()
     const range = selection && selection.rangeCount > 0 && el.contains(selection.anchorNode)
       ? selection.getRangeAt(0).cloneRange()
       : null
-    void readClipboardRtfImages().then((pictures) => {
-      apply(pictures.length > 0 ? composePaste({ plain, parts, files: [...files, ...pictures] }) : composed, range)
+
+    // 同步粘贴替换选中文字；异步回来（先查过剪贴板）时回到粘贴时的位置插入。
+    const takeContent = (at?: Range | null) => {
+      const composed = composePaste({ plain, parts, files })
+      if (composed.unavailable === 0 || !onFiles) {
+        apply(composed, at)
+        return
+      }
+      takeRtfPictures(composed)
+    }
+    // WPS/Word 复制图文：HTML 里的图片指向源应用沙盒里的临时文件，页面读不到；
+    // 图片本身在剪贴板的 RTF 里，由本机端读出后按原顺序补回占位。
+    const takeRtfPictures = (composed: ComposedPaste) => {
+      void readClipboardRtfImages().then((pictures) => {
+        apply(pictures.length > 0 ? composePaste({ plain, parts, files: [...files, ...pictures] }) : composed, range)
+      })
+    }
+
+    if (files.length === 0 || !onPaths) {
+      takeContent()
+      return
+    }
+    // 复制的是本机文件：按路径交给输入栏，和拖入同一条路；没有路径（截图、网页图片）才按内容处理。
+    void readClipboardFilePaths().then((paths) => {
+      if (paths.length > 0) onPaths(paths)
+      else takeContent(range)
     })
-  }, [insertPlainText, onFiles, showHint])
+  }, [insertPlainText, onFiles, onPaths, showHint])
 
   const handlePaste = useCallback((e: React.ClipboardEvent<HTMLDivElement>) => {
     const el = editRef.current

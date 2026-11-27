@@ -23,21 +23,23 @@ base64 = "0.22"
 md5 = "0.7"
 uuid = { version = "1", features = ["v4"] }
 tokio = { version = "1", features = ["time"] }
+# file:// URL ↔ path: Node's --import on Windows (src/agent.rs), copied files on the clipboard (src/clipboard_files.rs).
+url = "2"
 
 # Ends the Agent's and workbench projects' process groups.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
-# macOS: read the RTF flavour of the clipboard for pictures WebKit does not expose (src/clipboard_images.rs).
+# macOS: read the RTF flavour of the clipboard for pictures WebKit does not expose (src/clipboard_images.rs),
+# and the file URLs of files copied in Finder (src/clipboard_files.rs).
 [target.'cfg(target_os = "macos")'.dependencies]
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSPasteboard"] }
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSData", "NSArray"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSPasteboard", "NSPasteboardItem"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSData", "NSArray", "NSURL"] }
 
 # Windows: DPAPI wraps the auth vault master key (src/secure_session.rs); a Job Object ends the Agent
-# tree on exit or crash (src/agent.rs); url turns a path into the file:// URL Node needs for --import.
+# tree on exit or crash (src/agent.rs); CF_HDROP gives the paths of files copied in Explorer (src/clipboard_files.rs).
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Cryptography", "Win32_System_JobObjects", "Win32_System_Threading"] }
-url = "2"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Cryptography", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_System_DataExchange", "Win32_System_Ole", "Win32_UI_Shell"] }
 
 [dev-dependencies]
 # Match the URLPattern engine used by tauri-plugin-http 2.5.9.

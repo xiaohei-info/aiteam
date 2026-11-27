@@ -181,3 +181,19 @@ export function attachmentErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message.trim()) return error.message
   return '附件上传失败，请重试'
 }
+
+/**
+ * Why adding a file failed, in words the user can act on. The host's reason (Rust `invoke` rejects
+ * with a plain string, so it is not an Error) beats a bare「请重试」: a file over the limit will
+ * never succeed on a retry, and the user needs to know which limit it hit.
+ */
+export function importErrorMessage(name: string, error: unknown): string {
+  const raw = (error instanceof Error ? error.message : String(error ?? '')).trim()
+  const overCacheLimit = raw.match(/larger than (\d+) MB/i)
+  if (overCacheLimit) return `“${name}”超过 ${overCacheLimit[1]} MB 上限，无法添加`
+  if (/exceeds maximum size|exceeds the materialization limit|超过 5 ?MiB/i.test(raw)) {
+    return `“${name}”超过 5 MB 上限，无法添加`
+  }
+  if (raw.includes('Not a regular file')) return `“${name}”是文件夹，不能作为附件；请拖入文件`
+  return raw ? `添加“${name}”失败：${raw}` : `添加“${name}”失败，请重试`
+}

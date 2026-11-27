@@ -4,6 +4,7 @@ import test from 'node:test'
 import {
   beginAttachmentImport,
   hasBlockingAttachmentUpload,
+  importErrorMessage,
   isImportingAttachment,
   planAttachmentImports,
   queueAttachmentUpload,
@@ -151,3 +152,27 @@ for (const page of ['Chat', 'GroupChat']) {
     assert.ok(!source.includes('setSendError(null) }, [active'), 'switching must not wipe another conversation’s error')
   })
 }
+
+test('a file that failed to be added says why, since a retry cannot fix a size limit', () => {
+  assert.equal(importErrorMessage('big.mov', 'File is larger than 64 MB'), '“big.mov”超过 64 MB 上限，无法添加')
+  assert.equal(importErrorMessage('big.mov', new Error('Local file exceeds maximum size')), '“big.mov”超过 5 MB 上限，无法添加')
+  assert.equal(importErrorMessage('文稿', 'Not a regular file'), '“文稿”是文件夹，不能作为附件；请拖入文件')
+  assert.equal(importErrorMessage('a.txt', 'disk full'), '添加“a.txt”失败：disk full')
+  assert.equal(importErrorMessage('a.txt', undefined), '添加“a.txt”失败，请重试')
+})
+
+test('paste and drop show the real reason instead of a bare retry line', () => {
+  assert.ok(bar.includes('failure: (error: unknown) => importErrorMessage(name, error)'))
+  assert.ok(!bar.includes('`添加“${name}”失败，请重试`'), '文案只在 importErrorMessage 里决定')
+})
+
+test('a file copied in Finder/Explorer is pasted by path, the same route as a dropped file', () => {
+  const input = readFileSync(new URL('../src/components/Chat/MentionInput.tsx', import.meta.url), 'utf8')
+  const cache = readFileSync(new URL('../src/lib/fileCache.ts', import.meta.url), 'utf8')
+  assert.ok(cache.includes("invoke<string[]>('read_clipboard_file_paths')"))
+  assert.ok(input.includes('void readClipboardFilePaths().then((paths) => {'))
+  assert.ok(input.includes('if (paths.length > 0) onPaths(paths)'), 'copied files must not be read as bytes')
+  assert.ok(bar.includes('onPaths={canDropFiles ? handlePastePaths : undefined}'))
+  assert.ok(bar.includes('const handlePastePaths = useCallback((paths: string[]) => importPathsRef.current(paths), [])'),
+    'paste and drop share importPathsRef (dedupe, importing chip, error text)')
+})

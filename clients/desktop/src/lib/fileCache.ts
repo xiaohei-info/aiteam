@@ -94,6 +94,19 @@ export async function cacheFileFromBlob(
 }
 
 /**
+ * Paths of files copied in Finder / Explorer, read natively from the system clipboard. Pasting them
+ * then takes the same route as dropping them (by path, no bytes through IPC, no size cap). Empty
+ * outside Tauri or when the clipboard holds no copied files (e.g. a screenshot).
+ */
+export async function readClipboardFilePaths(): Promise<string[]> {
+  try {
+    return await invoke<string[]>('read_clipboard_file_paths')
+  } catch {
+    return []
+  }
+}
+
+/**
  * Pictures a rich-text copy carries only in its RTF (WPS/Word: the HTML points at a temp file in
  * the source app's sandbox). Read natively from the system clipboard; empty outside Tauri or when
  * the clipboard has none.

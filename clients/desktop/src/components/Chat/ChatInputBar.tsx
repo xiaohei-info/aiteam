@@ -9,6 +9,7 @@ import {
   completeAttachmentUpload,
   failAttachmentUpload,
   hasBlockingAttachmentUpload,
+  importErrorMessage,
   isImportingAttachment,
   planAttachmentImports,
   queueAttachmentUpload,
@@ -468,7 +469,7 @@ export const ChatInputBar = memo(({
       return {
         meta: { name, mime: file.type || 'application/octet-stream', size: file.size },
         load: () => onImportFile(file),
-        failure: () => `添加“${name}”失败，请重试`,
+        failure: (error: unknown) => importErrorMessage(name, error),
       }
     }))
   }, [onImportFile, startImports])
@@ -603,12 +604,12 @@ export const ChatInputBar = memo(({
       return {
         meta: { name, mime: 'application/octet-stream', size: 0 },
         load: () => onImportPath(path).finally(() => importingPathsRef.current.delete(path)),
-        failure: (error: unknown) => String(error).includes('Not a regular file')
-          ? `“${name}”是文件夹，不能作为附件；请拖入文件`
-          : `添加“${name}”失败，请重试`,
+        failure: (error: unknown) => importErrorMessage(name, error),
       }
     }))
   }
+  // 访达/资源管理器复制的文件粘贴进来：和拖入同一条路，按路径导入。
+  const handlePastePaths = useCallback((paths: string[]) => importPathsRef.current(paths), [])
   useEffect(() => {
     if (!canDropFiles) return
     const unregister = registerFileDropZone({
@@ -901,6 +902,7 @@ export const ChatInputBar = memo(({
             onEnter={handleSend}
             onChange={composer.handleChange}
             onFiles={onImportFile && !isInteractionDisabled ? handleImportFiles : undefined}
+            onPaths={canDropFiles ? handlePastePaths : undefined}
           />
           <div className="chat-input-actions">
             <div className="chat-input-tools">
