@@ -5,10 +5,13 @@ import { useMergeRefs } from '@floating-ui/react'
 import type { CachedFile } from '../../lib/fileCache'
 import {
   attachmentErrorMessage,
+  beginAttachmentImport,
   beginAttachmentUpload,
   completeAttachmentUpload,
   failAttachmentUpload,
   hasBlockingAttachmentUpload,
+  isImportingAttachment,
+  queueAttachmentUpload,
   removeAttachmentUpload,
   runWhenAttachmentsReady,
   type UploadableChatFile,
@@ -64,6 +67,12 @@ export interface ChatInputBarProps {
   /** 草稿里的 @ 成员标签（输入框自己克隆的节点）；有快照就原样放回，没有才退回纯文本。 */
   draftMentions?: MentionInputSnapshot
   onDraftChange: (convId: string, text: string, files: CachedFile[], mentionSnapshot?: MentionInputSnapshot) => void
+  /**
+   * An import or upload finished after the user had switched to another conversation: replace that
+   * attachment (matched by its upload client id) in the owning conversation's draft, or drop it with null.
+   * Returns false when the draft no longer holds it.
+   */
+  onDraftFileUpdate?: (convId: string, clientId: string, file: CachedFile | null) => boolean
   employees?: WorkbenchEmployee[]
   members?: GroupMember[]
   variant?: 'dock' | 'hero'
@@ -84,7 +93,7 @@ export interface ChatInputBarProps {
 
 export const ChatInputBar = memo(({
   onSend, onPickFile, onImportFile, onImportPath, onUploadFile, onDeleteUploadedFile,
-  disabled, convId, conversationUpgradeFrom, draft, draftFiles, draftMentions, onDraftChange,
+  disabled, convId, conversationUpgradeFrom, draft, draftFiles, draftMentions, onDraftChange, onDraftFileUpdate,
   variant = 'dock', placeholder = '输入消息…', autoFocus, helper, tools,
   employees = [], members, isGenerating, isSyncing, onAbort, onHeightChange, enableVoiceInput, enableKnowledgeFiles,
 }: ChatInputBarProps) => {
@@ -111,6 +120,9 @@ export const ChatInputBar = memo(({
   const filesRef = useRef(pendingFiles)
   filesRef.current = pendingFiles
   const cancelledUploadIdsRef = useRef(new Set<string>())
+  // Which conversation each importing/uploading attachment belongs to. Imports and uploads keep running
+  // when the user switches away; when they finish, the result goes back to that conversation only.
+  const fileOwnersRef = useRef(new Map<string, string>())
   const prevConvRef = useRef(convId)
   const conversationUpgradeFromRef = useRef(conversationUpgradeFrom)
   conversationUpgradeFromRef.current = conversationUpgradeFrom
@@ -148,11 +160,10 @@ export const ChatInputBar = memo(({
       && !convId.startsWith('emp_')
     if (conversationChanged && !isConversationUpgrade) {
       const previousDraft = composer.valueRef.current.text
-      const previousFiles = filesRef.current.filter((file) => {
-        if (file.upload?.status !== 'uploading') return true
-        cancelledUploadIdsRef.current.add(file.upload.clientId)
-        return false
-      })
+      // Files still importing or uploading stay in the draft; they finish there (see placeFile).
+      const previousFiles = filesRef.current
+      for (const file of previousFiles) if (file.upload) fileOwnersRef.current.set(file.upload.clientId, previousConvId)
+      for (const file of (draftFiles ?? []) as UploadableChatFile[]) if (file.upload) fileOwnersRef.current.set(file.upload.clientId, convId)
       setKnowledgeOpen(false)
       setFileError('')
       // 带上 @ 成员快照：只存纯文本的话切回来「@某人」只剩文字，发送时不再提及对方。
@@ -161,6 +172,9 @@ export const ChatInputBar = memo(({
     }
     if (isConversationUpgrade && submittingConvRef.current === previousConvId) submittingConvRef.current = convId
     if (isConversationUpgrade) {
+      for (const [clientId, owner] of fileOwnersRef.current) {
+        if (owner === previousConvId) fileOwnersRef.current.set(clientId, convId)
+      }
       setQueues((previous) => renameQueue(previous, previousConvId, convId))
       setPausedQueues((previous) => {
         if (!previous.has(previousConvId)) return previous
@@ -185,6 +199,7 @@ export const ChatInputBar = memo(({
     if ((!draft && !draftFiles?.length) || isSubmitting) return
     if (composer.valueRef.current.text.trim() || filesRef.current.length > 0) return
     composer.restore(draftMentions, draft ?? '')
+    for (const file of (draftFiles ?? []) as UploadableChatFile[]) if (file.upload) fileOwnersRef.current.set(file.upload.clientId, convId)
     setPendingFiles(draftFiles ?? [])
   }, [convId, draft, draftFiles]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -262,41 +277,113 @@ export const ChatInputBar = memo(({
     else options[(currentIndex - 1 + options.length) % options.length].focus()
   }
 
+  /**
+   * Puts the new state of one attachment where it belongs: into the input box if its conversation is
+   * on screen, otherwise into that conversation's draft. Returns false when neither holds it any more.
+   */
+  const placeFile = useCallback((clientId: string, next: UploadableChatFile | null): boolean => {
+    const owner = fileOwnersRef.current.get(clientId) ?? prevConvRef.current
+    if (next?.upload?.status !== 'importing' && next?.upload?.status !== 'uploading') fileOwnersRef.current.delete(clientId)
+    if (mountedRef.current && owner === prevConvRef.current) {
+      if (!filesRef.current.some((item) => item.upload?.clientId === clientId)) return false
+      setPendingFiles((previous) => previous.flatMap((item) =>
+        item.upload?.clientId !== clientId ? [item] : next ? [next] : []))
+      return true
+    }
+    return onDraftFileUpdate?.(owner, clientId, next) ?? false
+  }, [onDraftFileUpdate])
+
   const handleUploadFile = useCallback((file: CachedFile, clientId: string = crypto.randomUUID()) => {
     if (!onUploadFile) return
-    const uploadingFile = beginAttachmentUpload(file, clientId)
+    const { upload: _previousUpload, ...plainFile } = file as UploadableChatFile
+    const uploadingFile = beginAttachmentUpload(plainFile, clientId)
+    if (!fileOwnersRef.current.has(clientId)) fileOwnersRef.current.set(clientId, prevConvRef.current)
     setPendingFiles((previous) => {
       const index = previous.findIndex((item) => item.upload?.clientId === clientId)
       if (index < 0) return [...previous, uploadingFile]
       return previous.map((item, itemIndex) => itemIndex === index ? uploadingFile : item)
     })
 
-    onUploadFile(file, selectedRoles[0] ?? employees[0]?.employeeId)
+    const deleteRemote = async (attachmentId: string) => {
+      if (!onDeleteUploadedFile) return
+      try {
+        await onDeleteUploadedFile(attachmentId)
+      } catch (error) {
+        console.error('[ChatInputBar] cleanup cancelled attachment failed:', error)
+      }
+    }
+    onUploadFile(plainFile, selectedRoles[0] ?? employees[0]?.employeeId)
       .then(async (attachmentId) => {
         if (!attachmentId) throw new Error('附件服务未返回文件 ID')
         if (cancelledUploadIdsRef.current.delete(clientId)) {
-          if (onDeleteUploadedFile) {
-            try {
-              await onDeleteUploadedFile(attachmentId)
-            } catch (error) {
-              console.error('[ChatInputBar] cleanup cancelled attachment failed:', error)
-            }
-          }
+          fileOwnersRef.current.delete(clientId)
+          await deleteRemote(attachmentId)
           return
         }
-        setPendingFiles((previous) => previous.map((item) =>
-          item.upload?.clientId === clientId ? completeAttachmentUpload(item, attachmentId) : item,
-        ))
+        if (!placeFile(clientId, completeAttachmentUpload(uploadingFile, attachmentId))) await deleteRemote(attachmentId)
       })
       .catch((error: unknown) => {
-        if (cancelledUploadIdsRef.current.delete(clientId)) return
-        setPendingFiles((previous) => previous.map((item) =>
-          item.upload?.clientId === clientId
-            ? failAttachmentUpload(item, attachmentErrorMessage(error))
-            : item,
-        ))
+        if (cancelledUploadIdsRef.current.delete(clientId)) {
+          fileOwnersRef.current.delete(clientId)
+          return
+        }
+        placeFile(clientId, failAttachmentUpload(uploadingFile, attachmentErrorMessage(error)))
       })
-  }, [employees, onDeleteUploadedFile, onUploadFile, selectedRoles])
+  }, [employees, onDeleteUploadedFile, onUploadFile, placeFile, selectedRoles])
+
+  // Imports that finished while their conversation was in the background wait as「等待上传」;
+  // upload them as soon as that conversation is back on screen.
+  useEffect(() => {
+    if (!onUploadFile) return
+    for (const file of pendingFiles) {
+      if (file.upload?.status === 'queued') handleUploadFile(file, file.upload.clientId)
+    }
+  }, [handleUploadFile, onUploadFile, pendingFiles])
+
+  /**
+   * Shows a「正在导入」chip the moment an import starts, so sending waits for it and a conversation
+   * switch carries it along; the copy then lands in the conversation it was added to.
+   */
+  const importInto = useCallback((meta: { name: string; mime: string; size: number }, load: () => Promise<CachedFile | null>, failure: (error: unknown) => string) => {
+    const clientId = crypto.randomUUID()
+    fileOwnersRef.current.set(clientId, prevConvRef.current)
+    const placeholder = beginAttachmentImport(meta, clientId)
+    flushSync(() => setPendingFiles((previous) => [...previous, placeholder]))
+    return load()
+      .then((cached) => {
+        if (cancelledUploadIdsRef.current.delete(clientId)) {
+          fileOwnersRef.current.delete(clientId)
+          return
+        }
+        if (!cached) {
+          placeFile(clientId, null)
+          return
+        }
+        const owner = fileOwnersRef.current.get(clientId)
+        const onScreen = mountedRef.current && owner === prevConvRef.current
+        if (!onUploadFile) {
+          placeFile(clientId, cached)
+          return
+        }
+        if (onScreen) handleUploadFile(cached, clientId)
+        else placeFile(clientId, queueAttachmentUpload(cached, clientId))
+      })
+      .catch((error: unknown) => {
+        console.error('[ChatInputBar] import file failed:', error)
+        if (cancelledUploadIdsRef.current.delete(clientId)) {
+          fileOwnersRef.current.delete(clientId)
+          return
+        }
+        const owner = fileOwnersRef.current.get(clientId)
+        if (mountedRef.current && owner === prevConvRef.current) {
+          placeFile(clientId, null)
+          setFileError(failure(error))
+        } else {
+          // The user is elsewhere: keep a failed chip in that draft so the loss is visible on return.
+          placeFile(clientId, { ...placeholder, upload: { clientId, status: 'failed', error: failure(error) } })
+        }
+      })
+  }, [handleUploadFile, onUploadFile, placeFile])
 
   const handlePickFile = async () => {
     if (isPickingFile || isSubmitting) return
@@ -317,25 +404,21 @@ export const ChatInputBar = memo(({
     setFileError('')
     void (async () => {
       for (const file of files) {
-        try {
-          const cached = await onImportFile(file)
-          if (!cached) continue
-          if (onUploadFile) handleUploadFile(cached)
-          else setPendingFiles((previous) => [...previous, cached])
-        } catch (error) {
-          console.error('[ChatInputBar] import pasted file failed:', error)
-          setFileError(`添加“${file.name || '剪贴板图片'}”失败，请重试`)
-        }
+        await importInto(
+          { name: file.name || '剪贴板图片', mime: file.type || 'application/octet-stream', size: file.size },
+          () => onImportFile(file),
+          () => `添加“${file.name || '剪贴板图片'}”失败，请重试`,
+        )
       }
     })()
-  }, [handleUploadFile, onImportFile, onUploadFile])
+  }, [importInto, onImportFile])
 
   const handleRemoveFile = useCallback((file: UploadableChatFile, index: number) => {
     setPendingFiles((previous) => file.upload
       ? removeAttachmentUpload(previous, file.upload.clientId)
       : previous.filter((_, itemIndex) => itemIndex !== index))
     if (!file.upload) return
-    if (file.upload.status === 'uploading') {
+    if (file.upload.status === 'uploading' || file.upload.status === 'importing') {
       cancelledUploadIdsRef.current.add(file.upload.clientId)
       return
     }
@@ -423,14 +506,16 @@ export const ChatInputBar = memo(({
         setIsSubmitting(false)
         if (target.kind === 'composer') setPendingFiles(files)
       })
-      if (target.kind === 'draft') onDraftChange(target.conversationId, rawText, files)
+      // 带上 @ 成员快照：重发时仍提及原来的成员，不会落到群聊默认的协调员。
+      if (target.kind === 'draft') onDraftChange(target.conversationId, rawText, files, mentionSnapshot)
       // 原样放回（含 @ 成员 chip）；焦点没被用户移走时 restore 会聚焦到末尾。
       if (target.kind === 'composer') composer.restore(mentionSnapshot, rawText)
     })
   }
 
   const isHero = variant === 'hero'
-  const hasBlockingUpload = !!onUploadFile && hasBlockingAttachmentUpload(pendingFiles)
+  const hasBlockingUpload = isImportingAttachment(pendingFiles)
+    || (!!onUploadFile && hasBlockingAttachmentUpload(pendingFiles))
   const hasComposerContent = !!composer.text.trim() || pendingFiles.length > 0
   // 可排队时提交中也允许继续输入，新消息进入队列。
   const isSubmitBlocking = isSubmitting && !canQueue
@@ -451,17 +536,13 @@ export const ChatInputBar = memo(({
     void (async () => {
       for (const path of paths) {
         const name = path.split(/[\\/]/).filter(Boolean).pop() || path
-        try {
-          const cached = await onImportPath(path)
-          if (!cached) continue
-          if (onUploadFile) handleUploadFile(cached)
-          else setPendingFiles((previous) => [...previous, cached])
-        } catch (error) {
-          console.error('[ChatInputBar] import dropped file failed:', error)
-          setFileError(String(error).includes('Not a regular file')
+        await importInto(
+          { name, mime: 'application/octet-stream', size: 0 },
+          () => onImportPath(path),
+          (error) => String(error).includes('Not a regular file')
             ? `“${name}”是文件夹，不能作为附件；请拖入文件`
-            : `添加“${name}”失败，请重试`)
-        }
+            : `添加“${name}”失败，请重试`,
+        )
       }
     })()
   }
@@ -737,7 +818,7 @@ export const ChatInputBar = memo(({
                   file={f}
                   uploadStatus={f.upload?.status}
                   uploadError={f.upload?.error}
-                  onRetry={f.upload?.status === 'failed'
+                  onRetry={f.upload?.status === 'failed' && f.rel_path
                     ? () => handleUploadFile(f, f.upload!.clientId)
                     : undefined}
                   onRemove={() => handleRemoveFile(f, i)}

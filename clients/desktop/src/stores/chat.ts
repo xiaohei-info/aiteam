@@ -498,6 +498,12 @@ interface ChatStore {
   loadMoreMessages: (convId: string, isGroup?: boolean) => Promise<boolean>
   setHighlightMsgId: (id: string | null) => void
   setConvDraft: (convId: string, text: string, files: CachedFile[], mentionSnapshot?: readonly Node[]) => void
+  /**
+   * Replaces (or removes, with null) one attachment in a conversation's draft, matched by its upload
+   * client id. Used when an import/upload finishes after the user switched to another conversation.
+   * Returns whether the draft still held that attachment.
+   */
+  replaceDraftFile: (convId: string, clientId: string, file: CachedFile | null) => boolean
   // 新栈:page 层通过 submitPrompt 发起 prompt 后调用此 action,创建占位并接管 SSE。
   startAssistantStream: (convId: string, opts?: AssistantStreamOptions) => void
   abortStream: (convId: string) => Promise<void>
@@ -1074,6 +1080,14 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
   setConvDraft: (convId, text, files, mentionSnapshot) =>
     set((s) => ({ draftsByConv: { ...s.draftsByConv, [convId]: { text, files, mentionSnapshot } } })),
+  replaceDraftFile: (convId, clientId, file) => {
+    const draft = get().draftsByConv[convId]
+    const clientIdOf = (item: CachedFile) => (item as { upload?: { clientId?: string } }).upload?.clientId
+    if (!draft || !draft.files.some((item) => clientIdOf(item) === clientId)) return false
+    const files = draft.files.flatMap((item) => clientIdOf(item) !== clientId ? [item] : file ? [file] : [])
+    set((s) => ({ draftsByConv: { ...s.draftsByConv, [convId]: { ...draft, files } } }))
+    return true
+  },
 
   // -------- 流式订阅入口(核心) --------
 

@@ -940,3 +940,19 @@ test('reconciliation 的运行中快照与已持久化回复共用一条气泡',
   assert.equal(afterDelta[0].content, '部分回答更多')
   store.getState().abortStream('c')
 })
+
+test('replaceDraftFile updates or drops only the matching attachment in that conversation draft', () => {
+  const store = chatStore({})
+  const importing = { rel_path: '', asset_url: '', name: 'big.mov', size: 0, mime: 'video/quicktime', upload: { clientId: 'c1', status: 'importing' } }
+  const other = { rel_path: 'a/b.pdf', asset_url: 'asset://b', name: 'b.pdf', size: 1, mime: 'application/pdf' }
+  store.getState().setConvDraft('conv-a', 'hi', [importing, other])
+  const copied = { rel_path: 'a/big.mov', asset_url: 'asset://big', name: 'big.mov', size: 9, mime: 'video/quicktime', upload: { clientId: 'c1', status: 'queued' } }
+  assert.equal(store.getState().replaceDraftFile('conv-a', 'c1', copied), true)
+  assert.deepEqual(store.getState().draftsByConv['conv-a'].files, [copied, other])
+  assert.equal(store.getState().draftsByConv['conv-a'].text, 'hi')
+  assert.equal(store.getState().replaceDraftFile('conv-b', 'c1', copied), false, 'never lands in another conversation')
+  assert.equal(store.getState().draftsByConv['conv-b'], undefined)
+  assert.equal(store.getState().replaceDraftFile('conv-a', 'c1', null), true)
+  assert.deepEqual(store.getState().draftsByConv['conv-a'].files, [other])
+  assert.equal(store.getState().replaceDraftFile('conv-a', 'c1', copied), false)
+})

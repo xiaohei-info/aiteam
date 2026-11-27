@@ -18,6 +18,15 @@ window.__drafts = {}
 window.__failNext = false
 window.__imported = []
 window.__importedPaths = []
+// ?upload=1 时接上附件上传；window.__hold('import'|'upload'|'send') 让下一次对应操作挂起，
+// window.__release(name, value) 放行（send 的 value 为是否发送成功）。用来测「导入中 / 发送中切会话」。
+const withUpload = params.get('upload') === '1'
+const gates = {}
+window.__hold = (name) => { let open; const promise = new Promise((resolve) => { open = resolve }); gates[name] = { promise, open } }
+window.__release = (name, value) => { const gate = gates[name]; delete gates[name]; gate?.open(value) }
+const passGate = (name, fallback) => gates[name] ? gates[name].promise : Promise.resolve(fallback)
+window.__uploaded = []
+let rerender = () => {}
 // 浏览器里没有 Tauri 原生拖放：冒烟直接喂同样形状的事件（position 为 CSS 像素，deviceScaleFactor=1）。
 window.__fileDrop = dispatchFileDrop
 
@@ -31,18 +40,22 @@ const employees = mode === 'single' ? [{ employeeId: 'employee-1', displayName: 
 
 function Harness() {
   const [convId, setConvId] = React.useState('conversation-1')
+  const [, setTick] = React.useState(0)
+  rerender = () => setTick((n) => n + 1)
   window.__setConv = setConvId
   return React.createElement(ChatInputBar, {
     convId,
     draft: window.__drafts[convId]?.text ?? '',
     draftMentions: window.__drafts[convId]?.mentionSnapshot,
+    draftFiles: window.__drafts[convId]?.files,
     members,
     employees,
     variant,
     placeholder: variant === 'hero' ? '描述你要完成的任务…' : '输入消息…',
     onSend: async (text, files, employeeId, mentions) => {
       if (window.__failNext) { window.__failNext = false; return false }
-      window.__sent.push({ text, employeeId: employeeId ?? null, mentions: mentions ?? [] })
+      if (!(await passGate('send', true))) return false
+      window.__sent.push({ text, employeeId: employeeId ?? null, mentions: mentions ?? [], files: files.map((f) => f.name) })
       return true
     },
     onPickFile: async () => null,
@@ -59,10 +72,26 @@ function Harness() {
     },
     onImportPath: async (path) => {
       window.__importedPaths.push(path)
+      await passGate('import')
       const name = path.split('/').pop()
       return { rel_path: `u/${convId}/file/${name}`, asset_url: '', name, size: 1, mime: 'application/octet-stream' }
     },
-    onDraftChange: (id, text, files, mentionSnapshot) => { window.__drafts[id] = { text, mentionSnapshot } },
+    onDraftChange: (id, text, files, mentionSnapshot) => { window.__drafts[id] = { text, files, mentionSnapshot } },
+    onDraftFileUpdate: (id, clientId, file) => {
+      const draft = window.__drafts[id]
+      if (!draft?.files?.some((f) => f.upload?.clientId === clientId)) return false
+      draft.files = draft.files.flatMap((f) => f.upload?.clientId !== clientId ? [f] : file ? [file] : [])
+      rerender()
+      return true
+    },
+    ...(withUpload ? {
+      onUploadFile: async (file) => {
+        await passGate('upload')
+        window.__uploaded.push(file.name)
+        return `att-${file.name}`
+      },
+      onDeleteUploadedFile: async () => {},
+    } : {}),
   })
 }
 createRoot(document.getElementById('root')).render(React.createElement(Harness))

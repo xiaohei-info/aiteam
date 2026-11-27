@@ -10,6 +10,7 @@ import {
   uploadedMessageAttachments,
   type UploadableChatFile,
 } from '../../lib/chatAttachmentUpload'
+import { clearSendErrorFor, sendErrorFor, type ConversationSendError } from '../../lib/conversationSendError'
 import { blobToBase64 } from '../../lib/messageSender'
 import { submitGroupPrompt } from '../../lib/groupPrompt'
 import { employeeSendFailure } from '../../lib/employeeAvailability'
@@ -45,7 +46,7 @@ export default function GroupChat() {
     activeGroupId, groups, toggleGroupDetail,
     activeConvMessages, activeConvRawItems, appendMessage,
     updateMessageStatus, clearGroupUnread, loadGroupConversation, refreshActiveEntries,
-    loadMoreMessages, activePagination, draftsByConv, setConvDraft, generatingConvIds, syncingConvIds,
+    loadMoreMessages, activePagination, draftsByConv, setConvDraft, replaceDraftFile, generatingConvIds, syncingConvIds,
     dropStaleConversation,
     workbenchLoading, workbenchRefreshing, workbenchError, loadAgentsAndConversations,
     activeMessagesLoading, activeMessagesError,
@@ -70,7 +71,7 @@ export default function GroupChat() {
   const [memberPopup, setMemberPopup] = useState<{ member: GroupMember; anchor: { x: number; y: number } } | null>(null)
   const [filesConversationId, setFilesConversationId] = useState<string | null>(null)
   const [readSyncError, setReadSyncError] = useState<string | null>(null)
-  const [sendError, setSendError] = useState<string | null>(null)
+  const [sendError, setSendError] = useState<ConversationSendError | null>(null)
   const [flashMsgId, setFlashMsgId] = useState<string | null>(null)
   const msgRowRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -125,7 +126,8 @@ export default function GroupChat() {
     return () => { cancelled = true }
   }, [lastEntryId, activeGroupId, group?.unread, appFocused, activeMessagesLoading]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => { setReadSyncError(null); setSendError(null) }, [activeGroupId])
+  // 发送错误按群聊记录（见 conversationSendError），切换群聊不清除，只在出错的群聊显示。
+  useEffect(() => { setReadSyncError(null) }, [activeGroupId])
 
   // 全局历史搜索通过真实 entry.id 定位；entries 加载完成后滚动并短暂闪烁。
   useEffect(() => {
@@ -160,7 +162,7 @@ export default function GroupChat() {
     const attachmentIds = uploadedAttachmentIds(files)
     if (attachmentIds.length !== files.length) return false
 
-    setSendError(null)
+    setSendError((previous) => clearSendErrorFor(previous, activeGroupId))
     const userMsgId = crypto.randomUUID()
     appendMessage(activeGroupId, {
       id: userMsgId,
@@ -193,7 +195,7 @@ export default function GroupChat() {
       })
     } catch (err) {
       console.error('[GroupChat] submitPrompt failed:', err)
-      setSendError(employeeSendFailure(err) ?? '发送失败，请重试。')
+      setSendError({ conversationId: activeGroupId, message: employeeSendFailure(err) ?? '发送失败，请重试。' })
       updateMessageStatus(activeGroupId, userMsgId, 'failed')
       return false
     }
@@ -388,6 +390,7 @@ export default function GroupChat() {
         draftFiles={draftsByConv[activeGroupId]?.files}
         draftMentions={draftsByConv[activeGroupId]?.mentionSnapshot}
         onDraftChange={handleDraftChange}
+        onDraftFileUpdate={replaceDraftFile}
         disabled={activeMessagesLoading || Boolean(activeMessagesError)}
         isGenerating={generatingConvIds.has(activeGroupId)}
         isSyncing={syncingConvIds.has(activeGroupId)}
@@ -406,7 +409,7 @@ export default function GroupChat() {
           />
         )}
         helper={<>
-          {sendError && <p className="chat-input-error" role="alert">{sendError}</p>}
+          {sendErrorFor(sendError, activeGroupId) && <p className="chat-input-error" role="alert">{sendErrorFor(sendError, activeGroupId)}</p>}
           <div className="chat-composer-footer">
           <ConversationPermissions
             conversationId={activeGroupId}

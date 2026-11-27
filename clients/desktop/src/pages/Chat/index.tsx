@@ -11,6 +11,7 @@ import {
   uploadedMessageAttachments,
   type UploadableChatFile,
 } from '../../lib/chatAttachmentUpload'
+import { clearSendErrorFor, sendErrorFor, type ConversationSendError } from '../../lib/conversationSendError'
 import { blobToBase64, sendTextMessage, type SendContext } from '../../lib/messageSender'
 import { submitSingleChatPrompt } from '../../lib/singleChatPrompt'
 import { agentApi, AgentApiError } from '../../api/agent'
@@ -185,7 +186,7 @@ export default function Chat() {
 
   const [isGenerating, setIsGenerating] = useState(false)
   const [newSessionError, setNewSessionError] = useState<string | null>(null)
-  const [sendError, setSendError] = useState<string | null>(null)
+  const [sendError, setSendError] = useState<ConversationSendError | null>(null)
   const sendFailureRef = useRef<string | null>(null)
   const [pendingInitialMessage, setPendingInitialMessage] = useState<PendingInitialMessage | null>(null)
   const [messageLoadAttempt, setMessageLoadAttempt] = useState(0)
@@ -196,7 +197,7 @@ export default function Chat() {
     activeConvId, conversations, activeConvMessages, activeConvRawItems, appendMessage, updateMessageStatus,
     loadConversation, refreshActiveEntries,
     refreshConversations, upgradeConversationId, toggleDetail,
-    highlightMsgId, setHighlightMsgId, draftsByConv, setConvDraft,
+    highlightMsgId, setHighlightMsgId, draftsByConv, setConvDraft, replaceDraftFile,
     addConversation, setActiveConvId, workbenchEmployees, clearUnread, loadMoreMessages, activePagination,
     startAssistantStream, abortStream, generatingConvIds, syncingConvIds, streamingMsgIds,
     dropStaleConversation,
@@ -530,15 +531,15 @@ export default function Chat() {
   const sendMessage = useCallback(async (text: string, files: UploadableChatFile[] = []): Promise<boolean> => {
     if ((!text && files.length === 0) || !activeConvId) return false
     if (unavailableMessage) return false
-    setSendError(null)
+    setSendError((previous) => clearSendErrorFor(previous, activeConvId))
     try {
       const conversation = await ensureConversation(activeConvId)
       const sent = await submitMessage(conversation, text, files)
-      if (!sent) setSendError(sendFailureRef.current ?? '发送失败，请重试。')
+      if (!sent) setSendError({ conversationId: conversation.id, message: sendFailureRef.current ?? '发送失败，请重试。' })
       return sent
     } catch (error) {
       console.error('[Chat] createConversation failed:', error)
-      setSendError('创建会话失败，请重试。')
+      setSendError({ conversationId: activeConvId, message: '创建会话失败，请重试。' })
       return false
     }
   }, [activeConvId, ensureConversation, submitMessage, unavailableMessage])
@@ -743,7 +744,7 @@ export default function Chat() {
 
       const sent = await submitMessage({ ...conversation, item }, trimmed, files)
       if (!sent) {
-        setSendError('发送失败，请重试。')
+        setSendError({ conversationId: conversation.id, message: '发送失败，请重试。' })
         setConvDraft(conversation.id, trimmed, files)
       }
       return sent
@@ -903,6 +904,7 @@ export default function Chat() {
         conversationUpgradeFrom={[...upgradedConversationIdsRef.current].find(([, id]) => id === activeConvId)?.[0]}
         draft={draftsByConv[activeConvId]?.text}
         draftFiles={draftsByConv[activeConvId]?.files}
+        onDraftFileUpdate={replaceDraftFile}
         onDraftChange={handleDraftChange}
         isGenerating={generatingConvIds.has(activeConvId)}
         isSyncing={syncingConvIds.has(activeConvId)}
@@ -919,7 +921,7 @@ export default function Chat() {
           />
         )}
         helper={<>
-          {sendError && <p className="chat-input-error" role="alert">{sendError}</p>}
+          {sendErrorFor(sendError, activeConvId) && <p className="chat-input-error" role="alert">{sendErrorFor(sendError, activeConvId)}</p>}
           <div className="chat-composer-footer">
             <ConversationPermissions conversationId={activeConvId} generating={generatingConvIds.has(activeConvId)} ensureConversation={() => ensureConversation(activeConvId)} />
             <ConversationStatus key={`${activeConvId}:${contextResetCount}`} conversationId={activeConvId} generating={generatingConvIds.has(activeConvId)} unavailable={Boolean(unavailableMessage)} />

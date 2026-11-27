@@ -104,7 +104,7 @@ test('原生拖放开启：Tauri 接管拖入，文件按路径缓存，不经 W
   assert.ok(main.includes('startNativeFileDrop()'), '启动时要订阅原生拖放')
   const bar = readFileSync(new URL('../src/components/Chat/ChatInputBar.tsx', import.meta.url), 'utf8')
   assert.ok(bar.includes('registerFileDropZone({') && bar.includes('element: () => barRef.current'), '整条输入栏应注册为拖入区')
-  assert.ok(bar.includes('await onImportPath(path)'), '拖入的文件应按路径缓存')
+  assert.ok(bar.includes('() => onImportPath(path)'), '拖入的文件应按路径缓存')
   assert.equal(bar.includes('handleBarDrop'), false, '不应再保留 HTML5 文件拖入分支')
   const cache = readFileSync(new URL('../src/lib/fileCache.ts', import.meta.url), 'utf8')
   assert.ok(cache.includes("invoke<CachedFile>('cache_file', { userId, chatId, srcPath })"), '按路径缓存应复用「+ 导入」的 cache_file')
@@ -118,11 +118,12 @@ test('附件导入走与点击附件按钮相同的上传路径', () => {
   const bar = readFileSync(new URL('../src/components/Chat/ChatInputBar.tsx', import.meta.url), 'utf8')
   const importStart = bar.indexOf('const handleImportFiles = useCallback')
   assert.ok(importStart > 0, 'ChatInputBar 缺少 handleImportFiles')
-  const importBody = bar.slice(importStart, bar.indexOf('}, [handleUploadFile, onImportFile, onUploadFile])', importStart))
-  assert.ok(importBody.includes('await onImportFile(file)'), '未把粘贴/拖入的文件缓存成 CachedFile')
-  // handlePickFile 的分支：有上传回调就上传，否则直接进待发送列表。
-  assert.ok(importBody.includes('if (onUploadFile) handleUploadFile(cached)'), '导入未复用点击附件按钮的上传路径')
-  assert.ok(importBody.includes('setPendingFiles((previous) => [...previous, cached])'), '无上传回调时应直接进待发送附件列表')
+  const importBody = bar.slice(importStart, bar.indexOf('}, [importInto, onImportFile])', importStart))
+  assert.ok(importBody.includes('() => onImportFile(file)'), '未把粘贴/拖入的文件缓存成 CachedFile')
+  // 粘贴/拖入都经 importInto：在当前会话就走与点击附件按钮相同的 handleUploadFile，没有上传回调则原样放回。
+  const importInto = bar.slice(bar.indexOf('const importInto = useCallback'), bar.indexOf('const handlePickFile'))
+  assert.ok(importInto.includes('if (onScreen) handleUploadFile(cached, clientId)'), '导入未复用点击附件按钮的上传路径')
+  assert.ok(importInto.includes('placeFile(clientId, cached)'), '无上传回调时应直接进待发送附件列表')
   assert.ok(bar.includes('onFiles={onImportFile && !isInteractionDisabled ? handleImportFiles : undefined}'), '未把 onFiles 接到 MentionInput')
 })
 

@@ -1,7 +1,12 @@
 import type { CachedFile } from './fileCache'
 import type { MessageAttachment } from '../stores/chat'
 
-export type AttachmentUploadStatus = 'uploading' | 'uploaded' | 'failed'
+/**
+ * importing: still being copied into the conversation folder (no file yet, cannot be sent);
+ * queued: copied, but the copy finished after the user switched away, so the upload starts when
+ * the user comes back to that conversation (uploads are bound to the conversation on screen).
+ */
+export type AttachmentUploadStatus = 'importing' | 'queued' | 'uploading' | 'uploaded' | 'failed'
 
 export interface AttachmentUploadState {
   clientId: string
@@ -22,6 +27,29 @@ export function beginAttachmentUpload(
     ...file,
     upload: { clientId, status: 'uploading' },
   }
+}
+
+/** Placeholder shown the moment an import starts, so a send or a conversation switch can see it. */
+export function beginAttachmentImport(
+  meta: { name: string; mime: string; size: number },
+  clientId: string,
+): UploadableChatFile {
+  return {
+    rel_path: '',
+    asset_url: '',
+    name: meta.name,
+    size: meta.size,
+    mime: meta.mime,
+    upload: { clientId, status: 'importing' },
+  }
+}
+
+export function queueAttachmentUpload(file: CachedFile, clientId: string): UploadableChatFile {
+  return { ...file, upload: { clientId, status: 'queued' } }
+}
+
+export function isImportingAttachment(files: readonly UploadableChatFile[]): boolean {
+  return files.some((file) => file.upload?.status === 'importing')
 }
 
 export function completeAttachmentUpload(
@@ -70,6 +98,8 @@ export function runWhenAttachmentsReady<T>(
   requireUploaded: boolean,
   onReady: (readyFiles: UploadableChatFile[]) => T,
 ): T | undefined {
+  // A file still being imported is not in the list yet as far as the message is concerned: never send without it.
+  if (isImportingAttachment(files)) return undefined
   if (requireUploaded && hasBlockingAttachmentUpload(files)) return undefined
   return onReady([...files])
 }
