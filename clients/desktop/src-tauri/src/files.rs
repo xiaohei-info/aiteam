@@ -126,6 +126,9 @@ fn resolve_cached_file_path(app: &tauri::AppHandle, rel_path: &str) -> Result<Pa
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CachedFile {
     pub rel_path: String,
+    /// Absolute location on this machine. The Agent reads the attachment from here (attachment by path),
+    /// so a file is never copied into the Agent or uploaded, whatever its size.
+    pub path: String,
     pub asset_url: String,
     pub name: String,
     pub size: u64,
@@ -177,6 +180,7 @@ fn cached_file_result(
     CachedFile {
         rel_path,
         asset_url: format!("asset://localhost/{}", abs_path.replace('\\', "/")),
+        path: abs_path.clone(),
         name: file_name,
         size,
         mime,
@@ -228,6 +232,22 @@ pub fn cache_file(
         size,
         mime,
     ))
+}
+
+/// Describes a file the user dragged in or picked, without copying it: the message refers to it by
+/// path and the Agent reads it when an employee needs it. `rel_path` stays empty (nothing is cached).
+#[tauri::command]
+pub fn describe_local_file(app: tauri::AppHandle, src_path: String) -> Result<CachedFile, String> {
+    let src = canonicalize_scoped_path(&app, &src_path, false)?;
+    let file_name = src
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| "Source file has no valid name".to_string())?
+        .to_string();
+    let size = src.metadata().map_err(|e| e.to_string())?.len();
+    let mime = mime_for_file_name(&file_name);
+    Ok(cached_file_result(&src, String::new(), file_name, size, mime))
 }
 
 /// Caches bytes the webview already holds: a pasted screenshot has no path on disk, and a
@@ -367,6 +387,7 @@ pub fn cache_conversation_file(
     Ok(CachedFile {
         rel_path,
         asset_url: format!("asset://localhost/{}", abs_path.replace('\\', "/")),
+        path: abs_path.clone(),
         name: file_name,
         size: data.len() as u64,
         mime: mime_type,

@@ -5,9 +5,10 @@ import { useChatStore, type Message, type ConversationItem } from '../../stores/
 import { employeeSendFailure, employeeUnavailableMessage } from '../../lib/employeeAvailability'
 import { projectSendFailure } from '../../lib/projectConversation'
 import { useAgentAuthStore } from '../../stores/agentAuth'
-import { pickFilePath, cacheFileFromBlob, cacheFileFromPath, readCachedFileBlob, type CachedFile } from '../../lib/fileCache'
+import { pickFilePath, cacheFileFromBlob, describeLocalFile, readCachedFileBlob, type CachedFile } from '../../lib/fileCache'
 import {
-  uploadedAttachmentIds,
+  attachmentKeys,
+  areAttachmentsReady,
   uploadedMessageAttachments,
   type UploadableChatFile,
 } from '../../lib/chatAttachmentUpload'
@@ -464,8 +465,8 @@ export default function Chat() {
   ): Promise<boolean> => {
     const blocked = employeeUnavailableMessage(useChatStore.getState().workbenchEmployees.find((employee) => employee.employeeId === conversation.employeeId))
     if (blocked) return false
-    const attachmentIds = uploadedAttachmentIds(files)
-    if (attachmentIds.length !== files.length) return false
+    if (!areAttachmentsReady(files)) return false
+    const attachmentIds = attachmentKeys(files)
 
     const previousAttempt = pendingSendAttemptRef.current
     let messageId: string
@@ -631,10 +632,10 @@ export default function Chat() {
     [userId, activeConvId]
   )
 
-  /** Dragged in from Finder/Explorer: Tauri gives the path, so copy it like「+ 导入」. */
+  /** Dragged in or picked: the message refers to the file where it is (attachment by path), nothing is copied. */
   const importPathAction = useCallback(
-    (path: string) => cacheFileFromPath(userId, activeConvId || 'new-session', path),
-    [userId, activeConvId]
+    (path: string) => describeLocalFile(path),
+    [],
   )
 
   const handleUploadFile = useCallback(async (file: CachedFile): Promise<string> => {
@@ -716,7 +717,7 @@ export default function Chat() {
       setNewSessionError('暂无可用智能体,请先同步或创建一个智能体。')
       return false
     }
-    if (uploadedAttachmentIds(files).length !== files.length) return false
+    if (!areAttachmentsReady(files)) return false
 
     setNewSessionError(null)
     setSendError(null)

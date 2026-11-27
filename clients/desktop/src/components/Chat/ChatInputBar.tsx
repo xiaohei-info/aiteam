@@ -12,6 +12,8 @@ import {
   hasBlockingAttachmentUpload,
   isImportingAttachment,
   queueAttachmentUpload,
+  isReferencedByPath,
+  referenceAttachmentByPath,
   removeAttachmentUpload,
   runWhenAttachmentsReady,
   type UploadableChatFile,
@@ -295,6 +297,16 @@ export const ChatInputBar = memo(({
   }, [onDraftFileUpdate])
 
   const handleUploadFile = useCallback((file: CachedFile, clientId: string = crypto.randomUUID()) => {
+    if (isReferencedByPath(file)) {
+      // Attached by path: ready at once, nothing to upload (the Agent reads it when needed).
+      const ready = referenceAttachmentByPath(file, clientId)
+      setPendingFiles((previous) => {
+        const index = previous.findIndex((item) => item.upload?.clientId === clientId)
+        if (index < 0) return [...previous, ready]
+        return previous.map((item, itemIndex) => itemIndex === index ? ready : item)
+      })
+      return
+    }
     if (!onUploadFile) return
     const { upload: _previousUpload, ...plainFile } = file as UploadableChatFile
     const uploadingFile = beginAttachmentUpload(plainFile, clientId)
@@ -358,6 +370,10 @@ export const ChatInputBar = memo(({
         }
         if (!cached) {
           placeFile(clientId, null)
+          return
+        }
+        if (isReferencedByPath(cached)) {
+          placeFile(clientId, referenceAttachmentByPath(cached, clientId))
           return
         }
         const owner = fileOwnersRef.current.get(clientId)
@@ -534,15 +550,20 @@ export const ChatInputBar = memo(({
   const [isFileOver, setIsFileOver] = useState(false)
   const canDropFiles = Boolean(onImportPath) && !isInteractionDisabled
   const importPathsRef = useRef<(paths: string[]) => void>(() => {})
+  // 同一个文件再拖入 / 再选一次不重复添加：已在附件区或正在添加的路径跳过。
+  const importingPathsRef = useRef(new Set<string>())
   importPathsRef.current = (paths: string[]) => {
     if (!onImportPath) return
     setFileError('')
+    const fresh = [...new Set(paths)].filter((path) =>
+      !importingPathsRef.current.has(path) && !filesRef.current.some((file) => file.path === path))
+    fresh.forEach((path) => importingPathsRef.current.add(path))
     void (async () => {
-      for (const path of paths) {
+      for (const path of fresh) {
         const name = path.split(/[\\/]/).filter(Boolean).pop() || path
         await importInto(
           { name, mime: 'application/octet-stream', size: 0 },
-          () => onImportPath(path),
+          () => onImportPath(path).finally(() => importingPathsRef.current.delete(path)),
           (error) => String(error).includes('Not a regular file')
             ? `“${name}”是文件夹，不能作为附件；请拖入文件`
             : `添加“${name}”失败，请重试`,

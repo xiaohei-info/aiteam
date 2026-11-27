@@ -68,6 +68,7 @@ pub fn run() {
             files::save_conversation_file,
             files::cache_file,
             files::cache_file_bytes,
+            files::describe_local_file,
             clipboard_images::read_clipboard_rtf_images,
             files::cache_conversation_file,
             files::resolve_cached_file,

@@ -23,12 +23,13 @@ import swaggerUi from "@fastify/swagger-ui";
 import { Type } from "typebox";
 import { ConversationBusyError, EventCursorStaleError, InvalidEventCursorError, type PiEventEnvelope, SessionHost } from "../pi/session-host.js";
 import type { ImageContent } from "@earendil-works/pi-ai";
-import { avatarCacheKey, IdempotencyConflictError, IdempotencyUnknownError, type AgentSqliteStore, type ConversationMetadata as StoredConversationMetadata, type IdempotencyReceipt } from "../storage/sqlite.js";
+import { avatarCacheKey, IdempotencyConflictError, IdempotencyUnknownError, type AgentSqliteStore, type LocalFileRef, type ConversationMetadata as StoredConversationMetadata, type IdempotencyReceipt } from "../storage/sqlite.js";
 import { JwtClockError, type AuthenticatedCaller, type AuthenticateRequest } from "./auth.js";
 import { AgentUpgradeRequiredError, ManagerAuthError, ManagerAuthorizationError, ManagerPolicyDeniedError, ManagerUnavailableError, ManagerValidationError, normalizeAuthorizedConfig, type ManagerAvatar, type ManagerClient, type MarketplaceTemplate } from "../manager-client.js";
 import { SessionAuthorizationError, type PromptDeliveryOptions } from "../pi/session-host.js";
 import { serializePiEntry, serializePiEvent } from "../pi/event-sse.js";
 import { materializeAttachments } from "../pi/attachment-tool.js";
+import { AttachmentPathError, attachmentManifest, loadInlineImage, MAX_PROMPT_ATTACHMENTS, parseAttachmentPaths, resolveAttachmentPath, type AttachmentPathInput } from "../pi/attachment-refs.js";
 import { visibleHistoryText } from "../pi/session-history.js";
 import { InvalidReadCursorError } from "../storage/read-cursor.js";
 import { ConversationReadError, ConversationReadService, readPageLimit, validateReadQuery } from "../services/conversation-reads.js";
@@ -779,6 +780,10 @@ const PromptRequest = Type.Object({
   text: Type.String({ minLength: 1, maxLength: 200_000, description: "提交给当前员工的文本提示。" }),
   images: Type.Optional(Type.Array(Type.Ref("PromptImage"), { maxItems: MAX_PROMPT_IMAGES, description: "最多 8 张内联图片；单张解码后不超过 5 MiB，总大小不超过 20 MiB。" })),
   attachment_ids: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 256, description: "本地附件 ID；只有图片附件会作为 Pi 图片输入，其余文件保持本地元数据。" }), { maxItems: MAX_PROMPT_IMAGES, uniqueItems: true, description: "已上传本地附件 ID；最多 8 个且不能重复。" })),
+  attachment_paths: Type.Optional(Type.Array(Type.Object({
+    path: Type.String({ minLength: 1, maxLength: 4096, description: "本机文件的绝对路径；必须是普通文件（会先解析符号链接）。只在 Agent 本地使用，不写进模型上下文。" }),
+    name: Type.Optional(Type.String({ minLength: 1, maxLength: 255, pattern: "^[^\\x00-\\x1F\\x7F/\\\\]+$", description: "展示用文件名；缺省取路径的文件名。" })),
+  }, { additionalProperties: false, description: "按路径引用的附件。" }), { maxItems: MAX_PROMPT_IMAGES, description: "桌面端按路径引用的附件；不上传字节、不限大小。与 attachment_ids 合计最多 8 个。5 MiB 以内的图片随消息作为图片输入，其余文件由员工用 attachment_read 工具按需分段读取。" })),
   mentions: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 128, description: "被 @提及的员工句柄；仅群聊允许。" }), { maxItems: 16, description: "群聊中的员工提及；最多 16 个。重复句柄会合并。" })),
 }, { $id: "PromptRequest", additionalProperties: false, description: "向本地会话提交提示的请求。" });
 const PromptAccepted = Type.Object({ conversation_id: Type.String({ minLength: 1, description: "会话 ID。" }), accepted: Type.Boolean({ const: true, description: "是否已接受执行；成功响应固定为 true。" }), state: Type.Union([Type.Literal("accepted", { description: "本次请求已接收，后台执行尚未完成。" }), Type.Literal("completed", { description: "相同 Idempotency-Key 已完成，返回幂等收据。" })], { description: "幂等收据状态。" }), idempotency_key: Type.String({ minLength: 1, maxLength: 256, description: "本次请求使用的幂等键。" }) }, { $id: "PromptAccepted", description: "提示提交收据；202 表示已接收或幂等重放。" });
@@ -3058,12 +3063,20 @@ export class AgentHttpServer {
     const images = this.validateInlineImages(payload.images);
     const attachmentIds = payload.attachment_ids === undefined ? [] : this.stringArray(payload.attachment_ids, "attachment_ids", MAX_PROMPT_IMAGES);
     if (new Set(attachmentIds).size !== attachmentIds.length) throw new HttpProblem(422, "invalid_attachment_ids", "attachment_ids must not contain duplicates");
+    let attachmentPaths: AttachmentPathInput[];
+    try {
+      attachmentPaths = parseAttachmentPaths(payload.attachment_paths);
+    } catch (error) {
+      if (error instanceof AttachmentPathError) throw new HttpProblem(422, error.code, error.message);
+      throw error;
+    }
+    if (attachmentIds.length + attachmentPaths.length > MAX_PROMPT_ATTACHMENTS) throw new HttpProblem(422, "too_many_attachments", `A prompt may reference at most ${MAX_PROMPT_ATTACHMENTS} attachments`);
     const mentions = payload.mentions === undefined ? [] : this.stringArray(payload.mentions, "mentions", 16);
     if (mentions.length > 0 && conversation.kind !== "group") throw new HttpProblem(422, "invalid_mentions", "mentions are only supported for group conversations");
     this.assertProjectAvailable(conversation);
     this.assertRunnableTargets(caller, this.resolvePromptTargets(conversation, caller, mentions));
     // Fingerprint IDs, not mutable attachment bytes, so completed/accepted retries can return their receipt.
-    const fingerprint = createHash("sha256").update(JSON.stringify({ text, images, attachment_ids: attachmentIds, mentions })).digest("hex");
+    const fingerprint = createHash("sha256").update(JSON.stringify({ text, images, attachment_ids: attachmentIds, ...(attachmentPaths.length > 0 ? { attachment_paths: attachmentPaths } : {}), mentions })).digest("hex");
     const receipt = this.options.store.reservePrompt({ conversationId, callerId, key, fingerprint });
     if (!receipt.isNew) return this.writeReceipt(response, conversationId, key, receipt.state);
 
@@ -3098,11 +3111,31 @@ export class AgentHttpServer {
       }
       if (loadedImages.length + images.length > MAX_PROMPT_IMAGES) throw new HttpProblem(422, "invalid_images", "A prompt may contain at most 8 images");
       if (decodedImageBytes > MAX_PROMPT_IMAGE_BYTES) throw new HttpProblem(413, "prompt_images_too_large", "Decoded prompt images exceed 20 MiB");
+      // Files attached by path: stat them now (missing / folder → 422), keep only their location, and hand small
+      // images over with the message as before. Everything else is read on demand through attachment_read.
+      const owner = { conversationId, tenantId: caller.tenantId!, memberId: caller.userId ?? caller.callerId };
+      let refs: LocalFileRef[] = [];
+      try {
+        // The same file sent twice in one message is listed once.
+        refs = attachmentPaths.length > 0 ? [...new Map(this.options.store.upsertLocalFileRefs(owner, attachmentPaths.map(resolveAttachmentPath)).map((ref) => [ref.id, ref])).values()] : [];
+      } catch (error) {
+        if (error instanceof AttachmentPathError) throw new HttpProblem(422, error.code, error.message);
+        throw error;
+      }
+      const inlinedRefs = new Set<string>();
+      for (const ref of refs) {
+        if (loadedImages.length + images.length >= MAX_PROMPT_IMAGES || decodedImageBytes + ref.byte_size > MAX_PROMPT_IMAGE_BYTES) break;
+        const image = loadInlineImage(ref);
+        if (!image) continue;
+        loadedImages.push(image);
+        decodedImageBytes += ref.byte_size;
+        inlinedRefs.add(ref.id);
+      }
       const promptImages = [...images, ...loadedImages];
       const attachmentText = materializedAttachments.length > 0
         ? `\n\n[本地附件材料，仅来自当前会话已绑定文件]\n${materializedAttachments.map((item) => `--- ${item.filename} ---\n${item.extracted.text}`).join("\n")}`
         : "";
-      const worker = this.runPrompt(conversationId, caller, key, receipt.ownerInstance, `${text}${attachmentText}`, promptImages, mentions, attachmentIds);
+      const worker = this.runPrompt(conversationId, caller, key, receipt.ownerInstance, `${text}${attachmentText}${attachmentManifest(refs, inlinedRefs)}`, promptImages, mentions, attachmentIds);
       this.promptWorkers.add(worker);
       void worker.finally(() => this.promptWorkers.delete(worker));
       this.writeReceipt(response, conversationId, key, "accepted");

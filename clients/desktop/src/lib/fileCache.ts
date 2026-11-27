@@ -3,6 +3,11 @@ import { open } from '@tauri-apps/plugin-dialog'
 
 export interface CachedFile {
   rel_path: string
+  /**
+   * Absolute location on this machine. When present the message refers to the file by path
+   * (`attachment_paths`) and the Agent reads it on demand: nothing is uploaded, whatever the size.
+   */
+  path?: string
   asset_url: string
   name: string
   size: number
@@ -30,6 +35,11 @@ export async function pickFilePath(): Promise<string | null> {
  * Copy a file that has a path on disk (chosen in the picker, or dragged in from Finder/Explorer)
  * into the per-chat attachment directory. Rust copies it, so there is no size limit here.
  */
+/** Records a dragged-in or picked file where it is, without copying it (attachment by path). */
+export function describeLocalFile(srcPath: string): Promise<CachedFile> {
+  return invoke<CachedFile>('describe_local_file', { srcPath })
+}
+
 export function cacheFileFromPath(userId: string, chatId: string, srcPath: string): Promise<CachedFile> {
   return invoke<CachedFile>('cache_file', { userId, chatId, srcPath })
 }

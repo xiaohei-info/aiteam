@@ -19,6 +19,29 @@ export interface UploadableChatFile extends CachedFile {
   upload?: AttachmentUploadState
 }
 
+/** A file that has a local path needs no upload: the message carries the path and the Agent reads it. */
+export function isReferencedByPath(file: CachedFile): file is CachedFile & { path: string } {
+  return typeof file.path === 'string' && file.path.length > 0
+}
+
+/** Ready to send straight away: an attachment by path is「uploaded」without an attachment ID. */
+export function referenceAttachmentByPath(file: CachedFile, clientId: string): UploadableChatFile {
+  const { upload: _previous, ...plain } = file as UploadableChatFile
+  return { ...plain, upload: { clientId, status: 'uploaded' } }
+}
+
+export interface AttachmentPathRef {
+  path: string
+  name: string
+}
+
+export function referencedAttachmentPaths(files: readonly UploadableChatFile[]): AttachmentPathRef[] {
+  return files.flatMap((file) =>
+    file.upload?.status === 'uploaded' && !file.upload.attachmentId && isReferencedByPath(file)
+      ? [{ path: file.path, name: file.name }]
+      : [])
+}
+
 export function beginAttachmentUpload(
   file: CachedFile,
   clientId: string,
@@ -111,12 +134,24 @@ export function uploadedAttachmentIds(files: readonly UploadableChatFile[]): str
   })
 }
 
+/** Every file is either uploaded (has an attachment ID) or attached by path. */
+export function areAttachmentsReady(files: readonly UploadableChatFile[]): boolean {
+  return uploadedAttachmentIds(files).length + referencedAttachmentPaths(files).length === files.length
+}
+
+/** Stable identity of a message's attachments, for recognising a resend of the same message. */
+export function attachmentKeys(files: readonly UploadableChatFile[]): string[] {
+  return [...uploadedAttachmentIds(files), ...referencedAttachmentPaths(files).map((ref) => `path:${ref.path}`)]
+}
+
 export function uploadedMessageAttachments(files: readonly UploadableChatFile[]): MessageAttachment[] {
   return files.flatMap((file) => {
-    const id = file.upload?.status === 'uploaded' ? file.upload.attachmentId : undefined
+    if (file.upload?.status !== 'uploaded') return []
+    const id = file.upload.attachmentId ?? (isReferencedByPath(file) ? `path:${file.path}` : undefined)
     if (!id) return []
     return [{
       id,
+      ...(!file.upload.attachmentId && isReferencedByPath(file) ? { path: file.path } : {}),
       filename: file.name,
       name: file.name,
       mime_type: file.mime,

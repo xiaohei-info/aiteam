@@ -54,6 +54,7 @@ import { latestEmployeeConversations } from '../lib/projectConversation'
 import { rememberEmployeeConversation, type WorkbenchEmployee } from '../lib/employeeConversationMap'
 import { classifyRequestError, type RequestErrorInfo } from '../lib/requestError'
 import { notifyConversationCompleted } from '../lib/systemNotifications'
+import { rememberAttachmentPaths } from '../lib/attachmentManifest'
 import { formatConversationTime, resolveConversationSummary, type ConversationSummaryAvailability } from '../lib/conversationSummary'
 import {
   getPinnedStorageKey as buildPinnedStorageKey,
@@ -165,6 +166,8 @@ export interface MessageAttachment {
   name?: string
   mime_type: string
   byte_size?: number
+  /** 按路径引用的附件（桌面端）：本机位置，点开时直接打开该文件；没有 Agent 侧的上传副本。 */
+  path?: string
   // 图片/文件类型按 MIME 前缀推导。
   kind?: 'image' | 'file'
 }
@@ -877,6 +880,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   // -------- 消息读写 --------
 
   appendMessage: (convId, msg) => set((s) => {
+    if (msg.role === 'user') rememberAttachmentPaths(convId, msg.attachments)
     if (convId !== s.activeConvId && convId !== s.activeGroupId) return {}
     if (s.activeConvMsgIds.has(msg.id)) {
       return { activeConvMessages: upsertMessage(s.activeConvMessages, msg) }

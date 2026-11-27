@@ -95,7 +95,7 @@ test('输入框不接收拖入：文字请粘贴，文件交给原生拖放', ()
   assert.equal(source.includes('caretRangeFromPoint'), false, '文字拖入已取消，不需要落点计算')
 })
 
-test('原生拖放开启：Tauri 接管拖入，文件按路径缓存，不经 WebView 读字节', () => {
+test('原生拖放开启：Tauri 接管拖入，文件按路径引用，不经 WebView 读字节', () => {
   const conf = readFileSync(new URL('../src-tauri/tauri.conf.json', import.meta.url), 'utf8')
   assert.equal(conf.includes('"dragDropEnabled": false'), false, '关掉原生拖放后拖入只能读字节，受 64 MB 上限')
   const caps = readFileSync(new URL('../src-tauri/capabilities/default.json', import.meta.url), 'utf8')
@@ -104,13 +104,13 @@ test('原生拖放开启：Tauri 接管拖入，文件按路径缓存，不经 W
   assert.ok(main.includes('startNativeFileDrop()'), '启动时要订阅原生拖放')
   const bar = readFileSync(new URL('../src/components/Chat/ChatInputBar.tsx', import.meta.url), 'utf8')
   assert.ok(bar.includes('registerFileDropZone({') && bar.includes('element: () => barRef.current'), '整条输入栏应注册为拖入区')
-  assert.ok(bar.includes('() => onImportPath(path)'), '拖入的文件应按路径缓存')
+  assert.ok(bar.includes('() => onImportPath(path)'), '拖入的文件应按路径引用')
   assert.equal(bar.includes('handleBarDrop'), false, '不应再保留 HTML5 文件拖入分支')
   const cache = readFileSync(new URL('../src/lib/fileCache.ts', import.meta.url), 'utf8')
   assert.ok(cache.includes("invoke<CachedFile>('cache_file', { userId, chatId, srcPath })"), '按路径缓存应复用「+ 导入」的 cache_file')
   for (const page of ['../src/pages/Chat/index.tsx', '../src/pages/GroupChat/index.tsx']) {
     const text = readFileSync(new URL(page, import.meta.url), 'utf8')
-    assert.ok(text.includes('cacheFileFromPath('), `${page} 未接 onImportPath`)
+    assert.ok(text.includes('describeLocalFile(path)'), `${page} 未接 onImportPath（按路径引用，不复制）`)
   }
 })
 

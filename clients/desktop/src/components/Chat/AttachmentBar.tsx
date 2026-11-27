@@ -2,7 +2,9 @@ import { useId, useState } from 'react'
 import { FileText, Music2, Video, ChevronDown, ChevronUp, Download } from 'lucide-react'
 import './AttachmentBar.css'
 import type { MessageAttachment } from '../../stores/chat'
+import { invoke } from '@tauri-apps/api/core'
 import { agentApi } from '../../api/agent'
+import { rememberedAttachmentPath } from '../../lib/attachmentManifest'
 
 type AttachmentDownloadHandler = (attachment: MessageAttachment) => void
 
@@ -14,6 +16,17 @@ function FileTypeIcon({ mime }: { mime?: string }) {
 }
 
 async function downloadAttachment(conversationId: string, att: MessageAttachment) {
+  // Attached by path: the Agent holds no copy, so open the file where it is on this machine.
+  const path = att.path ?? rememberedAttachmentPath(conversationId, att.name ?? att.filename)
+  if (path) {
+    const opened = await invoke('open_local_file', { path }).then(() => true, (error: unknown) => {
+      console.error('[AttachmentBar] open local attachment failed:', error)
+      return false
+    })
+    if (!opened) throw new Error(`无法打开 ${att.name ?? '附件'}：文件可能已被移动或删除，或需要重新授权访问。`)
+    return
+  }
+  if (att.id.startsWith('ref-')) throw new Error(`${att.name ?? '附件'} 是按本机位置发送的，这台电脑上没有记录它的位置，请到原文件夹打开。`)
   const blob = await agentApi.downloadFile(conversationId, 'attachment', att.id)
   const a = document.createElement('a')
   a.href = URL.createObjectURL(blob)

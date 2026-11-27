@@ -6079,6 +6079,34 @@
             "uniqueItems": true,
             "description": "已上传本地附件 ID；最多 8 个且不能重复。"
           },
+          "attachment_paths": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "path"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096,
+                  "description": "本机文件的绝对路径；必须是普通文件（会先解析符号链接）。只在 Agent 本地使用，不写进模型上下文。"
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 255,
+                  "pattern": "^[^\\x00-\\x1F\\x7F/\\\\]+$",
+                  "description": "展示用文件名；缺省取路径的文件名。"
+                }
+              },
+              "additionalProperties": false,
+              "description": "按路径引用的附件。"
+            },
+            "maxItems": 8,
+            "description": "桌面端按路径引用的附件；不上传字节、不限大小。与 attachment_ids 合计最多 8 个。5 MiB 以内的图片随消息作为图片输入，其余文件由员工用 attachment_read 工具按需分段读取。"
+          },
           "mentions": {
             "type": "array",
             "items": {

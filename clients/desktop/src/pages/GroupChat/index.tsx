@@ -4,9 +4,11 @@ import { GitBranch } from 'lucide-react'
 import '../Chat/Chat.css'
 import { useChatStore, type Message } from '../../stores/chat'
 import { useAgentAuthStore } from '../../stores/agentAuth'
-import { pickFilePath, cacheFileFromBlob, cacheFileFromPath, readCachedFileBlob, type CachedFile } from '../../lib/fileCache'
+import { pickFilePath, cacheFileFromBlob, describeLocalFile, readCachedFileBlob, type CachedFile } from '../../lib/fileCache'
 import {
   uploadedAttachmentIds,
+  referencedAttachmentPaths,
+  areAttachmentsReady,
   uploadedMessageAttachments,
   type UploadableChatFile,
 } from '../../lib/chatAttachmentUpload'
@@ -160,7 +162,7 @@ export default function GroupChat() {
     const now = new Date()
     const time = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`
     const attachmentIds = uploadedAttachmentIds(files)
-    if (attachmentIds.length !== files.length) return false
+    if (!areAttachmentsReady(files)) return false
 
     setSendError((previous) => clearSendErrorFor(previous, activeGroupId))
     const userMsgId = crypto.randomUUID()
@@ -186,6 +188,7 @@ export default function GroupChat() {
         idempotencyKey,
         agentApi.submitPrompt.bind(agentApi),
         attachmentIds,
+        referencedAttachmentPaths(files),
       )
       beginAssistantStream(activeGroupId, {
         kind: 'group',
@@ -215,10 +218,10 @@ export default function GroupChat() {
     [userId, activeGroupId],
   )
 
-  /** Dragged in from Finder/Explorer: Tauri gives the path, so copy it like「+ 导入」. */
+  /** Dragged in or picked: the message refers to the file where it is (attachment by path), nothing is copied. */
   const handleImportPath = useCallback(
-    (path: string) => cacheFileFromPath(userId, activeGroupId || 'group', path),
-    [userId, activeGroupId],
+    (path: string) => describeLocalFile(path),
+    [],
   )
 
   const handleUploadFile = useCallback(async (file: CachedFile): Promise<string> => {

@@ -43,6 +43,7 @@ function chatStore(api: Record<string, unknown>) {
     if (id === '../lib/projectConversation') return { latestEmployeeConversations }
     if (id === '../lib/employeeConversationMap') return { rememberEmployeeConversation }
     if (id === '../lib/skillDisplay') return { skillDisplayNames }
+    if (id === '../lib/attachmentManifest') return { rememberAttachmentPaths: () => {} }
     return {}
   }
   const code = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText
@@ -415,7 +416,7 @@ test('new-session send skips empty history loading on activation', async () => {
   let clears = 0
   let sent = false
   const send = pageCallback('startNewSession', {
-    workbenchEmployees: [{ employeeId: 'employee' }], uploadedAttachmentIds: () => [],
+    workbenchEmployees: [{ employeeId: 'employee' }], areAttachmentsReady: () => true,
     setNewSessionError: () => {}, setSendError: () => {}, setIsGenerating: () => {},
     ensureNewSessionConversation: async () => ({ id: 'new-chat', item: {} }),
     useChatStore: { getState: () => ({ conversations: [] }) }, addConversation: () => {}, setConvDraft: () => {},
