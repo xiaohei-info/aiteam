@@ -29,7 +29,7 @@ import { AgentUpgradeRequiredError, ManagerAuthError, ManagerAuthorizationError,
 import { SessionAuthorizationError, type PromptDeliveryOptions } from "../pi/session-host.js";
 import { serializePiEntry, serializePiEvent } from "../pi/event-sse.js";
 import { materializeAttachments } from "../pi/attachment-tool.js";
-import { AttachmentPathError, attachmentManifest, loadInlineImage, MAX_PROMPT_ATTACHMENTS, parseAttachmentPaths, resolveAttachmentPath, type AttachmentPathInput } from "../pi/attachment-refs.js";
+import { AttachmentPathError, attachmentManifest, loadInlineImage, MAX_PROMPT_ATTACHMENTS, parseAttachmentPaths, resolveAttachmentPath, type AttachmentPathInput, type UploadedAttachmentEntry } from "../pi/attachment-refs.js";
 import { visibleHistoryText } from "../pi/session-history.js";
 import { InvalidReadCursorError } from "../storage/read-cursor.js";
 import { ConversationReadError, ConversationReadService, readPageLimit, validateReadQuery } from "../services/conversation-reads.js";
@@ -3095,12 +3095,14 @@ export class AgentHttpServer {
           throw new HttpProblem(422, "attachment_not_supported", error instanceof Error ? error.message : "Attachment cannot be used as model input");
         }
       }
+      const uploadedEntries: UploadedAttachmentEntry[] = [];
       const loadedImages: ImageContent[] = [];
       let decodedImageBytes = images.reduce((total, image) => total + Buffer.byteLength(image.data, "base64"), 0);
       for (const attachmentId of attachmentIds) {
         const metadata = this.options.store.getOwnedLocalFile(attachmentId, conversationId, caller.tenantId!, caller.userId ?? caller.callerId);
         if (!metadata) throw new HttpProblem(404, "attachment_not_found", "Attachment not found");
         if (metadata.kind !== "attachment") throw new HttpProblem(422, "invalid_attachment", "Only conversation attachments can be referenced by a prompt");
+        uploadedEntries.push({ id: metadata.id, filename: metadata.filename, mime_type: metadata.mime_type, byte_size: metadata.byte_size });
         // Non-image attachments remain local metadata. Never load their bytes into
         // the Pi image content array; the current Pi prompt contract accepts images only.
         if (!IMAGE_MIMES.has(metadata.mime_type)) continue;
@@ -3135,7 +3137,7 @@ export class AgentHttpServer {
       const attachmentText = materializedAttachments.length > 0
         ? `\n\n[本地附件材料，仅来自当前会话已绑定文件]\n${materializedAttachments.map((item) => `--- ${item.filename} ---\n${item.extracted.text}`).join("\n")}`
         : "";
-      const worker = this.runPrompt(conversationId, caller, key, receipt.ownerInstance, `${text}${attachmentText}${attachmentManifest(refs, inlinedRefs)}`, promptImages, mentions, attachmentIds);
+      const worker = this.runPrompt(conversationId, caller, key, receipt.ownerInstance, `${text}${attachmentText}${attachmentManifest(refs, inlinedRefs, uploadedEntries)}`, promptImages, mentions, attachmentIds);
       this.promptWorkers.add(worker);
       void worker.finally(() => this.promptWorkers.delete(worker));
       this.writeReceipt(response, conversationId, key, "accepted");

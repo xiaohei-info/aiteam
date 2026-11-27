@@ -598,7 +598,10 @@ test("Agent context HUD is authenticated and thinking changes apply to later pro
     assert.equal((await changed.json() as { data: { thinking_level: string } }).data.thinking_level, "high");
 
     reasoning.setResponses([(context) => {
-      assert.equal(JSON.stringify(context.messages).includes('"type":"image"'), false);
+      const sent = JSON.stringify(context.messages);
+      assert.equal(sent.includes('"type":"image"'), false);
+      assert.match(sent, /local notes/u, "uploaded text still reaches the model with the message");
+      assert.ok(sent.includes(`- ${attachmentId}：notes.md（文本，11 B，已随消息附上）`), "uploaded files are listed so clients can show cards");
       return fauxAssistantMessage("ok");
     }]);
     const prompt = await fetch(`${base}/api/agent/conversations/c1/prompt`, {

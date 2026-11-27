@@ -111,3 +111,20 @@ test('同一个文件再拖入 / 再选择不重复添加', () => {
   assert.ok(bar.includes('!importingPathsRef.current.has(path) && !filesRef.current.some((file) => file.path === path)'), '已在附件区或正在添加的路径应跳过')
   assert.ok(bar.includes('onImportPath(path).finally(() => importingPathsRef.current.delete(path))'), '添加结束后释放占位，移除后可以再次添加')
 })
+
+test('已上传附件：历史气泡不显示 Agent 拼入的附件文字，显示为附件卡片', async () => {
+  const { entriesToMessages } = await import('../src/lib/piConverters.ts')
+  const text = '总结一下\n\n[本地附件材料，仅来自当前会话已绑定文件]\n--- notes.md ---\n第一行\n--- 正文里的分隔 ---\n'
+    + '\n\n[用户附件，可用 attachment_read 工具按编号读取]\n- 7f3c9e2a-1b4d-4c8e-9a0f-2d6b5e8c1a37：notes.md（文本，2.0 KB，已随消息附上）\n- ref-9a：big.txt（文本，12.0 MB）'
+  const [message] = entriesToMessages([{ id: 'u1', type: 'message', message: { role: 'user', content: text } }] as never)
+  assert.equal(message.content, '总结一下')
+  assert.deepEqual(message.attachments?.map((att) => [att.id, att.name]), [
+    ['7f3c9e2a-1b4d-4c8e-9a0f-2d6b5e8c1a37', 'notes.md'], ['ref-9a', 'big.txt'],
+  ])
+})
+
+test('早于附件清单的历史消息：拼入的附件文字也不显示', async () => {
+  const { entriesToMessages } = await import('../src/lib/piConverters.ts')
+  const [message] = entriesToMessages([{ id: 'u1', type: 'message', message: { role: 'user', content: '看下\n\n[本地附件材料，仅来自当前会话已绑定文件]\n--- a.md ---\n内容' } }] as never)
+  assert.equal(message.content, '看下')
+})

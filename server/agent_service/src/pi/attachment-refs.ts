@@ -115,12 +115,22 @@ function kindLabel(mime: string): string {
 }
 
 /** The list appended to the message. Paths stay inside the Agent: the model sees IDs and names only. */
-export function attachmentManifest(refs: readonly LocalFileRef[], inlined: ReadonlySet<string>): string {
-  if (refs.length === 0) return "";
-  const lines = refs.map((ref) => {
+/** An uploaded attachment (attachment_ids): its content already travels with the message. */
+export interface UploadedAttachmentEntry {
+  id: string;
+  filename: string;
+  mime_type: string;
+  byte_size: number;
+}
+
+export function attachmentManifest(refs: readonly LocalFileRef[], inlined: ReadonlySet<string>, uploaded: readonly UploadedAttachmentEntry[] = []): string {
+  if (refs.length === 0 && uploaded.length === 0) return "";
+  // Uploaded files are listed too so clients can show them as attachment cards instead of the inlined text.
+  const lines = uploaded.map((file) => `- ${file.id}：${file.filename}（${kindLabel(file.mime_type)}，${formatByteSize(file.byte_size)}，已随消息附上）`);
+  lines.push(...refs.map((ref) => {
     const note = inlined.has(ref.id) ? "，已随消息附上" : isExtractableMime(ref.mime_type) || IMAGE_MIMES.has(ref.mime_type) ? "" : "，无法读取内容";
     return `- ${ref.id}：${ref.name}（${kindLabel(ref.mime_type)}，${formatByteSize(ref.byte_size)}${note}）`;
-  });
+  }));
   return `\n\n[用户附件，可用 ${ATTACHMENT_READ_TOOL_NAME} 工具按编号读取]\n${lines.join("\n")}`;
 }
 
