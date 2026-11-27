@@ -17,6 +17,19 @@ function clientIdOf(file: CachedFile): string | undefined {
   return (file as { upload?: { clientId?: string } }).upload?.clientId
 }
 
+function fileKey<T extends CachedFile>(file: T): string | T {
+  return clientIdOf(file) ?? (file as { path?: string }).path ?? file
+}
+
+/**
+ * Puts a failed send's attachments back without dropping the ones added while it was in flight:
+ * sending is not allowed to take attachments away from the input box.
+ */
+export function mergeDraftFiles<T extends CachedFile>(restored: readonly T[], current: readonly T[]): T[] {
+  const taken = new Set<string | T>(restored.map(fileKey))
+  return [...restored, ...current.filter((file) => !taken.has(fileKey(file)))]
+}
+
 /**
  * One copy per conversation: a conversation's attachments live only in its draft, which is what the
  * input box shows. Every change (adding, import/upload progress, removal) goes through here, so an

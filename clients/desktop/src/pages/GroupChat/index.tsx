@@ -48,7 +48,7 @@ export default function GroupChat() {
     activeGroupId, groups, toggleGroupDetail,
     activeConvMessages, activeConvRawItems, appendMessage,
     updateMessageStatus, clearGroupUnread, loadGroupConversation, refreshActiveEntries,
-    loadMoreMessages, activePagination, draftsByConv, setConvDraft, setConvDraftText, updateDraftFiles, generatingConvIds, syncingConvIds,
+    loadMoreMessages, activePagination, draftsByConv, setConvDraftText, updateDraftFiles, generatingConvIds, syncingConvIds,
     dropStaleConversation,
     workbenchLoading, workbenchRefreshing, workbenchError, loadAgentsAndConversations,
     activeMessagesLoading, activeMessagesError,
@@ -245,10 +245,6 @@ export default function GroupChat() {
     await useChatStore.getState().abortStream(activeGroupId)
   }, [activeGroupId])
 
-  const handleDraftChange = useCallback((convId: string, text: string, files: CachedFile[], mentionSnapshot?: readonly Node[]) => {
-    setConvDraft(convId, text, files, mentionSnapshot)
-  }, [setConvDraft])
-
   const ensureGroupConversation = useCallback(async () => {
     if (!activeGroupId) throw new Error('请先选择群聊')
     return { id: activeGroupId }
@@ -387,7 +383,6 @@ export default function GroupChat() {
         draft={draftsByConv[activeGroupId]?.text}
         draftFiles={draftsByConv[activeGroupId]?.files}
         draftMentions={draftsByConv[activeGroupId]?.mentionSnapshot}
-        onDraftChange={handleDraftChange}
         onDraftTextChange={setConvDraftText}
         onDraftFilesChange={updateDraftFiles}
         disabled={activeMessagesLoading || Boolean(activeMessagesError)}

@@ -13,6 +13,15 @@ import { dispatchFileDrop } from '../src/lib/nativeFileDrop.ts'
 const params = new URLSearchParams(location.search)
 const mode = params.get('mode') ?? 'single'
 const variant = params.get('variant') ?? 'dock'
+// 浏览器里没有 Tauri：window.__clipboardPaths 当作系统剪贴板里访达/资源管理器复制的文件路径。
+window.__clipboardPaths = []
+window.__TAURI_INTERNALS__ = {
+  invoke: async (command) => {
+    if (command === 'read_clipboard_file_paths') return [...window.__clipboardPaths]
+    if (command === 'read_clipboard_rtf_images') return []
+    throw new Error(`unexpected invoke in smoke: ${command}`)
+  },
+}
 window.__sent = []
 window.__drafts = {}
 window.__failNext = false
@@ -77,7 +86,19 @@ function Harness() {
       const name = path.split('/').pop()
       return { rel_path: `u/${convId}/file/${name}`, asset_url: '', name, size: 1, mime: 'application/octet-stream' }
     },
-    onDraftChange: (id, text, files, mentionSnapshot) => { window.__drafts[id] = { text, files, mentionSnapshot } },
+    // 和真实页面一样分两路：文字与附件各自写回，发送成功只清文字。
+    onDraftTextChange: (id, text, mentionSnapshot) => {
+      const draft = window.__drafts[id] ?? {}
+      window.__drafts[id] = { ...draft, text, mentionSnapshot }
+      rerender()
+    },
+    onDraftFilesChange: (id, update) => {
+      const draft = window.__drafts[id] ?? {}
+      const next = update(draft.files ?? [])
+      window.__drafts[id] = { ...draft, text: draft.text ?? '', files: next }
+      rerender()
+      return next
+    },
     onDraftFileUpdate: (id, clientId, file) => {
       const draft = window.__drafts[id]
       if (!draft?.files?.some((f) => f.upload?.clientId === clientId)) return false

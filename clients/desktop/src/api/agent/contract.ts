@@ -59,6 +59,8 @@ export const documentedRoutes: readonly (readonly [string, string])[] = [
   ['GET', '/api/agent/conversations/{conversation_id}/approvals/{approval_id}/auth'],
   ['GET', '/api/agent/conversations/{conversation_id}/attachments'],
   ['POST', '/api/agent/conversations/{conversation_id}/attachments'],
+  // 历史消息里的附件按 ref ID 定位本机文件（同名的两个文件不会串）。
+  ['GET', '/api/agent/conversations/{conversation_id}/attachment-refs'],
   ['GET', '/api/agent/conversations/{conversation_id}/artifacts'],
   ['POST', '/api/agent/conversations/{conversation_id}/artifacts'],
   ['GET', '/api/agent/conversations/{conversation_id}/attachments/{attachment_id}'],

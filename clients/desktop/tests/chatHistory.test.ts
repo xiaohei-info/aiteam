@@ -45,7 +45,6 @@ function chatStore(api: Record<string, unknown>) {
     if (id === '../lib/projectConversation') return { latestEmployeeConversations }
     if (id === '../lib/employeeConversationMap') return { rememberEmployeeConversation }
     if (id === '../lib/skillDisplay') return { skillDisplayNames }
-    if (id === '../lib/attachmentManifest') return { rememberAttachmentPaths: () => {} }
     if (id === '../lib/chatDraftFiles') return { migrateDraftConversationId, withDraftFiles, withDraftText }
     return {}
   }

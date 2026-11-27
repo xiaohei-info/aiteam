@@ -116,7 +116,8 @@
 ### 8.1 实机验证后的补充（2026-11-27）
 
 - 历史消息：Agent 追加的「用户附件」清单不再显示在气泡正文里，改为附件卡片（`src/lib/attachmentManifest.ts` 的 `splitAttachmentManifest`，在 `piConverters` 里只处理用户消息）。
-- 历史消息里点开按路径引用的附件：发送时按「会话 + 文件名」把本机位置记在本地（localStorage，最多 500 条），点开时找回；找不到时提示到原文件夹打开。
+- 历史消息里点开按路径引用的附件：按 ref ID 向本机 Agent 要位置（`GET /api/agent/conversations/{id}/attachment-refs`，路径不出本机，`src/lib/attachmentRefPaths.ts` 按会话缓存）。**不再按文件名记在 localStorage**：同一会话里两个同名不同位置的文件各自打开自己那个（评审必改 4）。
+- 打不开的类型（Excel / 视频 / 压缩包等不在应用内预览白名单里）改为在文件夹里定位它（`reveal_local_file`），并在附件区给一句说明。
 - 同一个文件再拖入 / 再选择不重复添加；同一条消息里重复的路径 Agent 只列一次。
 
 实机结果（macOS，本分支 `pnpm tauri dev`，Agent 由 `agent:build` 打包）：

@@ -78,5 +78,6 @@ test('单聊接入上传删除回调，点击发送立即清空编辑器、失�
   assert.doesNotMatch(chatSource, /for \(const f of files\)/)
   assert.match(inputSource, /sent = await onSend\(/)
   assert.match(inputSource, /const target = sent \? \{ kind: 'none' as const \} : composerRestoreTarget\(/)
-  assert.match(inputSource, /setFiles\(\(\) => files\)/)
+  // 放回失败的附件时与期间新加的合并，不能把发送过程中新加的附件覆盖掉。
+  assert.match(inputSource, /setFiles\(\(current\) => mergeDraftFiles\(files, current\)\)/)
 })

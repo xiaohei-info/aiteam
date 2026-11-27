@@ -3,19 +3,19 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { composerRestoreTarget } from '../src/lib/chatComposerRestore.ts'
 
-const base = { mounted: true, sameConversation: true, composerEmpty: true, submittedConversationId: 'conv-1' }
+const base = { mounted: true, sameConversation: true, composerTextEmpty: true, submittedConversationId: 'conv-1' }
 
 test('failed send restores the composer in the same conversation', () => {
   assert.deepEqual(composerRestoreTarget(base), { kind: 'composer' })
 })
 
 test('failed send never overwrites text typed while the request was pending', () => {
-  assert.deepEqual(composerRestoreTarget({ ...base, composerEmpty: false }), { kind: 'none' })
+  assert.deepEqual(composerRestoreTarget({ ...base, composerTextEmpty: false }), { kind: 'none' })
 })
 
 test('failed send after switching conversations goes back to the original draft', () => {
   assert.deepEqual(
-    composerRestoreTarget({ ...base, sameConversation: false, composerEmpty: false }),
+    composerRestoreTarget({ ...base, sameConversation: false, composerTextEmpty: false }),
     { kind: 'draft', conversationId: 'conv-1' },
   )
 })
@@ -46,8 +46,9 @@ test('composer clears before awaiting onSend', () => {
 
 test('new session restores the draft only after a failed send', () => {
   const source = readFileSync(new URL('../src/pages/Chat/index.tsx', import.meta.url), 'utf8')
-  const start = source.slice(source.indexOf('const startNewSession'), source.indexOf('const handleDraftChange'))
-  assert.equal(start.indexOf('setConvDraft(conversation.id, trimmed, files)') > start.indexOf('await submitMessage('), true)
+  const start = source.slice(source.indexOf('const startNewSession'), source.indexOf('const getDisplayContent'))
+  // 放回草稿只发生在 submitMessage 失败之后，且与期间新加的附件合并（不覆盖）。
+  assert.equal(start.indexOf('restoreFailedDraft(conversation.id, trimmed, files)') > start.indexOf('await submitMessage('), true)
 })
 
 test('conversation drafts keep the @ mention tags, so switching back still submits mentions', () => {
@@ -67,5 +68,9 @@ test('conversation drafts keep the @ mention tags, so switching back still submi
 
   const group = readFileSync(new URL('../src/pages/GroupChat/index.tsx', import.meta.url), 'utf8')
   assert.ok(group.includes('draftMentions={draftsByConv[activeGroupId]?.mentionSnapshot}'), '群聊页必须把快照传回输入框')
-  assert.ok(group.includes('setConvDraft(convId, text, files, mentionSnapshot)'), '群聊页必须把快照写进草稿')
+  // 文字与附件各走一路：文字带快照写回草稿，附件由 updateDraftFiles 合并，发送成功只清文字。
+  assert.ok(group.includes('onDraftTextChange={setConvDraftText}'), '群聊页必须把带快照的文字写进草稿')
+  assert.ok(group.includes('onDraftFilesChange={updateDraftFiles}'), '群聊页的附件必须走唯一一份会话附件状态')
+  const store2 = readFileSync(new URL('../src/stores/chat.ts', import.meta.url), 'utf8')
+  assert.ok(store2.includes('setConvDraftText: (convId, text, mentionSnapshot) =>'), 'setConvDraftText 必须接受快照')
 })

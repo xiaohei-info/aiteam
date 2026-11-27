@@ -4,6 +4,7 @@ import type { AgentToolResult, ToolDefinition } from "@earendil-works/pi-coding-
 import type { AgentSqliteStore, LocalFileRef } from "../storage/sqlite.js";
 import { hasImageSignature, IMAGE_MIMES, MAX_LOCAL_FILE_BYTES, mimeTypeForFilename } from "../local-files.js";
 import { extractDocumentText, isExtractableMime, isTextMime, REFERENCE_LIMITS, UnsupportedDocumentError } from "./document-extractor.js";
+import { credentialFolderForPath } from "./project-path-policy.js";
 
 /**
  * Files the desktop client attaches by path (design: clients/desktop/docs/plans/2026-11-27-attachment-by-path.md).
@@ -33,7 +34,7 @@ const EXTRA_MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
 };
 
 export class AttachmentPathError extends Error {
-  constructor(readonly code: "invalid_attachment_paths" | "attachment_not_found" | "attachment_not_a_file", message: string) {
+  constructor(readonly code: "invalid_attachment_paths" | "attachment_not_found" | "attachment_not_a_file" | "attachment_in_credential_folder", message: string) {
     super(message);
     this.name = "AttachmentPathError";
   }
@@ -71,13 +72,24 @@ export function parseAttachmentPaths(value: unknown): AttachmentPathInput[] {
   });
 }
 
-/** Follows links first, then requires an ordinary file: a folder or a device is never attached. */
+/**
+ * Follows links first, then requires an ordinary file: a folder or a device is never attached.
+ * Credential folders are refused here as well as in the client, because the path arrives from the
+ * renderer: were it ever compromised, `~/.ssh/id_rsa` must not become readable through `attachment_read`.
+ */
 export function resolveAttachmentPath(input: AttachmentPathInput): ResolvedAttachmentPath {
   let real: string;
   try {
     real = realpathSync(input.path);
   } catch {
     throw new AttachmentPathError("attachment_not_found", `附件不存在：${input.name ?? basename(input.path)}`);
+  }
+  const credential = credentialFolderForPath(real);
+  if (credential) {
+    throw new AttachmentPathError(
+      "attachment_in_credential_folder",
+      `为保护密钥与凭据，${credential} 目录里的文件不能作为附件：${input.name ?? basename(real)}`,
+    );
   }
   const stats = statSync(real);
   if (!stats.isFile()) throw new AttachmentPathError("attachment_not_a_file", `只能附加文件，不能附加文件夹：${input.name ?? basename(input.path)}`);

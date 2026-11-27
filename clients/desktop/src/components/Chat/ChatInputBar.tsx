@@ -20,6 +20,7 @@ import {
   type UploadableChatFile,
 } from '../../lib/chatAttachmentUpload'
 import { composerRestoreTarget } from '../../lib/chatComposerRestore'
+import { mergeDraftFiles } from '../../lib/chatDraftFiles'
 import type { WorkbenchEmployee } from '../../lib/employeeConversationMap'
 import type { GroupMember } from '../../stores/chat'
 // Phase 3:语音转写从旧 /api/team/stt 切到新栈 /api/agent/audio/transcriptions。
@@ -77,7 +78,6 @@ export interface ChatInputBarProps {
   draftFiles?: CachedFile[]
   /** 草稿里的 @ 成员标签（输入框自己克隆的节点）；有快照就原样放回，没有才退回纯文本。 */
   draftMentions?: MentionInputSnapshot
-  onDraftChange: (convId: string, text: string, files: CachedFile[], mentionSnapshot?: MentionInputSnapshot) => void
   /** Saves the typed text of a conversation without touching its attachments. */
   onDraftTextChange: (convId: string, text: string, mentionSnapshot?: MentionInputSnapshot) => void
   /**
@@ -108,7 +108,7 @@ export interface ChatInputBarProps {
 export const ChatInputBar = memo(({
   onSend, onPickFile, onImportFile, onImportPath, onUploadFile, onDeleteUploadedFile,
   disabled, convId, conversationUpgradeFrom, draft, draftFiles, draftMentions,
-  onDraftChange, onDraftTextChange, onDraftFilesChange,
+  onDraftTextChange, onDraftFilesChange,
   variant = 'dock', placeholder = '输入消息…', autoFocus, helper, tools,
   employees = [], members, isGenerating, isSyncing, onAbort, onHeightChange, enableVoiceInput, enableKnowledgeFiles,
 }: ChatInputBarProps) => {
@@ -531,7 +531,7 @@ export const ChatInputBar = memo(({
       if (!composed) return
       if (shouldQueue) {
         flushSync(clearComposer)
-        onDraftChange(queueConvId, '', [])
+        onDraftTextChange(queueConvId, '')
         setQueues((previous) => enqueueMessage(previous, queueConvId, composed))
         resumeQueue(queueConvId)
         return
@@ -545,7 +545,8 @@ export const ChatInputBar = memo(({
         setIsSubmitting(true)
         clearComposer()
       })
-      onDraftChange(prevConvRef.current, '', [])
+      // 只清文字：附件由 clearComposer 当帧清掉，请求期间新加的不归这次发送。
+      onDraftTextChange(prevConvRef.current, '')
 
       let sent = false
       try {
@@ -560,15 +561,19 @@ export const ChatInputBar = memo(({
         mounted: mountedRef.current,
         // 请求期间允许用户从侧栏切换会话；失败的内容回到原会话，不覆盖当前会话。
         sameConversation: prevConvRef.current === submittedConversationId,
-        composerEmpty: !composer.valueRef.current.text.trim() && filesRef.current.length === 0,
+        composerTextEmpty: !composer.valueRef.current.text.trim(),
         submittedConversationId,
       })
       flushSync(() => {
         setIsSubmitting(false)
-        if (target.kind === 'composer') setFiles(() => files)
+        // 发送期间新加的附件不能被放回的覆盖。
+        if (target.kind === 'composer') setFiles((current) => mergeDraftFiles(files, current))
       })
       // 带上 @ 成员快照：重发时仍提及原来的成员，不会落到群聊默认的协调员。
-      if (target.kind === 'draft') onDraftChange(target.conversationId, rawText, files, mentionSnapshot)
+      if (target.kind === 'draft') {
+        onDraftTextChange(target.conversationId, rawText, mentionSnapshot)
+        onDraftFilesChange(target.conversationId, (current) => mergeDraftFiles(files, current))
+      }
       // 原样放回（含 @ 成员 chip）；焦点没被用户移走时 restore 会聚焦到末尾。
       if (target.kind === 'composer') composer.restore(mentionSnapshot, rawText)
     })
@@ -596,14 +601,20 @@ export const ChatInputBar = memo(({
   importPathsRef.current = (paths: string[]) => {
     if (!onImportPath) return
     setFileError('')
-    const fresh = [...new Set(paths)].filter((path) =>
-      !importingPathsRef.current.has(path) && !filesRef.current.some((file) => file.path === path))
-    fresh.forEach((path) => importingPathsRef.current.add(path))
+    // 访达给的路径常是分解形式（NFD），输入框里已有的可能是组合形式：按归一化后的路径去重，导入仍用原路径。
+    const key = (path: string) => path.normalize('NFC')
+    const seen = new Set([
+      ...importingPathsRef.current,
+      ...filesRef.current.map((file) => (file.path ? key(file.path) : '')),
+    ])
+    const fresh = [...new Map(paths.map((path) => [key(path), path])).values()]
+      .filter((path) => !seen.has(key(path)))
+    fresh.forEach((path) => importingPathsRef.current.add(key(path)))
     startImports(fresh.map((path) => {
       const name = path.split(/[\\/]/).filter(Boolean).pop() || path
       return {
         meta: { name, mime: 'application/octet-stream', size: 0 },
-        load: () => onImportPath(path).finally(() => importingPathsRef.current.delete(path)),
+        load: () => onImportPath(path).finally(() => importingPathsRef.current.delete(key(path))),
         failure: (error: unknown) => importErrorMessage(name, error),
       }
     }))

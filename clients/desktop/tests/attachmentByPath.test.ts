@@ -91,25 +91,28 @@ test('历史消息把附件清单显示为附件卡片，正文不出现编号�
   assert.equal(reply.attachments, undefined, '只处理用户消息')
 })
 
-test('发送时记下附件位置，历史消息按会话与文件名找回', async () => {
-  const { rememberAttachmentPaths, rememberedAttachmentPath } = await import('../src/lib/attachmentManifest.ts')
-  const data = new Map<string, string>()
-  const storage = { getItem: (k: string) => data.get(k) ?? null, setItem: (k: string, v: string) => { data.set(k, v) } } as Storage
-  rememberAttachmentPaths('c1', [
-    { id: 'path:/a/报价.pdf', filename: '报价.pdf', name: '报价.pdf', mime_type: 'application/pdf', path: '/a/报价.pdf' },
-    { id: 'upload-1', filename: 'x.txt', name: 'x.txt', mime_type: 'text/plain' },
-  ], storage)
-  assert.equal(rememberedAttachmentPath('c1', '报价.pdf', storage), '/a/报价.pdf')
-  assert.equal(rememberedAttachmentPath('c2', '报价.pdf', storage), undefined, '按会话隔离')
-  assert.equal(rememberedAttachmentPath('c1', 'x.txt', storage), undefined, '上传的附件不记位置')
-  rememberAttachmentPaths('c1', [{ id: 'path:/b/报价.pdf', filename: '报价.pdf', name: '报价.pdf', mime_type: 'application/pdf', path: '/b/报价.pdf' }], storage)
-  assert.equal(rememberedAttachmentPath('c1', '报价.pdf', storage), '/b/报价.pdf', '同名以最近一次为准')
+test('历史消息里的附件按 ref ID 定位，同名的两个文件各自打开各自那个', async () => {
+  const { attachmentRefPath, forgetAttachmentRefPaths } = await import('../src/lib/attachmentRefPaths.ts')
+  forgetAttachmentRefPaths()
+  let calls = 0
+  const refs = [
+    { id: 'ref-1', path: '/a/报价.pdf' },
+    { id: 'ref-2', path: '/b/报价.pdf' },
+  ]
+  const list = async (conversationId: string) => { calls += 1; return conversationId === 'c1' ? refs : [] }
+  assert.equal(await attachmentRefPath('c1', 'ref-1', list), '/a/报价.pdf')
+  assert.equal(await attachmentRefPath('c1', 'ref-2', list), '/b/报价.pdf', '同名不再串到最近一次')
+  assert.equal(calls, 1, '同一会话只拉一次清单')
+  assert.equal(await attachmentRefPath('c2', 'ref-1', list), undefined, '按会话隔离')
+  refs.push({ id: 'ref-3', path: '/c/新的.pdf' })
+  assert.equal(await attachmentRefPath('c1', 'ref-3', list), '/c/新的.pdf', '缓存没命中时重取一次')
 })
 
 test('同一个文件再拖入 / 再选择不重复添加', () => {
   const bar = readFileSync(new URL('../src/components/Chat/ChatInputBar.tsx', import.meta.url), 'utf8')
-  assert.ok(bar.includes('!importingPathsRef.current.has(path) && !filesRef.current.some((file) => file.path === path)'), '已在附件区或正在添加的路径应跳过')
-  assert.ok(bar.includes('onImportPath(path).finally(() => importingPathsRef.current.delete(path))'), '添加结束后释放占位，移除后可以再次添加')
+  assert.ok(bar.includes("const key = (path: string) => path.normalize('NFC')"), '路径归一化后比较，访达的 NFD 与已有 NFC 算同一个')
+  assert.ok(bar.includes('.filter((path) => !seen.has(key(path)))'), '已在附件区或正在添加的路径应跳过')
+  assert.ok(bar.includes('onImportPath(path).finally(() => importingPathsRef.current.delete(key(path)))'), '添加结束后释放占位，移除后可以再次添加')
 })
 
 test('已上传附件：历史气泡不显示 Agent 拼入的附件文字，显示为附件卡片', async () => {

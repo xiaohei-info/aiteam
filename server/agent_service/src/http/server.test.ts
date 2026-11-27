@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -539,6 +539,25 @@ test("Agent prompt attaches files by path: no size limit, no path in the model i
     // Another member's conversation sees none of them.
     assert.equal(fixture.store.listOwnedLocalFileRefs("c1", "tenant-1", "member-2").length, 0);
 
+    // Same name, two different files: the client opens each by its own ref ID, so they cannot be confused.
+    const otherDir = mkdtempSync(join(tmpdir(), "attach-same-name-"));
+    const sameName = join(otherDir, "big-notes.md");
+    writeFileSync(sameName, "another file that happens to share the name");
+    const second = await send("same-name", { text: "再看一份", attachment_paths: [{ path: sameName }] });
+    assert.equal(second.status, 202, await second.clone().text());
+    const refsResponse = await fetch(`${base}/api/agent/conversations/c1/attachment-refs`, { headers: { Authorization: "Bearer test" } });
+    assert.equal(refsResponse.status, 200);
+    const refs = (await refsResponse.json() as { data: Array<{ id: string; name: string; path: string; mime_type: string; byte_size: number }> }).data;
+    const sameNamed = refs.filter((ref) => ref.name === "big-notes.md");
+    assert.equal(sameNamed.length, 2, "both files are listed, each with its own ref ID");
+    assert.notEqual(sameNamed[0].id, sameNamed[1].id);
+    // 落库的是 realpath（符号链接已解开，macOS 上 /var → /private/var）。
+    assert.deepEqual(new Set(sameNamed.map((ref) => ref.path)), new Set([realpathSync(big), realpathSync(sameName)]), "each ref keeps its own location");
+    assert(refs.every((ref) => ref.id.startsWith("ref-")));
+    const otherConversation = await fetch(`${base}/api/agent/conversations/c2/attachment-refs`, { headers: { Authorization: "Bearer test" } });
+    assert.equal(otherConversation.status, 404, "a conversation the caller does not own returns 404");
+    rmSync(otherDir, { recursive: true, force: true });
+
     const missing = await send("missing-path", { text: "x", attachment_paths: [{ path: join(dir, "gone.pdf") }] });
     assert.equal(missing.status, 422);
     assert.equal((await missing.json() as { code: string }).code, "attachment_not_found");
@@ -821,8 +840,9 @@ test("Agent OpenAPI gives every frontend operation structured parameters, respon
     //       + MCP 鉴权 8 个（登录进度/取消/回调/探测/添加 MCP/重新登录/更新令牌/清除凭据）
     //      + 自动安装授权列出与撤销两个接口（设计 §11.3）+ 重新打开 MCP 登录页 + 添加个人技能
     //      + 导入自定义技能（设计 2026-11-18 §3）+ 能力授权列出与撤销（2026-11-19 §3.2）
-    //      + 「从企业拿」MCP 列表与一键安装（2026-11-20 §4.4b）。
-    assert.equal(frontendOperations.length, 106);
+    //      + 「从企业拿」MCP 列表与一键安装（2026-11-20 §4.4b）
+    //      + 会话附件引用列表（历史消息按 ref ID 定位本机文件）。
+    assert.equal(frontendOperations.length, 107);
     for (const { path, method, operation } of frontendOperations) {
       const label = `${method.toUpperCase()} ${path}`;
       assert(operation.summary, `${label} missing summary`);

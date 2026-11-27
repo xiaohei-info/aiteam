@@ -55,7 +55,6 @@ import { migrateDraftConversationId, withDraftFiles, withDraftText, type DraftsB
 import { rememberEmployeeConversation, type WorkbenchEmployee } from '../lib/employeeConversationMap'
 import { classifyRequestError, type RequestErrorInfo } from '../lib/requestError'
 import { notifyConversationCompleted } from '../lib/systemNotifications'
-import { rememberAttachmentPaths } from '../lib/attachmentManifest'
 import { formatConversationTime, resolveConversationSummary, type ConversationSummaryAvailability } from '../lib/conversationSummary'
 import {
   getPinnedStorageKey as buildPinnedStorageKey,
@@ -885,7 +884,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   // -------- 消息读写 --------
 
   appendMessage: (convId, msg) => set((s) => {
-    if (msg.role === 'user') rememberAttachmentPaths(convId, msg.attachments)
     if (convId !== s.activeConvId && convId !== s.activeGroupId) return {}
     if (s.activeConvMsgIds.has(msg.id)) {
       return { activeConvMessages: upsertMessage(s.activeConvMessages, msg) }

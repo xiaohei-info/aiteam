@@ -24,7 +24,8 @@ const bar = React.createElement(ChatInputBar, {
   variant: 'dock',
   onSend: async (text) => { window.__sent.push(text); return true },
   onPickFile: async () => null,
-  onDraftChange: (convId, text) => { window.__drafts.push(text) },
+  onDraftTextChange: (convId, text) => { window.__drafts.push(text) },
+  onDraftFilesChange: (convId, update) => update([]),
 })
 createRoot(document.getElementById('root')).render(bar)
 window.__ready = true

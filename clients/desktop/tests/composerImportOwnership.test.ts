@@ -127,7 +127,7 @@ test('paste, drop and the「+」picker hand the whole list to the same batch imp
   assert.ok(!paste.includes('for (const file of files)'), '不再逐个 await，避免第二个文件落到切换后的会话')
   const drop = bar.slice(bar.indexOf('importPathsRef.current = (paths: string[])'), bar.indexOf('useEffect(() => {\n    if (!canDropFiles) return'))
   assert.ok(drop.includes('startImports(fresh.map('), '去重后的整批路径一次交给 startImports')
-  assert.ok(drop.includes('importingPathsRef.current.delete(path)'), '同一路径导入中不重复添加')
+  assert.ok(drop.includes('importingPathsRef.current.delete(key(path))'), '同一路径（归一化后）导入中不重复添加')
   const pick = bar.slice(bar.indexOf('const handlePickFile = async'), bar.indexOf('const handleImportFiles'))
   assert.ok(pick.includes('path = await onPickFile()'))
   assert.ok(pick.includes('importPathsRef.current([path])'))
@@ -137,8 +137,11 @@ test('paste, drop and the「+」picker hand the whole list to the same batch imp
   assert.ok(!cache.includes('pickAndCacheFile'))
 })
 
-test('a failed send keeps the @ mentions in the draft it goes back to', () => {
-  assert.ok(bar.includes("if (target.kind === 'draft') onDraftChange(target.conversationId, rawText, files, mentionSnapshot)"))
+test('a failed send keeps the @ mentions in the draft it goes back to, and merges the attachments added meanwhile', () => {
+  assert.ok(bar.includes('onDraftTextChange(target.conversationId, rawText, mentionSnapshot)'))
+  assert.ok(bar.includes('onDraftFilesChange(target.conversationId, (current) => mergeDraftFiles(files, current))'),
+    '放回的附件与发送期间新加的合并，不覆盖')
+  assert.ok(bar.includes('if (target.kind === \'composer\') setFiles((current) => mergeDraftFiles(files, current))'))
 })
 
 for (const page of ['Chat', 'GroupChat']) {
@@ -171,7 +174,8 @@ test('a file copied in Finder/Explorer is pasted by path, the same route as a dr
   const cache = readFileSync(new URL('../src/lib/fileCache.ts', import.meta.url), 'utf8')
   assert.ok(cache.includes("invoke<string[]>('read_clipboard_file_paths')"))
   assert.ok(input.includes('void readClipboardFilePaths().then((paths) => {'))
-  assert.ok(input.includes('if (paths.length > 0) onPaths(paths)'), 'copied files must not be read as bytes')
+  assert.ok(input.includes('onPaths(paths)') && input.includes('if (isJustFileNames(plain, paths)) return'),
+    'copied files are imported by path, and text pasted alongside them is kept unless it is just their names')
   assert.ok(bar.includes('onPaths={canDropFiles ? handlePastePaths : undefined}'))
   assert.ok(bar.includes('const handlePastePaths = useCallback((paths: string[]) => importPathsRef.current(paths), [])'),
     'paste and drop share importPathsRef (dedupe, importing chip, error text)')

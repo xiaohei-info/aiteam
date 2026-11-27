@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createFixture } from "../test-fixture.js";
 import { attachmentManifest, parseAttachmentPaths, readAttachmentRef, resolveAttachmentPath } from "./attachment-refs.js";
+import { projectPathPolicyForTests } from "./project-path-policy.js";
 
 const owner = { conversationId: "c1", tenantId: "tenant-1", memberId: "member-1" };
 const text = (result: { content: unknown[] }) => (result.content as Array<{ text?: string }>).map((part) => part.text ?? "").join("");
@@ -56,4 +57,38 @@ test("attachment_paths accepts only absolute paths with plain names", () => {
   for (const bad of [[{ path: "b.pdf" }], [{ path: "/a", name: "x/y" }], [{ path: "/a", extra: 1 }], "nope", Array.from({ length: 9 }, () => ({ path: "/a" }))]) {
     assert.throws(() => parseAttachmentPaths(bad));
   }
+});
+
+// The path arrives from the renderer, so the Agent refuses credential folders itself. Library/AppData stay
+// attachable: screenshots and app caches live there and the client lets the user attach those.
+test("attachment paths inside a credential folder are refused, other folders are not", () => {
+  const dir = mkdtempSync(join(tmpdir(), "attach-cred-"));
+  try {
+    mkdirSync(join(dir, ".ssh"));
+    const key = join(dir, ".ssh", "id_rsa");
+    writeFileSync(key, "PRIVATE");
+    assert.throws(() => resolveAttachmentPath({ path: key }), (error: unknown) => {
+      assert.equal((error as { code?: string }).code, "attachment_in_credential_folder");
+      assert.match((error as Error).message, /凭据[\s\S]*\.ssh/u);
+      return true;
+    });
+
+    mkdirSync(join(dir, "Library", "Caches"), { recursive: true });
+    const shot = join(dir, "Library", "Caches", "shot.png");
+    writeFileSync(shot, Buffer.alloc(4));
+    assert.equal(resolveAttachmentPath({ path: shot }).name, "shot.png");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// One source of truth: the credential list is the subset of the project-folder policy that applies here.
+test("credential_home_roots is the credential subset of home_roots", () => {
+  const policy = projectPathPolicyForTests();
+  for (const platform of [policy.macos, policy.windows]) {
+    assert(platform.credential_home_roots && platform.credential_home_roots.length > 0);
+    for (const root of platform.credential_home_roots) assert(platform.home_roots.includes(root), root);
+  }
+  assert.equal(policy.macos.credential_home_roots!.includes("Library"), false);
+  assert.equal(policy.windows.credential_home_roots!.includes("AppData"), false);
 });

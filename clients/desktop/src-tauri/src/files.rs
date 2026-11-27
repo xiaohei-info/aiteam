@@ -59,9 +59,16 @@ fn canonicalize_scoped_path(
     if !crate::file_access::is_allowed(app, &canonical)?
         && !app.asset_protocol_scope().is_allowed(&canonical)
     {
-        return Err(format!(
-            "LOCAL_ACCESS_REQUIRED: 目录访问权限已失效：{raw_path}。请重新从系统选择器授权该目录后再扫描。"
-        ));
+        // 文件和目录分开说：附件走的是文件，让用户「授权目录后再扫描」是误导。
+        return Err(if expect_directory {
+            format!(
+                "LOCAL_ACCESS_REQUIRED: 目录访问权限已失效：{raw_path}。请重新从系统选择器授权该目录后再扫描。"
+            )
+        } else {
+            format!(
+                "LOCAL_ACCESS_REQUIRED: 没有访问该文件的权限：{raw_path}。请重新从系统选择器选择该文件后再试。"
+            )
+        });
     }
     Ok(canonical)
 }

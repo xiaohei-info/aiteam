@@ -3,7 +3,9 @@
  * - composer：仍在同一会话（含 emp_ 升级为真实会话），原样放回输入框；
  * - draft：请求期间切到了别的会话或离开了聊天页，写回发送时那个会话的草稿，回来时恢复；
  * - none：新会话页（会话 ID 为空）发送后已卸载，由页面写回新会话的草稿；
- *   或用户在请求期间又输入了新内容（不覆盖）。失败的消息气泡仍保留原文。
+ *   或用户在请求期间又输入了新文字（不覆盖）。失败的消息气泡仍保留原文。
+ *
+ * 只看文字：期间新加的附件不算「新内容」，放回时与它们合并，不会把附件挡在输入框外。
  */
 export type ComposerRestoreTarget =
   | { kind: 'composer' }
@@ -13,7 +15,8 @@ export type ComposerRestoreTarget =
 export interface ComposerRestoreState {
   mounted: boolean
   sameConversation: boolean
-  composerEmpty: boolean
+  /** 期间用户是否又输入了文字；附件不参与判断，它们在放回时合并。 */
+  composerTextEmpty: boolean
   /** 发送时所在的会话；emp_ 升级后为真实会话 ID；新会话页为空字符串。 */
   submittedConversationId: string
 }
@@ -24,5 +27,5 @@ export function composerRestoreTarget(state: ComposerRestoreState): ComposerRest
       ? { kind: 'draft', conversationId: state.submittedConversationId }
       : { kind: 'none' }
   }
-  return state.composerEmpty ? { kind: 'composer' } : { kind: 'none' }
+  return state.composerTextEmpty ? { kind: 'composer' } : { kind: 'none' }
 }

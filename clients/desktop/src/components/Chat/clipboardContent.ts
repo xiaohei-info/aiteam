@@ -70,18 +70,25 @@ function tidy(text: string): string {
   return text.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').replace(/^\n+|\s+$/g, '')
 }
 
+function baseName(value: string): string {
+  return value.split(/[\\/]+/u).filter(Boolean).pop() ?? value
+}
+
 /**
  * Finder (and most file managers) put the copied files' names on the clipboard as plain text next
  * to the files themselves. That text is not something the user wrote, so it must not be pasted.
+ * Any other text next to a file IS the user's, and is pasted along with the attachment.
+ *
+ * Takes names or full paths, so the by-path paste route judges the text the same way.
  */
-function isJustFileNames(plain: string, files: File[]): boolean {
+export function isJustFileNames(plain: string, names: readonly string[]): boolean {
   const lines = plain.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
-  if (lines.length === 0 || files.length === 0) return false
+  if (lines.length === 0 || names.length === 0) return false
   // macOS 文件名常是分解形式（NFD），文字可能是组合形式（NFC），比较前统一。
-  const names = new Set(files.map((file) => file.name.normalize('NFC')))
+  const known = new Set(names.map((name) => baseName(name).normalize('NFC')))
   return lines
     .map((line) => line.normalize('NFC'))
-    .every((line) => names.has(line) || names.has(line.split('/').pop() ?? ''))
+    .every((line) => known.has(line) || known.has(baseName(line)))
 }
 
 export function composePaste(input: { plain: string; parts: PastePart[]; files: File[] }): ComposedPaste {
@@ -89,7 +96,7 @@ export function composePaste(input: { plain: string; parts: PastePart[]; files: 
   const hasHtmlImage = parts.some((part) => part.kind === 'image')
   if (files.length === 0 && !hasHtmlImage) return { text: plain, files: [], unavailable: 0 }
   // 纯图片 / 访达复制的文件：作附件。
-  if (!hasHtmlImage && (!plain.trim() || isJustFileNames(plain, files))) {
+  if (!hasHtmlImage && (!plain.trim() || isJustFileNames(plain, files.map((file) => file.name)))) {
     return { text: '', files: uniqueFiles(files), unavailable: 0 }
   }
   // 有文字、富文本里没有图片、只另带一张图片（Excel/Numbers 复制表格会顺带一张表格截图）：

@@ -80,9 +80,21 @@ fn clipboard_file_paths() -> Vec<String> {
 }
 
 /// Paths of the files on the system clipboard; empty when it holds no copied files.
+///
+/// Copying a file in Finder/Explorer and pasting it is the user handing that file over, exactly like
+/// dropping it: the paths are allowed the same way Tauri's own drag-and-drop handler allows dropped
+/// ones, so a paste no longer fails on a folder the user never authorized for scanning.
 #[tauri::command]
-pub fn read_clipboard_file_paths() -> Vec<String> {
-    clipboard_file_paths()
+pub fn read_clipboard_file_paths(app: tauri::AppHandle) -> Vec<String> {
+    let paths = clipboard_file_paths();
+    let scope = tauri::Manager::asset_protocol_scope(&app);
+    for path in &paths {
+        // Only files: a copied folder is refused later with its own message, and must not widen the scope.
+        if std::path::Path::new(path).is_file() {
+            let _ = scope.allow_file(path);
+        }
+    }
+    paths
 }
 
 #[cfg(test)]

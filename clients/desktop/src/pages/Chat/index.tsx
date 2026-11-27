@@ -12,6 +12,7 @@ import {
   uploadedMessageAttachments,
   type UploadableChatFile,
 } from '../../lib/chatAttachmentUpload'
+import { mergeDraftFiles } from '../../lib/chatDraftFiles'
 import { clearSendErrorFor, sendErrorFor, type ConversationSendError } from '../../lib/conversationSendError'
 import { blobToBase64, sendTextMessage, type SendContext } from '../../lib/messageSender'
 import { submitSingleChatPrompt } from '../../lib/singleChatPrompt'
@@ -128,7 +129,6 @@ interface NewSessionPageProps {
   disabled?: boolean
   draft?: string
   draftFiles?: CachedFile[]
-  onDraftChange: (convId: string, text: string, files: CachedFile[]) => void
   onDraftTextChange: (convId: string, text: string, mentionSnapshot?: readonly Node[]) => void
   onDraftFilesChange: (convId: string, update: (files: UploadableChatFile[]) => UploadableChatFile[]) => UploadableChatFile[]
   error?: string | null
@@ -145,7 +145,6 @@ function NewSessionPage({
   disabled,
   draft,
   draftFiles,
-  onDraftChange,
   onDraftTextChange,
   onDraftFilesChange,
   error,
@@ -169,7 +168,6 @@ function NewSessionPage({
           convId=""
           draft={draft}
           draftFiles={draftFiles}
-          onDraftChange={onDraftChange}
           onDraftTextChange={onDraftTextChange}
           onDraftFilesChange={onDraftFilesChange}
           placeholder="随心输入"
@@ -464,6 +462,12 @@ export default function Chat() {
     return promise
   }, [conversations, upgradeConversationId, workbenchEmployees])
 
+  /** 失败内容写回草稿：文字覆盖，附件与期间新加的合并，不把它们覆盖掉。 */
+  const restoreFailedDraft = useCallback((convId: string, text: string, files: UploadableChatFile[]) => {
+    setConvDraftText(convId, text)
+    updateDraftFiles(convId, (current) => mergeDraftFiles(files, current))
+  }, [setConvDraftText, updateDraftFiles])
+
   const submitMessage = useCallback(async (
     conversation: EnsuredConversation,
     text: string,
@@ -517,7 +521,8 @@ export default function Chat() {
 
     updateMessageStatus(conversation.id, messageId, 'sent')
     pendingSendAttemptRef.current = null
-    setConvDraft(conversation.id, '', [])
+    // 只清文字：输入框在点击当帧已清空自己，发送期间（员工回复时、队列自动发出时）新加的附件要留在输入框里。
+    setConvDraftText(conversation.id, '')
 
     const agentName = useChatStore.getState().conversations.find((item) => item.id === conversation.id)?.agentName
       ?? conversation.item.agentName
@@ -533,7 +538,7 @@ export default function Chat() {
     })
     startAssistantStream(conversation.id, { promptIdempotencyKey: idempotencyKey })
     return true
-  }, [buildSendContext, setConvDraft, startAssistantStream, updateMessageStatus])
+  }, [buildSendContext, setConvDraftText, startAssistantStream, updateMessageStatus])
 
   const sendMessage = useCallback(async (text: string, files: UploadableChatFile[] = []): Promise<boolean> => {
     if ((!text && files.length === 0) || !activeConvId) return false
@@ -749,22 +754,18 @@ export default function Chat() {
       const sent = await submitMessage({ ...conversation, item }, trimmed, files)
       if (!sent) {
         setSendError({ conversationId: conversation.id, message: '发送失败，请重试。' })
-        setConvDraft(conversation.id, trimmed, files)
+        restoreFailedDraft(conversation.id, trimmed, files)
       }
       return sent
     } catch (error) {
       console.error('[Chat] createConversation failed:', error)
-      if (activatedConversationId) setConvDraft(activatedConversationId, trimmed, files)
+      if (activatedConversationId) restoreFailedDraft(activatedConversationId, trimmed, files)
       setNewSessionError(error instanceof Error && error.message ? error.message : '创建新会话失败，请重试。')
       return false
     } finally {
       setIsGenerating(false)
     }
-  }, [workbenchEmployees, addConversation, ensureNewSessionConversation, setActiveConvId, setConvDraft, submitMessage])
-
-  const handleDraftChange = useCallback((convId: string, text: string, files: CachedFile[]) => {
-    setConvDraft(convId, text, files)
-  }, [setConvDraft])
+  }, [workbenchEmployees, addConversation, ensureNewSessionConversation, restoreFailedDraft, setActiveConvId, setConvDraft, submitMessage])
 
   const getDisplayContent = (msg: Message): { content: string; streaming: boolean } => ({
     content: msg.content,
@@ -799,7 +800,6 @@ export default function Chat() {
         disabled={isGenerating}
         draft={draftsByConv['']?.text}
         draftFiles={draftsByConv['']?.files}
-        onDraftChange={handleDraftChange}
         onDraftTextChange={setConvDraftText}
         onDraftFilesChange={updateDraftFiles}
         error={newSessionError}
@@ -912,7 +912,6 @@ export default function Chat() {
         draftFiles={draftsByConv[activeConvId]?.files}
         onDraftTextChange={setConvDraftText}
         onDraftFilesChange={updateDraftFiles}
-        onDraftChange={handleDraftChange}
         isGenerating={generatingConvIds.has(activeConvId)}
         isSyncing={syncingConvIds.has(activeConvId)}
         onAbort={() => handleAbort(activeConvId)}

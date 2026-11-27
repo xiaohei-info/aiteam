@@ -6,7 +6,7 @@ import { useGlobalShortcutClose } from '../../hooks/useGlobalShortcut'
 import type { GroupMember } from '../../stores/chat'
 import { isImeKeyboardEvent } from '../../lib/imeKeyboard'
 import { extractMentionText, type RichTextNodeLike } from './mentionRichText'
-import { composePaste, filesOf, htmlToParts, type ComposedPaste } from './clipboardContent'
+import { composePaste, filesOf, htmlToParts, isJustFileNames, type ComposedPaste } from './clipboardContent'
 import { readClipboardFilePaths, readClipboardRtfImages } from '../../lib/fileCache'
 
 export interface MentionInputHandle {
@@ -236,7 +236,7 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
    * 粘贴：文字照常插入，图片和文件走附件（与点「+ 导入」同一路径）。
    * 拖入不经过这里：文件由 Tauri 原生拖放按路径交给输入栏（见 nativeFileDrop），文字拖入不接收。
    * - 访达/资源管理器复制的文件：从系统剪贴板读出路径，和拖入走同一条路（按路径导入，不拷字节、不限大小）；
-   *   剪贴板顺带的文件名文字不算内容。
+   *   剪贴板顺带的文件名文字不算内容，其余正文照常插入。
    * - 纯图片（截图等没有本机文件的）：作附件。
    * - 富文本带图片且拿得到图片数据（含 WPS/Word 从 RTF 补回）：图文都加，图片在原位置留 `[图片：名称]` 占位。
    * - 复制表格（有文字、富文本里没图片，只多一张截图）：只贴文字。
@@ -292,8 +292,14 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
     }
     // 复制的是本机文件：按路径交给输入栏，和拖入同一条路；没有路径（截图、网页图片）才按内容处理。
     void readClipboardFilePaths().then((paths) => {
-      if (paths.length > 0) onPaths(paths)
-      else takeContent(range)
+      if (paths.length === 0) {
+        takeContent(range)
+        return
+      }
+      onPaths(paths)
+      // 剪贴板里同时有正文时不能把正文丢掉；只有文字就是那些文件名（访达顺带的）时才忽略。
+      if (isJustFileNames(plain, paths)) return
+      apply(composePaste({ plain, parts, files: [] }), range)
     })
   }, [insertPlainText, onFiles, onPaths, showHint])
 

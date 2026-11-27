@@ -345,6 +345,49 @@ for (const mode of ['single', 'group']) {
   await evaluate(`[...document.querySelectorAll('.chat-file-chip-remove')].at(-1).click()`)
   await pause(150)
 
+  // 11c-3. 访达/资源管理器复制的文件 + 正文：文件按路径入附件区，正文照贴不丢
+  await clearAll()
+  const beforePastedPath = await read()
+  await evaluate(`window.__clipboardPaths = ['/Users/me/报价 单.pdf']`)
+  await evaluate(`(() => {
+    const box = document.querySelector('[role="textbox"]')
+    box.focus()
+    const dt = new DataTransfer()
+    dt.setData('text/plain', '这是最新报价')
+    dt.items.add(new File([''], '报价 单.pdf', { type: 'application/pdf' }))
+    box.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dt }))
+  })()`)
+  await pause(300)
+  s = await read()
+  assert.equal(s.text, '这是最新报价', `${mode}: 粘贴文件时同时带的正文不应丢，实际 ${JSON.stringify(s.text)}`)
+  assert.deepEqual(s.importedPaths, [...beforePastedPath.importedPaths, '/Users/me/报价 单.pdf'],
+    `${mode}: 复制的文件应按路径导入（不读字节），实际 ${JSON.stringify(s.importedPaths)}`)
+  assert.equal(s.imported.length, beforePastedPath.imported.length, `${mode}: 本机文件不应走按内容导入`)
+  await screenshot(`${mode}-paste-path-with-text`)
+  await clearAll()
+  await evaluate(`[...document.querySelectorAll('.chat-file-chip-remove')].at(-1).click()`)
+  await pause(150)
+
+  // 11c-4. 剪贴板文字就是文件名（访达顺带的）：只收附件，不往输入框里写文件名
+  const beforeNameOnly = await read()
+  await evaluate(`window.__clipboardPaths = ['/Users/me/年度总结.docx']`)
+  await evaluate(`(() => {
+    const box = document.querySelector('[role="textbox"]')
+    box.focus()
+    const dt = new DataTransfer()
+    dt.setData('text/plain', '年度总结.docx')
+    dt.items.add(new File([''], '年度总结.docx', { type: 'application/octet-stream' }))
+    box.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dt }))
+  })()`)
+  await pause(300)
+  s = await read()
+  assert.equal(s.text.trim(), '', `${mode}: 文字只是文件名时不应写进输入框，实际 ${JSON.stringify(s.text)}`)
+  assert.deepEqual(s.importedPaths, [...beforeNameOnly.importedPaths, '/Users/me/年度总结.docx'], `${mode}: 文件仍应按路径导入`)
+  await evaluate(`window.__clipboardPaths = []`)
+  await clearAll()
+  await evaluate(`[...document.querySelectorAll('.chat-file-chip-remove')].at(-1).click()`)
+  await pause(150)
+
   // 11d. 拖入文字：不接收（文字请粘贴），输入框内容不变
   await clearAll()
   await type('甲乙丙丁')
@@ -513,6 +556,29 @@ for (const mode of ['single', 'group']) {
   await pause(250)
   s = await read()
   assert.match(s.chipStates[0] ?? '', /上传完成/, `${mode}: 切回会话 1 后应完成上传，实际 ${JSON.stringify(s.chipStates)}`)
+
+  // 14f. 发送成功不得清掉发送期间新加的附件（员工回复时先为下一条准备附件）
+  await evaluate(`document.querySelector('[role="textbox"]').focus()`)
+  await clearAll()
+  await evaluate(`document.querySelectorAll('.chat-file-chip-remove').forEach(b => b.click())`)
+  await pause(150)
+  await type('先发这条')
+  await evaluate(`window.__hold('send')`)
+  await press('Enter')
+  await pause(100)
+  await drop('/Users/me/下一条的附件.pdf')
+  await pause(250)
+  await evaluate(`window.__release('send', true)`)
+  await pause(300)
+  s = await read()
+  assert.equal(s.sent.at(-1)?.text, '先发这条', `${mode}: 该发出的消息应发出，实际 ${JSON.stringify(s.sent.at(-1))}`)
+  assert.deepEqual(s.sent.at(-1)?.files, [], `${mode}: 发送期间新加的附件不应被这一条带走`)
+  assert.equal(s.text.trim(), '', `${mode}: 发送成功后文字清空`)
+  assert.deepEqual(s.attachments, ['下一条的附件.pdf'],
+    `${mode}: 发送期间新加的附件应留在附件区，实际 ${JSON.stringify(s.attachments)}`)
+  await screenshot(`${mode}-attachment-added-while-sending-kept`)
+  await evaluate(`document.querySelectorAll('.chat-file-chip-remove').forEach(b => b.click())`)
+  await pause(150)
 
   report[`${mode}-in-flight`] = { sent: (await read()).sent }
 }

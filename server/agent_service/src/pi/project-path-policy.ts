@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 
 type PlatformPolicy = {
   home_roots: string[];
+  /** The credential subset of home_roots (no Library/AppData): the only part attachments are judged by. */
+  credential_home_roots?: string[];
   system_roots: string[];
   short_names?: Record<string, string[]>;
 };
@@ -135,4 +137,33 @@ export function isAllowedProjectFolder(
 
 export function projectPathPolicyForTests(): ProjectPathPolicy {
   return POLICY;
+}
+
+/**
+ * Names the credential folder a path sits in, or undefined when it sits in none.
+ *
+ * Attachments are picked by the user from anywhere on their machine, so the project-folder policy is too
+ * broad for them: it also rejects Library/AppData, where screenshots and app caches legitimately live.
+ * Only the credential subset applies here — it keeps a stolen renderer from attaching `~/.ssh/id_rsa` and
+ * asking an employee to read it. A deny list narrows that risk; it cannot remove it.
+ */
+export function credentialFolderForPath(
+  path: string,
+  home = homedir(),
+  platform = process.platform,
+): string | undefined {
+  const policy = platformPolicy(platform);
+  const roots = policy.credential_home_roots ?? [];
+  if (roots.length === 0) return undefined;
+  const candidate = canonicalForPolicy(path);
+  const names = new Map(roots.map((root) => [root.split(/[\\/]+/u).at(-1)!.toLowerCase(), root.split(/[\\/]+/u).at(-1)!]));
+  // A credential folder is sensitive wherever it appears, not only directly under this home.
+  for (const segment of pathSegments(candidate, platform)) {
+    const hit = names.get(segment);
+    if (hit) return hit;
+  }
+  for (const [index, root] of expandRoots(roots, platform, home).entries()) {
+    if (isWithin(candidate, root, platform)) return roots[index]!;
+  }
+  return undefined;
 }
