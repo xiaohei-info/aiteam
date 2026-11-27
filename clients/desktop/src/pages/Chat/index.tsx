@@ -8,6 +8,7 @@ import { useAgentAuthStore } from '../../stores/agentAuth'
 import { pickFilePath, cacheFileFromBlob, describeLocalFile, readCachedFileBlob, type CachedFile } from '../../lib/fileCache'
 import {
   attachmentKeys,
+  attachmentSendFailure,
   areAttachmentsReady,
   uploadedMessageAttachments,
   type UploadableChatFile,
@@ -514,7 +515,7 @@ export default function Chat() {
       )
     } catch (error) {
       console.error('[Chat] submitPrompt failed:', error)
-      sendFailureRef.current = projectSendFailure(error) ?? employeeSendFailure(error)
+      sendFailureRef.current = attachmentSendFailure(error) ?? projectSendFailure(error) ?? employeeSendFailure(error)
       updateMessageStatus(conversation.id, messageId, 'failed')
       return false
     }
@@ -753,7 +754,7 @@ export default function Chat() {
 
       const sent = await submitMessage({ ...conversation, item }, trimmed, files)
       if (!sent) {
-        setSendError({ conversationId: conversation.id, message: '发送失败，请重试。' })
+        setSendError({ conversationId: conversation.id, message: sendFailureRef.current ?? '发送失败，请重试。' })
         restoreFailedDraft(conversation.id, trimmed, files)
       }
       return sent

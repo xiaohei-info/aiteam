@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { createFixture } from "../test-fixture.js";
 import { attachmentManifest, parseAttachmentPaths, readAttachmentRef, resolveAttachmentPath } from "./attachment-refs.js";
-import { projectPathPolicyForTests } from "./project-path-policy.js";
+import { credentialFolderForPath, projectPathPolicyForTests } from "./project-path-policy.js";
 
 const owner = { conversationId: "c1", tenantId: "tenant-1", memberId: "member-1" };
 const text = (result: { content: unknown[] }) => (result.content as Array<{ text?: string }>).map((part) => part.text ?? "").join("");
@@ -80,6 +80,18 @@ test("attachment paths inside a credential folder are refused, other folders are
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// Multi-folder entries match as a whole: only `.config/gcloud` is the gcloud credential store.
+test("a folder merely named like the last part of a credential entry is not a credential folder", () => {
+  assert.equal(credentialFolderForPath("/Users/u/Documents/gcloud/账单.pdf", "/Users/u", "darwin"), undefined);
+  assert.equal(credentialFolderForPath("/Users/u/gcloud/x.json", "/Users/u", "darwin"), undefined);
+  assert.equal(credentialFolderForPath("/Users/u/.config/gcloud/credentials.db", "/Users/u", "darwin"), ".config/gcloud");
+  assert.equal(credentialFolderForPath("/Volumes/backup/home/.config/gcloud/adc.json", "/Users/u", "darwin"), ".config/gcloud");
+  assert.equal(credentialFolderForPath("/Users/u/.configs/gcloud/a.txt", "/Users/u", "darwin"), undefined);
+  assert.equal(credentialFolderForPath("/Users/u/Projects/app/.ssh/id_rsa", "/Users/u", "darwin"), ".ssh");
+  assert.equal(credentialFolderForPath("C:\\Users\\u\\Documents\\gcloud\\a.pdf", "C:\\Users\\u", "win32"), undefined);
+  assert.equal(credentialFolderForPath("C:\\Users\\u\\.config\\gcloud\\a.json", "C:\\Users\\u", "win32"), ".config/gcloud");
 });
 
 // A hard link to a key carries no trace of the key in its own path, so realpath + the credential list

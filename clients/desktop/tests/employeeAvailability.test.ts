@@ -20,7 +20,7 @@ test('a send rejected for an unavailable employee explains why; other errors fal
 
 test('group chat shows the send failure reason instead of only marking the message failed', () => {
   const page = readFileSync(new URL('../src/pages/GroupChat/index.tsx', import.meta.url), 'utf8')
-  assert.ok(page.includes("setSendError({ conversationId: activeGroupId, message: employeeSendFailure(err) ?? '发送失败，请重试。' })"))
+  assert.ok(page.includes("setSendError({ conversationId: activeGroupId, message: attachmentSendFailure(err) ?? employeeSendFailure(err) ?? '发送失败，请重试。' })"))
   assert.ok(page.includes('{sendErrorFor(sendError, activeGroupId) && <p className="chat-input-error" role="alert">{sendErrorFor(sendError, activeGroupId)}</p>}'))
 })
 

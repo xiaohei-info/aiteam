@@ -561,6 +561,14 @@ test("Agent prompt attaches files by path: no size limit, no path in the model i
     const missing = await send("missing-path", { text: "x", attachment_paths: [{ path: join(dir, "gone.pdf") }] });
     assert.equal(missing.status, 422);
     assert.equal((await missing.json() as { code: string }).code, "attachment_not_found");
+    // A rejected file is not recorded under the key: once the user puts it back, the same retry goes through.
+    const restored = join(dir, "restored.md");
+    const firstTry = await send("restored-path", { text: "x", attachment_paths: [{ path: restored }] });
+    assert.equal(firstTry.status, 422);
+    assert.match((await firstTry.json() as { detail: string }).detail, /restored\.md/u, "the reason names the file");
+    writeFileSync(restored, "back again");
+    const retried = await send("restored-path", { text: "x", attachment_paths: [{ path: restored }] });
+    assert.equal(retried.status, 202, await retried.clone().text());
     const folder = await send("folder-path", { text: "x", attachment_paths: [{ path: dir }] });
     assert.equal((await folder.json() as { code: string }).code, "attachment_not_a_file");
     const relative = await send("relative-path", { text: "x", attachment_paths: [{ path: "notes.md" }] });

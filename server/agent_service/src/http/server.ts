@@ -29,7 +29,7 @@ import { AgentUpgradeRequiredError, ManagerAuthError, ManagerAuthorizationError,
 import { SessionAuthorizationError, type PromptDeliveryOptions } from "../pi/session-host.js";
 import { serializePiEntry, serializePiEvent } from "../pi/event-sse.js";
 import { materializeAttachments } from "../pi/attachment-tool.js";
-import { AttachmentPathError, attachmentManifest, loadInlineImage, MAX_PROMPT_ATTACHMENTS, parseAttachmentPaths, resolveAttachmentPath, type AttachmentPathInput, type UploadedAttachmentEntry } from "../pi/attachment-refs.js";
+import { AttachmentPathError, attachmentManifest, loadInlineImage, MAX_PROMPT_ATTACHMENTS, parseAttachmentPaths, resolveAttachmentPath, type AttachmentPathInput, type ResolvedAttachmentPath, type UploadedAttachmentEntry } from "../pi/attachment-refs.js";
 import { visibleHistoryText } from "../pi/session-history.js";
 import { InvalidReadCursorError } from "../storage/read-cursor.js";
 import { ConversationReadError, ConversationReadService, readPageLimit, validateReadQuery } from "../services/conversation-reads.js";
@@ -3095,6 +3095,18 @@ export class AgentHttpServer {
     this.assertProjectAvailable(conversation);
     this.assertRunnableTargets(caller, this.resolvePromptTargets(conversation, caller, mentions));
     // Fingerprint IDs, not mutable attachment bytes, so completed/accepted retries can return their receipt.
+    // Check attached paths before reserving a new key: a rejected file (moved, credential folder, hard link) is the
+    // client's to fix, and recording it under the key would turn the key unknown, so the same retry would keep
+    // failing after the user fixed the file. A key that already has a receipt replays it and never reads the files.
+    let resolvedPaths: ResolvedAttachmentPath[] = [];
+    try {
+      if (attachmentPaths.length > 0 && !this.options.store.getPromptReceipt(conversationId, callerId, key)) {
+        resolvedPaths = attachmentPaths.map(resolveAttachmentPath);
+      }
+    } catch (error) {
+      if (error instanceof AttachmentPathError) throw new HttpProblem(422, error.code, error.message);
+      throw error;
+    }
     const fingerprint = createHash("sha256").update(JSON.stringify({ text, images, attachment_ids: attachmentIds, ...(attachmentPaths.length > 0 ? { attachment_paths: attachmentPaths } : {}), mentions })).digest("hex");
     const receipt = this.options.store.reservePrompt({ conversationId, callerId, key, fingerprint });
     if (!receipt.isNew) return this.writeReceipt(response, conversationId, key, receipt.state);
@@ -3135,14 +3147,8 @@ export class AgentHttpServer {
       // Files attached by path: stat them now (missing / folder → 422), keep only their location, and hand small
       // images over with the message as before. Everything else is read on demand through attachment_read.
       const owner = { conversationId, tenantId: caller.tenantId!, memberId: caller.userId ?? caller.callerId };
-      let refs: LocalFileRef[] = [];
-      try {
-        // The same file sent twice in one message is listed once.
-        refs = attachmentPaths.length > 0 ? [...new Map(this.options.store.upsertLocalFileRefs(owner, attachmentPaths.map(resolveAttachmentPath)).map((ref) => [ref.id, ref])).values()] : [];
-      } catch (error) {
-        if (error instanceof AttachmentPathError) throw new HttpProblem(422, error.code, error.message);
-        throw error;
-      }
+      // The same file sent twice in one message is listed once.
+      const refs: LocalFileRef[] = resolvedPaths.length > 0 ? [...new Map(this.options.store.upsertLocalFileRefs(owner, resolvedPaths).map((ref) => [ref.id, ref])).values()] : [];
       const inlinedRefs = new Set<string>();
       for (const ref of refs) {
         if (loadedImages.length + images.length >= MAX_PROMPT_IMAGES || decodedImageBytes + ref.byte_size > MAX_PROMPT_IMAGE_BYTES) break;

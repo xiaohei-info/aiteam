@@ -197,3 +197,27 @@ export function importErrorMessage(name: string, error: unknown): string {
   if (raw.includes('Not a regular file')) return `“${name}”是文件夹，不能作为附件；请拖入文件`
   return raw ? `添加“${name}”失败：${raw}` : `添加“${name}”失败，请重试`
 }
+
+/** Agent 拒绝按路径引用的附件时的错误码；detail 已写明原因和文件名。 */
+const ATTACHMENT_REJECTION_CODES = new Set([
+  'attachment_not_found',
+  'attachment_not_a_file',
+  'attachment_in_credential_folder',
+  'attachment_has_hard_links',
+  'attachment_path_changed',
+])
+
+/**
+ * 附件被拒时给用户看的文字：说明原因和是哪个文件，并告诉用户移除它再发；
+ * 不是附件问题时返回 null，由页面显示通用文字。
+ */
+export function attachmentSendFailure(error: unknown): string | null {
+  const { code, message } = (error ?? {}) as { code?: unknown; message?: unknown }
+  if (typeof code !== 'string') return null
+  if (ATTACHMENT_REJECTION_CODES.has(code)) {
+    const reason = typeof message === 'string' ? message.trim().replace(/[。.]+$/u, '') : ''
+    return `${reason || '有附件无法使用'}。请移除这个附件后重新发送。`
+  }
+  if (code === 'invalid_attachment_paths' || code === 'too_many_attachments') return '附件信息有误，请移除附件后重新发送。'
+  return null
+}

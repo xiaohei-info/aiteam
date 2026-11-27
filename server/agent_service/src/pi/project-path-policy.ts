@@ -156,11 +156,15 @@ export function credentialFolderForPath(
   const roots = policy.credential_home_roots ?? [];
   if (roots.length === 0) return undefined;
   const candidate = canonicalForPolicy(path);
-  const names = new Map(roots.map((root) => [root.split(/[\\/]+/u).at(-1)!.toLowerCase(), root.split(/[\\/]+/u).at(-1)!]));
-  // A credential folder is sensitive wherever it appears, not only directly under this home.
-  for (const segment of pathSegments(candidate, platform)) {
-    const hit = names.get(segment);
-    if (hit) return hit;
+  const segments = pathSegments(candidate, platform);
+  // A credential folder is sensitive wherever it appears, not only directly under this home. Match the whole
+  // entry as consecutive folders: `.config/gcloud` is the gcloud credential store, a folder merely named
+  // `gcloud` (Documents/gcloud/bill.pdf) is not.
+  for (const root of roots) {
+    const parts = root.split(/[\\/]+/u).filter(Boolean).map((part) => part.toLowerCase());
+    for (let start = 0; start + parts.length <= segments.length; start += 1) {
+      if (parts.every((part, offset) => segments[start + offset] === part)) return root;
+    }
   }
   for (const [index, root] of expandRoots(roots, platform, home).entries()) {
     if (isWithin(candidate, root, platform)) return roots[index]!;

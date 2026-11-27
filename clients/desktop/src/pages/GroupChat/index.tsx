@@ -6,6 +6,7 @@ import { useChatStore, type Message } from '../../stores/chat'
 import { useAgentAuthStore } from '../../stores/agentAuth'
 import { pickFilePath, cacheFileFromBlob, describeLocalFile, readCachedFileBlob, type CachedFile } from '../../lib/fileCache'
 import {
+  attachmentSendFailure,
   uploadedAttachmentIds,
   referencedAttachmentPaths,
   areAttachmentsReady,
@@ -198,7 +199,7 @@ export default function GroupChat() {
       })
     } catch (err) {
       console.error('[GroupChat] submitPrompt failed:', err)
-      setSendError({ conversationId: activeGroupId, message: employeeSendFailure(err) ?? '发送失败，请重试。' })
+      setSendError({ conversationId: activeGroupId, message: attachmentSendFailure(err) ?? employeeSendFailure(err) ?? '发送失败，请重试。' })
       updateMessageStatus(activeGroupId, userMsgId, 'failed')
       return false
     }

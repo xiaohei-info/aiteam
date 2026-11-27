@@ -4,6 +4,7 @@ import test from 'node:test'
 import {
   areAttachmentsReady,
   attachmentKeys,
+  attachmentSendFailure,
   beginAttachmentImport,
   beginAttachmentUpload,
   completeAttachmentUpload,
@@ -130,4 +131,30 @@ test('早于附件清单的历史消息：拼入的附件文字也不显示', as
   const { entriesToMessages } = await import('../src/lib/piConverters.ts')
   const [message] = entriesToMessages([{ id: 'u1', type: 'message', message: { role: 'user', content: '看下\n\n[本地附件材料，仅来自当前会话已绑定文件]\n--- a.md ---\n内容' } }] as never)
   assert.equal(message.content, '看下')
+})
+
+test('附件被拒时说明原因和文件，并让用户移除后重发；其他错误不接管', () => {
+  const reject = (code: string, message: string) => Object.assign(new Error(message), { code })
+  assert.equal(
+    attachmentSendFailure(reject('attachment_in_credential_folder', '为保护密钥与凭据，.ssh 目录里的文件不能作为附件：id_rsa')),
+    '为保护密钥与凭据，.ssh 目录里的文件不能作为附件：id_rsa。请移除这个附件后重新发送。',
+  )
+  assert.equal(
+    attachmentSendFailure(reject('attachment_has_hard_links', 'a.pdf 有多个硬链接，无法确认它真正指向哪个文件，不能作为附件。')),
+    'a.pdf 有多个硬链接，无法确认它真正指向哪个文件，不能作为附件。请移除这个附件后重新发送。',
+  )
+  assert.equal(attachmentSendFailure(reject('attachment_not_found', '附件不存在：账单.pdf')), '附件不存在：账单.pdf。请移除这个附件后重新发送。')
+  assert.equal(attachmentSendFailure(reject('attachment_not_found', '')), '有附件无法使用。请移除这个附件后重新发送。')
+  assert.equal(attachmentSendFailure(reject('invalid_attachment_paths', 'Attachment path must be an absolute path')), '附件信息有误，请移除附件后重新发送。')
+  assert.equal(attachmentSendFailure(reject('employee_not_runnable', 'x')), null)
+  assert.equal(attachmentSendFailure(new Error('network')), null)
+  assert.equal(attachmentSendFailure(null), null)
+})
+
+test('单聊、新会话、群聊发送失败都先用附件被拒的提示', () => {
+  const chat = readFileSync(new URL('../src/pages/Chat/index.tsx', import.meta.url), 'utf8')
+  const group = readFileSync(new URL('../src/pages/GroupChat/index.tsx', import.meta.url), 'utf8')
+  assert.match(chat, /sendFailureRef\.current = attachmentSendFailure\(error\) \?\?/)
+  assert.equal(chat.includes("message: '发送失败，请重试。' })"), false, '新会话页不再只给通用提示')
+  assert.match(group, /message: attachmentSendFailure\(err\) \?\? employeeSendFailure\(err\)/)
 })
