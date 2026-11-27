@@ -43,7 +43,7 @@ const pasteBody = source.slice(pasteStart, source.indexOf('}, [disabled, takeTra
 
 test('handlePaste 先 preventDefault，再交给 takeTransfer', () => {
   const prevent = pasteBody.indexOf('e.preventDefault()')
-  const take = pasteBody.indexOf("takeTransfer(el, e.clipboardData, 'paste')")
+  const take = pasteBody.indexOf('takeTransfer(el, e.clipboardData)')
   assert.ok(prevent > 0, 'handlePaste 缺少 e.preventDefault()，图片会被默认粘贴塞进输入框')
   assert.ok(take > prevent, 'preventDefault 必须在处理剪贴板之前')
 })
@@ -68,7 +68,7 @@ test('源应用没把图片放进剪贴板（飞书）时要提示单独复制�
 })
 
 test('WPS/Word 图文：页面读不到的图片由本机端从剪贴板 RTF 读出，按顺序补回', () => {
-  assert.ok(takeBody.includes("source !== 'paste' || composed.unavailable === 0"), '只有粘贴且有读不到的图时才走本机兜底')
+  assert.ok(takeBody.includes('if (composed.unavailable === 0 || !onFiles)'), '只有有读不到的图时才走本机兜底')
   assert.ok(takeBody.includes('readClipboardRtfImages()'))
   assert.ok(takeBody.includes('composePaste({ plain, parts, files: [...files, ...pictures] })'), 'RTF 图片应按顺序填回 HTML 里的图片位置')
   assert.ok(takeBody.includes('getRangeAt(0).cloneRange()'), '异步读取期间要记住光标位置')
@@ -85,29 +85,33 @@ test('没有 onFiles（宿主未接附件）时提示改用附件按钮，并且
   assert.ok(takeBody.includes(".replace(/\\[(?:图片|文件)：[^\\]]*\\]/g, '')"), '无附件能力时应去掉占位')
 })
 
-test('拖入走同一条路径，文字落在松手位置', () => {
+test('输入框不接收拖入：文字请粘贴，文件交给原生拖放', () => {
   const dropStart = source.indexOf('const handleDrop = useCallback')
-  assert.ok(dropStart > 0, '缺少 onDrop 处理：拖入的图片会直接落进 contenteditable')
-  const dropBody = source.slice(dropStart, source.indexOf('}, [disabled, takeTransfer])', dropStart))
-  assert.ok(dropBody.includes('e.preventDefault()'), 'handleDrop 缺少 preventDefault')
-  assert.ok(dropBody.includes("takeTransfer(el, e.dataTransfer, 'drop', dropRange(e.clientX, e.clientY))"))
-  assert.ok(source.includes('onDrop={handleDrop}'), 'handleDrop 未挂到输入框上')
-  assert.ok(source.includes('caretRangeFromPoint'), '缺少 WebKit 的落点计算')
-  assert.ok(source.includes('at.collapse(true)'), '落点应折叠成插入点，不能替换选中的文字')
-  assert.ok(source.includes('onDragOver={handleDragOver}'), '缺少 onDragOver，拖入会被浏览器直接拒掉')
+  assert.ok(dropStart > 0, '缺少 onDrop 拦截：应用内选中文字拖进来会落进 contenteditable')
+  const dropBody = source.slice(dropStart, source.indexOf('}, [])', dropStart))
+  assert.ok(dropBody.includes('e.preventDefault()'), 'handleDrop 应拦掉默认落入')
+  assert.equal(dropBody.includes('takeTransfer'), false, '拖入不应再走粘贴的处理')
+  assert.equal(source.includes('onDragOver='), false, '不再接收拖入，不应声明可放置')
+  assert.equal(source.includes('caretRangeFromPoint'), false, '文字拖入已取消，不需要落点计算')
 })
 
-test('拖文件：WebKit 拖动途中只给 types=Files，也要接住', () => {
-  const helper = readFileSync(new URL('../src/components/Chat/clipboardContent.ts', import.meta.url), 'utf8')
-  assert.ok(helper.includes(".includes('Files')"), 'carriesFiles 应识别 types 里的 Files')
-})
-
-test('拖到输入栏其他位置也算拖入；拖到窗口别处不会打开文件替换页面', () => {
-  const bar = readFileSync(new URL('../src/components/Chat/ChatInputBar.tsx', import.meta.url), 'utf8')
-  assert.ok(bar.includes('onDrop={handleBarDrop}') && bar.includes('onDragOver={handleBarDragOver}'))
-  assert.ok(bar.includes('if (e.defaultPrevented ||'), '输入框已处理过的拖放不能重复导入')
+test('原生拖放开启：Tauri 接管拖入，文件按路径缓存，不经 WebView 读字节', () => {
+  const conf = readFileSync(new URL('../src-tauri/tauri.conf.json', import.meta.url), 'utf8')
+  assert.equal(conf.includes('"dragDropEnabled": false'), false, '关掉原生拖放后拖入只能读字节，受 64 MB 上限')
+  const caps = readFileSync(new URL('../src-tauri/capabilities/default.json', import.meta.url), 'utf8')
+  assert.ok(caps.includes('"core:event:allow-listen"') && caps.includes('"core:event:allow-unlisten"'), '监听 drag-drop 事件需要 event 权限')
   const main = readFileSync(new URL('../src/main.tsx', import.meta.url), 'utf8')
-  assert.ok(main.includes("for (const type of ['dragover', 'drop'] as const)"), '缺少窗口级拖放兜底')
+  assert.ok(main.includes('startNativeFileDrop()'), '启动时要订阅原生拖放')
+  const bar = readFileSync(new URL('../src/components/Chat/ChatInputBar.tsx', import.meta.url), 'utf8')
+  assert.ok(bar.includes('registerFileDropZone({') && bar.includes('element: () => barRef.current'), '整条输入栏应注册为拖入区')
+  assert.ok(bar.includes('await onImportPath(path)'), '拖入的文件应按路径缓存')
+  assert.equal(bar.includes('handleBarDrop'), false, '不应再保留 HTML5 文件拖入分支')
+  const cache = readFileSync(new URL('../src/lib/fileCache.ts', import.meta.url), 'utf8')
+  assert.ok(cache.includes("invoke<CachedFile>('cache_file', { userId, chatId, srcPath })"), '按路径缓存应复用「+ 导入」的 cache_file')
+  for (const page of ['../src/pages/Chat/index.tsx', '../src/pages/GroupChat/index.tsx']) {
+    const text = readFileSync(new URL(page, import.meta.url), 'utf8')
+    assert.ok(text.includes('cacheFileFromPath('), `${page} 未接 onImportPath`)
+  }
 })
 
 test('附件导入走与点击附件按钮相同的上传路径', () => {

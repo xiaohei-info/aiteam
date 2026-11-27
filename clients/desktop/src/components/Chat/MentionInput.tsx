@@ -6,7 +6,7 @@ import { useGlobalShortcutClose } from '../../hooks/useGlobalShortcut'
 import type { GroupMember } from '../../stores/chat'
 import { isImeKeyboardEvent } from '../../lib/imeKeyboard'
 import { extractMentionText, type RichTextNodeLike } from './mentionRichText'
-import { carriesFiles, composePaste, filesOf, htmlToParts, type ComposedPaste } from './clipboardContent'
+import { composePaste, filesOf, htmlToParts, type ComposedPaste } from './clipboardContent'
 import { readClipboardRtfImages } from '../../lib/fileCache'
 
 export interface MentionInputHandle {
@@ -72,21 +72,6 @@ function caretToEnd(el: HTMLDivElement): void {
   const sel = window.getSelection()
   sel?.removeAllRanges()
   sel?.addRange(range)
-}
-
-/** 松手位置对应的插入点；WebKit 提供 caretRangeFromPoint，标准实现是 caretPositionFromPoint。 */
-function dropRange(x: number, y: number): Range | null {
-  const doc = document as Document & {
-    caretRangeFromPoint?: (x: number, y: number) => Range | null
-    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null
-  }
-  if (typeof doc.caretRangeFromPoint === 'function') return doc.caretRangeFromPoint(x, y)
-  const pos = typeof doc.caretPositionFromPoint === 'function' ? doc.caretPositionFromPoint(x, y) : null
-  if (!pos) return null
-  const range = document.createRange()
-  range.setStart(pos.offsetNode, pos.offset)
-  range.collapse(true)
-  return range
 }
 
 const MentionInput = forwardRef<MentionInputHandle, Props>(({
@@ -217,7 +202,7 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
     el.focus()
     const sel = window.getSelection()
     if (at && sel && el.contains(at.startContainer)) {
-      // 拖入：落在松手位置，且只插入不替换——原来选中的内容保持不动。
+      // 异步补回（WPS/Word 的 RTF 图片）：回到粘贴时的位置，只插入不替换。
       at.collapse(true)
       sel.removeAllRanges()
       sel.addRange(at)
@@ -243,13 +228,14 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
   }, [closeMenu, emit])
 
   /**
-   * 粘贴与拖入共用：文字照常插入，图片和文件走附件（与点「+ 导入」同一路径）。
+   * 粘贴：文字照常插入，图片和文件走附件（与点「+ 导入」同一路径）。
+   * 拖入不经过这里：文件由 Tauri 原生拖放按路径交给输入栏（见 nativeFileDrop），文字拖入不接收。
    * - 纯图片、访达复制的文件：作附件（剪贴板顺带的文件名文字不算内容）。
    * - 富文本带图片且拿得到图片数据（含 WPS/Word 从 RTF 补回）：图文都加，图片在原位置留 `[图片：名称]` 占位。
    * - 复制表格（有文字、富文本里没图片，只多一张截图）：只贴文字。
    * - 网页图文（图片只有网址）、飞书内部引用：只贴文字，不下载、不留占位，提示图片没带过来。
    */
-  const takeTransfer = useCallback((el: HTMLDivElement, data: DataTransfer | null | undefined, source: 'paste' | 'drop', at?: Range | null) => {
+  const takeTransfer = useCallback((el: HTMLDivElement, data: DataTransfer | null | undefined) => {
     if (!data) return
     const plain = data.getData('text/plain') ?? ''
     const parts = htmlToParts(data.getData('text/html') ?? '')
@@ -257,9 +243,7 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
     const apply = (composed: ComposedPaste, range?: Range | null) => {
       const hasAttachments = composed.files.length > 0
       if (hasAttachments && !onFiles) {
-        showHint(source === 'paste'
-          ? '这里不支持粘贴图片或文件，请用附件按钮上传'
-          : '这里不支持拖入图片或文件，请用附件按钮上传')
+        showHint('这里不支持粘贴图片或文件，请用附件按钮上传')
         // 只插入用户写的文字，不留指向不存在附件的占位。
         const words = composed.text.replace(/\[(?:图片|文件)：[^\]]*\]/g, '').trim()
         if (words) insertPlainText(el, words, range)
@@ -274,8 +258,8 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
     }
 
     const composed = composePaste({ plain, parts, files })
-    if (source !== 'paste' || composed.unavailable === 0 || !onFiles) {
-      apply(composed, at)
+    if (composed.unavailable === 0 || !onFiles) {
+      apply(composed)
       return
     }
     // WPS/Word 复制图文：HTML 里的图片指向源应用沙盒里的临时文件，页面读不到；
@@ -294,23 +278,13 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
     if (!el || disabled) return
     // 无论剪贴板里是什么都先拦掉浏览器默认粘贴：文本由我们插入，图片/文件走附件。
     e.preventDefault()
-    takeTransfer(el, e.clipboardData, 'paste')
+    takeTransfer(el, e.clipboardData)
   }, [disabled, takeTransfer])
 
-  // 拖入同理：默认行为会把图片/文件/富文本直接落进 contenteditable；文字落在松手位置。
+  // 不接收拖入：原生拖放开着时外部拖入根本到不了这里；应用内选中文字拖进输入框也不收，文字请粘贴。
   const handleDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
-    const el = editRef.current
-    if (!el || disabled) return
     e.preventDefault()
-    takeTransfer(el, e.dataTransfer, 'drop', dropRange(e.clientX, e.clientY))
-  }, [disabled, takeTransfer])
-
-  /** Without this the browser refuses the drop and shows a “no entry” cursor over the box. */
-  const handleDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
-    if (disabled || !carriesFiles(e.dataTransfer)) return
-    e.preventDefault()
-    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
-  }, [disabled])
+  }, [])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
     // 组词期间让输入法处理回车、方向键和删除键，不选择 @ 成员或发送。
@@ -446,7 +420,6 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
         onInput={handleInput}
         onPaste={handlePaste}
         onDrop={handleDrop}
-        onDragOver={handleDragOver}
         onCompositionStart={() => { isComposingRef.current = true }}
         onCompositionEnd={() => { isComposingRef.current = false }}
         onKeyDown={handleKeyDown}

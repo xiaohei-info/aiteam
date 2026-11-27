@@ -20,12 +20,15 @@ export async function pickAndCacheFile(userId: string, chatId: string): Promise<
     directory: false,
   })
   if (!selected || typeof selected !== 'string') return null
+  return cacheFileFromPath(userId, chatId, selected)
+}
 
-  return invoke<CachedFile>('cache_file', {
-    userId,
-    chatId,
-    srcPath: selected,
-  })
+/**
+ * Copy a file that has a path on disk (chosen in the picker, or dragged in from Finder/Explorer)
+ * into the per-chat attachment directory. Rust copies it, so there is no size limit here.
+ */
+export function cacheFileFromPath(userId: string, chatId: string, srcPath: string): Promise<CachedFile> {
+  return invoke<CachedFile>('cache_file', { userId, chatId, srcPath })
 }
 
 const EXT_BY_MIME: Record<string, string> = {

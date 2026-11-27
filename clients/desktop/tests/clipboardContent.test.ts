@@ -62,6 +62,27 @@ test('复制表格：文字加一张截图、富文本里没有图片时只贴�
   assert.equal(result.unavailable, 0)
 })
 
+test('文字加一个非图片文件、富文本里没有图片时，文件照常作附件', () => {
+  const result = composePaste({ plain: '请看这个', parts: [], files: [pdf('a.pdf')] })
+  assert.equal(result.text, '请看这个\n[文件：a.pdf]')
+  assert.deepEqual(result.files.map((f) => f.name), ['a.pdf'])
+  assert.equal(result.unavailable, 0)
+})
+
+test('文字加多个文件时全部作附件，多张图片也不丢', () => {
+  const mixed = composePaste({ plain: '材料', parts: [], files: [png('image.png'), pdf('a.pdf')] })
+  assert.equal(mixed.text, '材料\n[图片：image.png]\n[文件：a.pdf]')
+  assert.deepEqual(mixed.files.map((f) => f.name), ['image.png', 'a.pdf'])
+  const images = composePaste({ plain: '两张图', parts: [], files: [png('image.png'), png('image.png')] })
+  assert.deepEqual(images.files.map((f) => f.name), ['image.png', 'image-2.png'])
+})
+
+test('文件名文字与文件名只是 Unicode 归一化形式不同时仍按纯附件处理', () => {
+  const result = composePaste({ plain: 'caf\u00e9.png', parts: [], files: [png('cafe\u0301.png')] })
+  assert.equal(result.text, '')
+  assert.equal(result.files.length, 1)
+})
+
 test('占位文字区分图片与文件', () => {
   assert.equal(placeholderFor('a.png', 'image/png'), '[图片：a.png]')
   assert.equal(placeholderFor('a.pdf', 'application/pdf'), '[文件：a.pdf]')

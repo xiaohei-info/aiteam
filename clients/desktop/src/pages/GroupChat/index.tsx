@@ -4,7 +4,7 @@ import { GitBranch } from 'lucide-react'
 import '../Chat/Chat.css'
 import { useChatStore, type Message } from '../../stores/chat'
 import { useAgentAuthStore } from '../../stores/agentAuth'
-import { pickAndCacheFile, cacheFileFromBlob, readCachedFileBlob, type CachedFile } from '../../lib/fileCache'
+import { pickAndCacheFile, cacheFileFromBlob, cacheFileFromPath, readCachedFileBlob, type CachedFile } from '../../lib/fileCache'
 import {
   uploadedAttachmentIds,
   uploadedMessageAttachments,
@@ -218,6 +218,12 @@ export default function GroupChat() {
     [userId, activeGroupId],
   )
 
+  /** Dragged in from Finder/Explorer: Tauri gives the path, so copy it like「+ 导入」. */
+  const handleImportPath = useCallback(
+    (path: string) => cacheFileFromPath(userId, activeGroupId || 'group', path),
+    [userId, activeGroupId],
+  )
+
   const handleUploadFile = useCallback(async (file: CachedFile): Promise<string> => {
     if (!activeGroupId) throw new Error('请先选择群聊')
     const data = await blobToBase64(await readCachedFileBlob(file))
@@ -374,6 +380,7 @@ export default function GroupChat() {
         onSend={handleSend}
         onPickFile={handlePickFile}
         onImportFile={handleImportFile}
+        onImportPath={handleImportPath}
         onUploadFile={handleUploadFile}
         onDeleteUploadedFile={handleDeleteUploadedFile}
         convId={activeGroupId}

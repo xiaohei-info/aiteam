@@ -5,7 +5,7 @@ import { useChatStore, type Message, type ConversationItem } from '../../stores/
 import { employeeSendFailure, employeeUnavailableMessage } from '../../lib/employeeAvailability'
 import { projectSendFailure } from '../../lib/projectConversation'
 import { useAgentAuthStore } from '../../stores/agentAuth'
-import { pickAndCacheFile, cacheFileFromBlob, readCachedFileBlob, type CachedFile } from '../../lib/fileCache'
+import { pickAndCacheFile, cacheFileFromBlob, cacheFileFromPath, readCachedFileBlob, type CachedFile } from '../../lib/fileCache'
 import {
   uploadedAttachmentIds,
   uploadedMessageAttachments,
@@ -120,6 +120,7 @@ interface NewSessionPageProps {
   onSend: (text: string, files: UploadableChatFile[], employeeId?: string) => boolean | Promise<boolean>
   onPickFile: () => Promise<CachedFile | null>
   onImportFile: (file: File) => Promise<CachedFile | null>
+  onImportPath: (path: string) => Promise<CachedFile | null>
   onUploadFile: (file: CachedFile, employeeId?: string) => Promise<string>
   onDeleteUploadedFile: (attachmentId: string) => Promise<void>
   disabled?: boolean
@@ -134,6 +135,7 @@ function NewSessionPage({
   onSend,
   onPickFile,
   onImportFile,
+  onImportPath,
   onUploadFile,
   onDeleteUploadedFile,
   disabled,
@@ -154,6 +156,7 @@ function NewSessionPage({
           onSend={onSend}
           onPickFile={onPickFile}
           onImportFile={onImportFile}
+          onImportPath={onImportPath}
           onUploadFile={onUploadFile}
           onDeleteUploadedFile={onDeleteUploadedFile}
           disabled={disabled}
@@ -630,6 +633,12 @@ export default function Chat() {
     [userId, activeConvId]
   )
 
+  /** Dragged in from Finder/Explorer: Tauri gives the path, so copy it like「+ 导入」. */
+  const importPathAction = useCallback(
+    (path: string) => cacheFileFromPath(userId, activeConvId || 'new-session', path),
+    [userId, activeConvId]
+  )
+
   const handleUploadFile = useCallback(async (file: CachedFile): Promise<string> => {
     if (!activeConvId) throw new Error('请先选择会话')
     const sourceId = activeConvId
@@ -779,6 +788,7 @@ export default function Chat() {
         onSend={(text, files, employeeId) => startNewSession(text, files, employeeId ?? (location.state as { employeeId?: string } | null)?.employeeId)}
         onPickFile={pickFileAction}
         onImportFile={importFileAction}
+        onImportPath={importPathAction}
         onUploadFile={handleNewSessionUpload}
         onDeleteUploadedFile={handleDeleteNewSessionUpload}
         disabled={isGenerating}
@@ -884,6 +894,7 @@ export default function Chat() {
         onSend={sendMessage}
         onPickFile={pickFileAction}
         onImportFile={importFileAction}
+        onImportPath={importPathAction}
         onUploadFile={handleUploadFile}
         onDeleteUploadedFile={handleDeleteUploadedFile}
         disabled={activeMessagesLoading || Boolean(activeMessagesError) || Boolean(unavailableMessage)}

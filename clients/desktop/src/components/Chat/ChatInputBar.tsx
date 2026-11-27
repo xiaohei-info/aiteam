@@ -42,7 +42,7 @@ import {
 } from '../../lib/chatSendQueue'
 import { KnowledgeFilePicker } from './KnowledgeFilePicker'
 import { FileChip } from './FileChip'
-import { carriesFiles, filesOf } from './clipboardContent'
+import { registerFileDropZone } from '../../lib/nativeFileDrop'
 
 const CHAT_TEXTAREA_MIN_HEIGHT = 60
 const CHAT_TEXTAREA_MAX_HEIGHT = 240
@@ -52,6 +52,8 @@ export interface ChatInputBarProps {
   onPickFile: () => Promise<CachedFile | null>
   /** Caches a file the WebView holds (pasted or dropped) so it becomes an ordinary attachment. */
   onImportFile?: (file: File) => Promise<CachedFile | null>
+  /** Caches a file dragged in from Finder/Explorer by its path, like「+ 导入」(no size limit). */
+  onImportPath?: (path: string) => Promise<CachedFile | null>
   onUploadFile?: (file: CachedFile, employeeId?: string) => Promise<string>
   onDeleteUploadedFile?: (attachmentId: string) => Promise<unknown>
   disabled?: boolean
@@ -81,7 +83,7 @@ export interface ChatInputBarProps {
 }
 
 export const ChatInputBar = memo(({
-  onSend, onPickFile, onImportFile, onUploadFile, onDeleteUploadedFile,
+  onSend, onPickFile, onImportFile, onImportPath, onUploadFile, onDeleteUploadedFile,
   disabled, convId, conversationUpgradeFrom, draft, draftFiles, draftMentions, onDraftChange,
   variant = 'dock', placeholder = '输入消息…', autoFocus, helper, tools,
   employees = [], members, isGenerating, isSyncing, onAbort, onHeightChange, enableVoiceInput, enableKnowledgeFiles,
@@ -437,18 +439,44 @@ export const ChatInputBar = memo(({
     || !!disabled
     || isSubmitBlocking
   const isInteractionDisabled = !!disabled || isSubmitBlocking
-  // 文件拖到输入栏任意位置（附件区、工具栏、输入框边缘）都算拖入对话；落在输入框正文上的由 MentionInput 处理。
-  const canDropFiles = Boolean(onImportFile) && !isInteractionDisabled
-  const handleBarDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
-    if (!canDropFiles || !carriesFiles(e.dataTransfer)) return
-    e.preventDefault()
-    e.dataTransfer.dropEffect = 'copy'
+  // 从访达/资源管理器拖进来的文件：Tauri 原生拖放给出路径，落在整条输入栏（附件区、工具栏、输入框）上都算拖入对话。
+  // 文字拖入由原生拖放吞掉，不会进输入框；文字请粘贴。
+  const barRef = useRef<HTMLDivElement>(null)
+  const [isFileOver, setIsFileOver] = useState(false)
+  const canDropFiles = Boolean(onImportPath) && !isInteractionDisabled
+  const importPathsRef = useRef<(paths: string[]) => void>(() => {})
+  importPathsRef.current = (paths: string[]) => {
+    if (!onImportPath) return
+    setFileError('')
+    void (async () => {
+      for (const path of paths) {
+        const name = path.split(/[\\/]/).filter(Boolean).pop() || path
+        try {
+          const cached = await onImportPath(path)
+          if (!cached) continue
+          if (onUploadFile) handleUploadFile(cached)
+          else setPendingFiles((previous) => [...previous, cached])
+        } catch (error) {
+          console.error('[ChatInputBar] import dropped file failed:', error)
+          setFileError(String(error).includes('Not a regular file')
+            ? `“${name}”是文件夹，不能作为附件；请拖入文件`
+            : `添加“${name}”失败，请重试`)
+        }
+      }
+    })()
+  }
+  useEffect(() => {
+    if (!canDropFiles) return
+    const unregister = registerFileDropZone({
+      element: () => barRef.current,
+      onHover: setIsFileOver,
+      onDrop: (paths) => importPathsRef.current(paths),
+    })
+    return () => {
+      unregister()
+      setIsFileOver(false)
+    }
   }, [canDropFiles])
-  const handleBarDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
-    if (e.defaultPrevented || !canDropFiles || !carriesFiles(e.dataTransfer)) return
-    e.preventDefault()
-    handleImportFiles(filesOf(e.dataTransfer))
-  }, [canDropFiles, handleImportFiles])
 
 
   // ── 待发送队列 ───────────────────────────────────────────────────────────────
@@ -654,9 +682,8 @@ export const ChatInputBar = memo(({
 
   return (
     <div
-      className={`chat-input-bar${isHero ? ' chat-input-bar-hero' : ''}${disabled ? ' chat-input-bar-disabled' : ''}`}
-      onDragOver={handleBarDragOver}
-      onDrop={handleBarDrop}
+      ref={barRef}
+      className={`chat-input-bar${isHero ? ' chat-input-bar-hero' : ''}${disabled ? ' chat-input-bar-disabled' : ''}${isFileOver ? ' chat-input-bar-file-over' : ''}`}
     >
       {!isHero && (
         <div

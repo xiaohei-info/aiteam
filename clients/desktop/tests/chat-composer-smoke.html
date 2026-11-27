@@ -6,6 +6,7 @@ import { createRoot } from 'react-dom/client'
 import '../src/styles/globals.css'
 import '../src/pages/Chat/Chat.css'
 import { ChatInputBar } from '../src/components/Chat/ChatInputBar.tsx'
+import { dispatchFileDrop } from '../src/lib/nativeFileDrop.ts'
 
 // 单聊/群聊输入框统一后的行为冒烟：?mode=single|group&variant=dock|hero
 // window.__setConv(id) 切会话（草稿走 __drafts）；window.__failNext = true 让下一次发送失败。
@@ -16,6 +17,9 @@ window.__sent = []
 window.__drafts = {}
 window.__failNext = false
 window.__imported = []
+window.__importedPaths = []
+// 浏览器里没有 Tauri 原生拖放：冒烟直接喂同样形状的事件（position 为 CSS 像素，deviceScaleFactor=1）。
+window.__fileDrop = dispatchFileDrop
 
 const members = mode === 'group'
   ? [
@@ -52,6 +56,11 @@ function Harness() {
         size: file.size,
         mime: file.type,
       }
+    },
+    onImportPath: async (path) => {
+      window.__importedPaths.push(path)
+      const name = path.split('/').pop()
+      return { rel_path: `u/${convId}/file/${name}`, asset_url: '', name, size: 1, mime: 'application/octet-stream' }
     },
     onDraftChange: (id, text, files, mentionSnapshot) => { window.__drafts[id] = { text, mentionSnapshot } },
   })

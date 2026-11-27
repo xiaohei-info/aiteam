@@ -1,5 +1,5 @@
 /**
- * Turns what a paste or a drop carries (plain text, HTML and files) into the text to insert plus
+ * Turns what a paste carries (plain text, HTML and files) into the text to insert plus
  * the files to attach. Pictures and files keep their place in the text as a placeholder that names
  * the attachment, so a message like “看这张 [图片：图1.png] 和这张 [图片：图2.png]” still says
  * which picture is which after the pictures move to the attachment list.
@@ -27,10 +27,7 @@ export interface ComposedPaste {
   unavailable: number
 }
 
-/**
- * Files carried by a paste or a drop. `DataTransfer.files` is empty for a dragged file until the
- * drop itself fires, so `items` / `types` answer "is a file coming" during dragover.
- */
+/** Files carried by a paste. */
 export function filesOf(data: DataTransfer | null | undefined): File[] {
   if (!data) return []
   if (data.files && data.files.length > 0) return Array.from(data.files)
@@ -38,13 +35,6 @@ export function filesOf(data: DataTransfer | null | undefined): File[] {
     .filter((item) => item.kind === 'file')
     .map((item) => item.getAsFile())
     .filter((file): file is File => file !== null)
-}
-
-export function carriesFiles(data: DataTransfer | null | undefined): boolean {
-  if (!data) return false
-  if (data.files && data.files.length > 0) return true
-  if (Array.from(data.types ?? []).includes('Files')) return true
-  return Array.from(data.items ?? []).some((item) => item.kind === 'file')
 }
 
 export function placeholderFor(name: string, type: string): string {
@@ -87,18 +77,24 @@ function tidy(text: string): string {
 function isJustFileNames(plain: string, files: File[]): boolean {
   const lines = plain.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
   if (lines.length === 0 || files.length === 0) return false
-  const names = new Set(files.map((file) => file.name))
-  return lines.every((line) => names.has(line) || names.has(line.split('/').pop() ?? ''))
+  // macOS 文件名常是分解形式（NFD），文字可能是组合形式（NFC），比较前统一。
+  const names = new Set(files.map((file) => file.name.normalize('NFC')))
+  return lines
+    .map((line) => line.normalize('NFC'))
+    .every((line) => names.has(line) || names.has(line.split('/').pop() ?? ''))
 }
 
 export function composePaste(input: { plain: string; parts: PastePart[]; files: File[] }): ComposedPaste {
   const { plain, parts, files } = input
   const hasHtmlImage = parts.some((part) => part.kind === 'image')
   if (files.length === 0 && !hasHtmlImage) return { text: plain, files: [], unavailable: 0 }
-  if (!hasHtmlImage) {
-    // 纯图片 / 访达复制的文件：作附件。
-    if (!plain.trim() || isJustFileNames(plain, files)) return { text: '', files: uniqueFiles(files), unavailable: 0 }
-    // 有文字、富文本里却没有图片（Excel/Numbers 复制表格会顺带一张表格截图）：图片不是内容，只贴文字。
+  // 纯图片 / 访达复制的文件：作附件。
+  if (!hasHtmlImage && (!plain.trim() || isJustFileNames(plain, files))) {
+    return { text: '', files: uniqueFiles(files), unavailable: 0 }
+  }
+  // 有文字、富文本里没有图片、只另带一张图片（Excel/Numbers 复制表格会顺带一张表格截图）：
+  // 图片不是内容，只贴文字。其他文件、多个文件是用户要带的内容，走下面照常作附件。
+  if (!hasHtmlImage && files.length === 1 && files[0].type.startsWith('image/')) {
     return { text: plain, files: [], unavailable: 0 }
   }
 
@@ -121,7 +117,8 @@ export function composePaste(input: { plain: string; parts: PastePart[]; files: 
 
   let text = ''
   let dropped = false
-  for (const part of parts) {
+  // 富文本里没有图片时没有可定位的位置：原样用纯文本，附件占位排在后面。
+  for (const part of hasHtmlImage ? parts : [{ kind: 'text', text: plain } as const]) {
     if (part.kind === 'text') {
       // 去掉一张拿不到的图后，两侧的空格不要叠成两个。
       text += dropped && /\s$/.test(text) ? part.text.replace(/^[ \t]+/, '') : part.text

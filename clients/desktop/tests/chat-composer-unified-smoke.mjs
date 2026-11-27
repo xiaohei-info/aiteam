@@ -91,6 +91,8 @@ const state = `(() => {
     hint: document.querySelector('.mention-input-hint')?.textContent ?? null,
     attachments: Array.from(document.querySelectorAll('.chat-file-chip-name'), n => n.textContent),
     imported: window.__imported,
+    importedPaths: window.__importedPaths,
+    fileOver: !!document.querySelector('.chat-input-bar-file-over'),
     ariaAutocomplete: el?.getAttribute('aria-autocomplete') ?? null,
     sent: window.__sent,
     // 草稿里的 mentionSnapshot 是 DOM 节点，不能按值回传：只取文字和 chip 数量。
@@ -272,22 +274,26 @@ for (const mode of ['single', 'group']) {
   assert.equal(s.sendDisabled, false, `${mode}: 只有附件没有文字时也应可发送`)
   await screenshot(`${mode}-image-paste-attached`)
 
-  // 11b. 拖入文件：同样进附件区，不落进 contenteditable
-  await evaluate(`(() => {
-    const box = document.querySelector('[role="textbox"]')
-    const file = new File(['hello drop'], 'dropped.txt', { type: 'text/plain' })
-    const dt = new DataTransfer()
-    dt.items.add(file)
-    box.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt }))
-    box.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }))
+  // 11b. 从访达拖入文件（Tauri 原生拖放给路径）：落在输入栏任意位置都进附件区，不落进 contenteditable；落在别处忽略
+  const point = await evaluate(`(() => {
+    const r = document.querySelector('.chat-input-box').getBoundingClientRect()
+    return { inside: { x: r.left + 8, y: r.top + 8 }, outside: { x: 4, y: 4 } }
   })()`)
+  await evaluate(`window.__fileDrop({ type: 'enter', position: ${JSON.stringify(point.inside)} })`)
+  s = await read()
+  assert.equal(s.fileOver, true, `${mode}: 文件拖到输入栏上方时应高亮`)
+  await evaluate(`window.__fileDrop({ type: 'drop', paths: ['/Users/me/报告.pdf', '/Users/me/录屏-200MB.mov'], position: ${JSON.stringify(point.inside)} })`)
   await pause(250)
   s = await read()
-  assert.equal(s.imported.length, 2, `${mode}: 拖入的文件应走附件导入，实际 ${JSON.stringify(s.imported)}`)
-  assert.equal(s.imported[1].name, 'dropped.txt', `${mode}: 拖入文件名应保留，实际 ${JSON.stringify(s.imported[1])}`)
+  assert.equal(s.fileOver, false, `${mode}: 松手后取消高亮`)
+  assert.deepEqual(s.importedPaths, ['/Users/me/报告.pdf', '/Users/me/录屏-200MB.mov'], `${mode}: 拖入的文件应按路径导入，实际 ${JSON.stringify(s.importedPaths)}`)
   assert.equal(s.text.trim(), '', `${mode}: 拖入文件不应写进输入框，实际 ${JSON.stringify(s.text)}`)
-  assert.equal(s.attachments.length, 2, `${mode}: 附件区应有两个文件，实际 ${JSON.stringify(s.attachments)}`)
+  assert.equal(s.attachments.length, 3, `${mode}: 附件区应有三个文件，实际 ${JSON.stringify(s.attachments)}`)
   await screenshot(`${mode}-file-drop-attached`)
+  await evaluate(`window.__fileDrop({ type: 'drop', paths: ['/Users/me/别处.pdf'], position: ${JSON.stringify(point.outside)} })`)
+  await pause(150)
+  s = await read()
+  assert.equal(s.importedPaths.length, 2, `${mode}: 落在输入栏以外不应导入，实际 ${JSON.stringify(s.importedPaths)}`)
   await clearAll()
   await evaluate(`document.querySelectorAll('.chat-file-chip-remove').forEach(b => b.click())`)
   await pause(150)
@@ -312,27 +318,46 @@ for (const mode of ['single', 'group']) {
   assert.equal(s.imported.length, importedBeforeMixed, `${mode}: 文字 + 截图不应导入截图，实际 ${JSON.stringify(s.imported)}`)
   await screenshot(`${mode}-table-paste-text-only`)
 
-  // 11d. 拖入文字：落在松手位置，不替换当前选中内容
+  // 11c-2. 文字 + 非图片文件（富文本里没有图片）：文字照贴，文件照常作附件
+  // 剪贴板 API 写不进 PDF，用合成的 paste 事件。
   await clearAll()
-  await type('甲乙丙丁')
+  const beforeFile = await read()
+  const importedBeforeFile = beforeFile.imported.length
   await evaluate(`(() => {
     const box = document.querySelector('[role="textbox"]')
-    const walker = document.createTreeWalker(box, NodeFilter.SHOW_TEXT)
-    let text = null
-    while (walker.nextNode()) if (walker.currentNode.textContent.includes('甲乙丙丁')) { text = walker.currentNode; break }
-    // 选中「丙丁」，再把文字拖到「甲」和「乙」之间
-    const sel = getSelection(); const selRange = document.createRange()
-    selRange.setStart(text, 2); selRange.setEnd(text, 4); sel.removeAllRanges(); sel.addRange(selRange)
-    const probe = document.createRange(); probe.setStart(text, 1); probe.setEnd(text, 2)
-    const rect = probe.getBoundingClientRect()
+    box.focus()
+    const dt = new DataTransfer()
+    dt.setData('text/plain', '请看附件')
+    dt.items.add(new File(['%PDF'], 'material.pdf', { type: 'application/pdf' }))
+    box.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dt }))
+  })()`)
+  await pause(250)
+  s = await read()
+  assert.equal(s.text, '请看附件\n[文件：material.pdf]', `${mode}: 文字 + PDF 应贴文字并留文件占位，实际 ${JSON.stringify(s.text)}`)
+  assert.equal(s.imported.length, importedBeforeFile + 1, `${mode}: PDF 应走附件导入，实际 ${JSON.stringify(s.imported)}`)
+  assert.equal(s.imported.at(-1).name, 'material.pdf', `${mode}: 文件名应保留`)
+  assert.deepEqual(s.attachments, [...beforeFile.attachments, 'material.pdf'], `${mode}: 附件区应新增这个文件，实际 ${JSON.stringify(s.attachments)}`)
+  await screenshot(`${mode}-text-with-file-paste`)
+  await clearAll()
+  await evaluate(`[...document.querySelectorAll('.chat-file-chip-remove')].at(-1).click()`)
+  await pause(150)
+
+  // 11d. 拖入文字：不接收（文字请粘贴），输入框内容不变
+  await clearAll()
+  await type('甲乙丙丁')
+  const dropped = await evaluate(`(() => {
+    const box = document.querySelector('[role="textbox"]')
+    const r = box.getBoundingClientRect()
     const dt = new DataTransfer()
     dt.setData('text/plain', 'X')
-    box.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt, clientX: rect.left + 1, clientY: rect.top + rect.height / 2 }))
+    const event = new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt, clientX: r.left + 4, clientY: r.top + r.height / 2 })
+    box.dispatchEvent(event)
+    return event.defaultPrevented
   })()`)
   await pause(150)
   s = await read()
-  assert.equal(s.text, '甲X乙丙丁', `${mode}: 拖入文字应落在松手位置且不替换选区，实际 ${JSON.stringify(s.text)}`)
-  await screenshot(`${mode}-text-drop-at-point`)
+  assert.equal(dropped, true, `${mode}: 文字拖入应被拦下`)
+  assert.equal(s.text, '甲乙丙丁', `${mode}: 拖入文字不应进输入框，实际 ${JSON.stringify(s.text)}`)
   await clearAll()
 
   // 12. 恢复草稿后光标在末尾（旧行为：新输入的字插在草稿前面）
