@@ -129,6 +129,8 @@ interface NewSessionPageProps {
   draft?: string
   draftFiles?: CachedFile[]
   onDraftChange: (convId: string, text: string, files: CachedFile[]) => void
+  onDraftTextChange: (convId: string, text: string, mentionSnapshot?: readonly Node[]) => void
+  onDraftFilesChange: (convId: string, update: (files: UploadableChatFile[]) => UploadableChatFile[]) => UploadableChatFile[]
   error?: string | null
   employees?: WorkbenchEmployee[]
 }
@@ -144,6 +146,8 @@ function NewSessionPage({
   draft,
   draftFiles,
   onDraftChange,
+  onDraftTextChange,
+  onDraftFilesChange,
   error,
   employees,
 }: NewSessionPageProps) {
@@ -166,6 +170,8 @@ function NewSessionPage({
           draft={draft}
           draftFiles={draftFiles}
           onDraftChange={onDraftChange}
+          onDraftTextChange={onDraftTextChange}
+          onDraftFilesChange={onDraftFilesChange}
           placeholder="随心输入"
           autoFocus
           employees={employees}
@@ -198,7 +204,7 @@ export default function Chat() {
     activeConvId, conversations, activeConvMessages, activeConvRawItems, appendMessage, updateMessageStatus,
     loadConversation, refreshActiveEntries,
     refreshConversations, upgradeConversationId, toggleDetail,
-    highlightMsgId, setHighlightMsgId, draftsByConv, setConvDraft, replaceDraftFile,
+    highlightMsgId, setHighlightMsgId, draftsByConv, setConvDraft, setConvDraftText, updateDraftFiles,
     addConversation, setActiveConvId, workbenchEmployees, clearUnread, loadMoreMessages, activePagination,
     startAssistantStream, abortStream, generatingConvIds, syncingConvIds, streamingMsgIds,
     dropStaleConversation,
@@ -794,6 +800,8 @@ export default function Chat() {
         draft={draftsByConv['']?.text}
         draftFiles={draftsByConv['']?.files}
         onDraftChange={handleDraftChange}
+        onDraftTextChange={setConvDraftText}
+        onDraftFilesChange={updateDraftFiles}
         error={newSessionError}
         employees={workbenchEmployees}
       />
@@ -902,7 +910,8 @@ export default function Chat() {
         conversationUpgradeFrom={[...upgradedConversationIdsRef.current].find(([, id]) => id === activeConvId)?.[0]}
         draft={draftsByConv[activeConvId]?.text}
         draftFiles={draftsByConv[activeConvId]?.files}
-        onDraftFileUpdate={replaceDraftFile}
+        onDraftTextChange={setConvDraftText}
+        onDraftFilesChange={updateDraftFiles}
         onDraftChange={handleDraftChange}
         isGenerating={generatingConvIds.has(activeConvId)}
         isSyncing={syncingConvIds.has(activeConvId)}

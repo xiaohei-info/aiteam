@@ -67,6 +67,22 @@ export function beginAttachmentImport(
   }
 }
 
+/**
+ * Adding several files at once (a paste, a multi-file drop): every file gets its chip right away,
+ * before the first copy starts. Their ids are handed out here so all of them can be pinned to the
+ * conversation they were added to — a conversation switch during the first copy must not move the
+ * ones still to come to whatever conversation is on screen by then.
+ */
+export function planAttachmentImports(
+  metas: readonly { name: string; mime: string; size: number }[],
+  newClientId: () => string = () => crypto.randomUUID(),
+): { clientId: string; placeholder: UploadableChatFile }[] {
+  return metas.map((meta) => {
+    const clientId = newClientId()
+    return { clientId, placeholder: beginAttachmentImport(meta, clientId) }
+  })
+}
+
 export function queueAttachmentUpload(file: CachedFile, clientId: string): UploadableChatFile {
   return { ...file, upload: { clientId, status: 'queued' } }
 }

@@ -5,9 +5,11 @@ import {
   beginAttachmentImport,
   hasBlockingAttachmentUpload,
   isImportingAttachment,
+  planAttachmentImports,
   queueAttachmentUpload,
   runWhenAttachmentsReady,
 } from '../src/lib/chatAttachmentUpload.ts'
+import { migrateDraftConversationId, withDraftFiles, withDraftText } from '../src/lib/chatDraftFiles.ts'
 import { clearSendErrorFor, sendErrorFor } from '../src/lib/conversationSendError.ts'
 
 const copied = { rel_path: 't/c/big.mov', asset_url: 'asset://big', name: 'big.mov', size: 9, mime: 'video/quicktime' }
@@ -30,6 +32,48 @@ test('a copy that finished in the background waits for upload and still blocks s
   assert.equal(isImportingAttachment([queued]), false)
 })
 
+test('adding several files announces all of them before the first copy starts', () => {
+  let next = 0
+  const planned = planAttachmentImports([
+    { name: '一.pdf', mime: 'application/pdf', size: 1 },
+    { name: '二.pdf', mime: 'application/pdf', size: 2 },
+    { name: '三.pdf', mime: 'application/pdf', size: 3 },
+  ], () => `c${++next}`)
+  assert.deepEqual(planned.map((entry) => entry.clientId), ['c1', 'c2', 'c3'], 'every file gets its own id up front')
+  assert.deepEqual(planned.map((entry) => entry.placeholder.name), ['一.pdf', '二.pdf', '三.pdf'])
+  assert.ok(planned.every((entry) => entry.placeholder.upload?.status === 'importing'))
+  assert.equal(isImportingAttachment(planned.map((entry) => entry.placeholder)), true, '全部占位都挡住发送')
+})
+
+test('attachments of a conversation are one copy, changed only through withDraftFiles', () => {
+  const importing = beginAttachmentImport({ name: 'big.mov', mime: 'video/quicktime', size: 9 }, 'c1')
+  const first = withDraftFiles({}, 'conv-a', (files) => [...files, importing])
+  assert.deepEqual(first.files, [importing])
+  assert.equal(first.drafts['conv-a'].text, '', 'adding an attachment must not invent draft text')
+  const done = withDraftFiles(first.drafts, 'conv-a', (files) =>
+    files.map((file) => (file as typeof importing).upload?.clientId === 'c1' ? queueAttachmentUpload(copied, 'c1') : file))
+  assert.equal((done.files[0] as typeof importing).upload?.status, 'queued', 'the finished copy replaces its own chip')
+  // Saving the text on a conversation switch leaves the in-flight attachment where it is.
+  const afterSwitch = withDraftText(done.drafts, 'conv-a', '半句话')
+  assert.deepEqual(afterSwitch['conv-a'].files, done.files)
+  assert.equal(afterSwitch['conv-a'].text, '半句话')
+  // An attachment removed while its upload was running is not resurrected by the finishing upload.
+  const removed = withDraftFiles(afterSwitch, 'conv-a', (files) => files.filter(() => false))
+  const late = withDraftFiles(removed.drafts, 'conv-a', (files) =>
+    files.some((file) => (file as typeof importing).upload?.clientId === 'c1') ? [copied] : files)
+  assert.deepEqual(late.files, [], 'nothing holds it any more')
+})
+
+test('emp_ becoming a real conversation moves the draft, attachments included', () => {
+  const importing = beginAttachmentImport({ name: 'big.mov', mime: 'video/quicktime', size: 9 }, 'c1')
+  const drafts = withDraftFiles({ emp_1: { text: '看这个', files: [] } }, 'emp_1', (files) => [...files, importing]).drafts
+  const moved = migrateDraftConversationId(drafts, 'emp_1', 'conv-real')
+  assert.equal(moved.emp_1, undefined)
+  assert.deepEqual(moved['conv-real'].files, [importing])
+  assert.equal(moved['conv-real'].text, '看这个')
+  assert.equal(migrateDraftConversationId({}, 'emp_1', 'conv-real')['conv-real'], undefined, 'nothing to move is a no-op')
+})
+
 test('send errors only show in the conversation they happened in', () => {
   const error = { conversationId: 'group-a', message: '发送失败，请重试。' }
   assert.equal(sendErrorFor(error, 'group-b'), null)
@@ -40,32 +84,49 @@ test('send errors only show in the conversation they happened in', () => {
 
 const bar = readFileSync(new URL('../src/components/Chat/ChatInputBar.tsx', import.meta.url), 'utf8')
 
-test('switching conversations keeps importing/uploading files in the old draft instead of cancelling them', () => {
-  const effect = bar.slice(bar.indexOf('if (conversationChanged && !isConversationUpgrade)'), bar.indexOf('setKnowledgeOpen(false)'))
-  assert.ok(effect.includes('const previousFiles = filesRef.current'))
+test('the input box keeps no second copy of the attachment state', () => {
+  assert.ok(!bar.includes('setPendingFiles'), '附件状态按会话只存一份，不再有本地副本')
+  assert.ok(bar.includes('const pendingFiles = useMemo(() => (draftFiles ?? []) as UploadableChatFile[], [draftFiles])'))
+  const setFiles = bar.slice(bar.indexOf('const setFiles = useCallback'), bar.indexOf('const handleCloseRolePicker'))
+  assert.ok(setFiles.includes('onDraftFilesChange(target, update)'), '所有改动都写回该会话的唯一一份状态')
+})
+
+test('switching conversations saves only the text; in-flight attachments stay in their conversation', () => {
+  const effect = bar.slice(bar.indexOf('if (conversationChanged && !isConversationUpgrade)'), bar.indexOf('if (isConversationUpgrade && submittingConvRef'))
+  assert.ok(effect.includes('onDraftTextChange(previousConvId, composer.valueRef.current.text, composer.snapshot())'))
   assert.ok(!effect.includes('cancelledUploadIdsRef'), 'switching must not cancel uploads')
-  assert.ok(effect.includes('fileOwnersRef.current.set(file.upload.clientId, previousConvId)'))
+  assert.ok(!effect.includes('onDraftChange('), '附件不再随切换整份改写，避免把别的会话的附件写进来')
 })
 
 test('a finished import/upload goes to its own conversation, never the one on screen', () => {
   const place = bar.slice(bar.indexOf('const placeFile = useCallback'), bar.indexOf('const handleUploadFile = useCallback'))
   assert.ok(place.includes('fileOwnersRef.current.get(clientId)'))
-  assert.ok(place.includes('owner === prevConvRef.current'))
-  assert.ok(place.includes('onDraftFileUpdate?.(owner, clientId, next)'))
-  const upload = bar.slice(bar.indexOf('const handleUploadFile = useCallback'), bar.indexOf('const importInto = useCallback'))
+  assert.ok(place.includes('}, owner)'), 'the change goes to the owning conversation')
+  assert.ok(!place.includes('mountedRef.current'), '输入框开着还是关着都落到同一份状态')
+  const upload = bar.slice(bar.indexOf('const handleUploadFile = useCallback'), bar.indexOf('const runImport = useCallback'))
   assert.ok(upload.includes('placeFile(clientId, completeAttachmentUpload('))
   assert.ok(upload.includes('placeFile(clientId, failAttachmentUpload('))
-  assert.ok(!upload.includes('setPendingFiles((previous) => previous.map((item) =>\n          item.upload?.clientId === clientId ? completeAttachmentUpload'))
 })
 
-test('paste and drop show the import chip before copying', () => {
-  const importInto = bar.slice(bar.indexOf('const importInto = useCallback'), bar.indexOf('const handlePickFile'))
-  assert.ok(importInto.indexOf('beginAttachmentImport(') < importInto.indexOf('return load()'))
-  assert.ok(bar.includes('() => onImportFile(file)'))
-  assert.ok(bar.includes('() => onImportPath(path)'))
+test('a whole batch of added files is pinned to the conversation it was added to before any copy starts', () => {
+  const start = bar.slice(bar.indexOf('const startImports = useCallback'), bar.indexOf('}, [runImport, setFiles])'))
+  const pinned = start.indexOf('const owner = prevConvRef.current')
+  const planned = start.indexOf('planAttachmentImports(')
+  const owners = start.indexOf('fileOwnersRef.current.set(clientId, owner)')
+  const chips = start.indexOf('setFiles((previous) => [...previous, ...planned.map((entry) => entry.placeholder)], owner)')
+  const firstCopy = start.indexOf('await runImport(')
+  assert.ok(pinned >= 0 && planned > pinned && owners > planned && chips > owners && firstCopy > chips,
+    '先固定归属、建全部占位，再逐个导入')
+  assert.ok(!start.includes('prevConvRef.current)\n', owners), 'later files must not re-read the conversation on screen')
 })
 
-test('the「+」picker only returns a path and imports it like a dropped file', () => {
+test('paste, drop and the「+」picker hand the whole list to the same batch import', () => {
+  const paste = bar.slice(bar.indexOf('const handleImportFiles = useCallback'), bar.indexOf('const handleRemoveFile'))
+  assert.ok(paste.includes('startImports(files.map('), '一次粘贴的多个文件整批交出去')
+  assert.ok(!paste.includes('for (const file of files)'), '不再逐个 await，避免第二个文件落到切换后的会话')
+  const drop = bar.slice(bar.indexOf('importPathsRef.current = (paths: string[])'), bar.indexOf('useEffect(() => {\n    if (!canDropFiles) return'))
+  assert.ok(drop.includes('startImports(fresh.map('), '去重后的整批路径一次交给 startImports')
+  assert.ok(drop.includes('importingPathsRef.current.delete(path)'), '同一路径导入中不重复添加')
   const pick = bar.slice(bar.indexOf('const handlePickFile = async'), bar.indexOf('const handleImportFiles'))
   assert.ok(pick.includes('path = await onPickFile()'))
   assert.ok(pick.includes('importPathsRef.current([path])'))
@@ -80,11 +141,13 @@ test('a failed send keeps the @ mentions in the draft it goes back to', () => {
 })
 
 for (const page of ['Chat', 'GroupChat']) {
-  test(`${page}: the send error is per conversation and wired to the draft-file updater`, () => {
+  test(`${page}: the send error is per conversation and the attachments are stored per conversation`, () => {
     const source = readFileSync(new URL(`../src/pages/${page}/index.tsx`, import.meta.url), 'utf8')
     assert.ok(source.includes('useState<ConversationSendError | null>(null)'))
     assert.ok(!/setSendError\('/.test(source), 'errors must carry their conversation id')
-    assert.ok(source.includes('onDraftFileUpdate={replaceDraftFile}'))
+    assert.ok(source.includes('onDraftFilesChange={updateDraftFiles}'))
+    assert.ok(source.includes('onDraftTextChange={setConvDraftText}'))
+    assert.ok(!source.includes('onDraftFileUpdate'), '附件状态只有一份，不再单独补写草稿附件')
     assert.ok(!source.includes('setSendError(null) }, [active'), 'switching must not wipe another conversation’s error')
   })
 }

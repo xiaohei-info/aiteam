@@ -48,7 +48,7 @@ export default function GroupChat() {
     activeGroupId, groups, toggleGroupDetail,
     activeConvMessages, activeConvRawItems, appendMessage,
     updateMessageStatus, clearGroupUnread, loadGroupConversation, refreshActiveEntries,
-    loadMoreMessages, activePagination, draftsByConv, setConvDraft, replaceDraftFile, generatingConvIds, syncingConvIds,
+    loadMoreMessages, activePagination, draftsByConv, setConvDraft, setConvDraftText, updateDraftFiles, generatingConvIds, syncingConvIds,
     dropStaleConversation,
     workbenchLoading, workbenchRefreshing, workbenchError, loadAgentsAndConversations,
     activeMessagesLoading, activeMessagesError,
@@ -388,7 +388,8 @@ export default function GroupChat() {
         draftFiles={draftsByConv[activeGroupId]?.files}
         draftMentions={draftsByConv[activeGroupId]?.mentionSnapshot}
         onDraftChange={handleDraftChange}
-        onDraftFileUpdate={replaceDraftFile}
+        onDraftTextChange={setConvDraftText}
+        onDraftFilesChange={updateDraftFiles}
         disabled={activeMessagesLoading || Boolean(activeMessagesError)}
         isGenerating={generatingConvIds.has(activeGroupId)}
         isSyncing={syncingConvIds.has(activeGroupId)}

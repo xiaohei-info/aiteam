@@ -51,6 +51,7 @@ import {
   type GroupMember,
 } from '../lib/groupRoster'
 import { latestEmployeeConversations } from '../lib/projectConversation'
+import { migrateDraftConversationId, withDraftFiles, withDraftText, type DraftsByConv } from '../lib/chatDraftFiles'
 import { rememberEmployeeConversation, type WorkbenchEmployee } from '../lib/employeeConversationMap'
 import { classifyRequestError, type RequestErrorInfo } from '../lib/requestError'
 import { notifyConversationCompleted } from '../lib/systemNotifications'
@@ -461,7 +462,7 @@ interface ChatStore {
   highlightMsgId: string | null
   // mentionSnapshot 是输入框自己克隆的 DOM 节点（含 @ 成员 chip）：草稿只存纯文本时，
   // 切回会话后文字里的「@某人」会退化成普通文字，发送时不再提及对方。只存内存、不持久化。
-  draftsByConv: Record<string, { text: string; files: CachedFile[]; mentionSnapshot?: readonly Node[] }>
+  draftsByConv: DraftsByConv
   streamingMsgIds: Set<string>
   generatingConvIds: Set<string>
   // 本轮生成已结束、正在拉 entries 对齐的会话。对齐会整体替换消息列表，
@@ -501,12 +502,14 @@ interface ChatStore {
   loadMoreMessages: (convId: string, isGroup?: boolean) => Promise<boolean>
   setHighlightMsgId: (id: string | null) => void
   setConvDraft: (convId: string, text: string, files: CachedFile[], mentionSnapshot?: readonly Node[]) => void
+  /** 只写草稿文字，不动附件：附件按会话只存这一份，由 updateDraftFiles 独占写入。 */
+  setConvDraftText: (convId: string, text: string, mentionSnapshot?: readonly Node[]) => void
   /**
-   * Replaces (or removes, with null) one attachment in a conversation's draft, matched by its upload
-   * client id. Used when an import/upload finishes after the user switched to another conversation.
-   * Returns whether the draft still held that attachment.
+   * The one place a conversation's attachments change: adding them, import/upload progress and
+   * removal all go through here, whether or not that conversation's input box is on screen.
+   * Returns the conversation's attachments after the change.
    */
-  replaceDraftFile: (convId: string, clientId: string, file: CachedFile | null) => boolean
+  updateDraftFiles: (convId: string, update: (files: CachedFile[]) => CachedFile[]) => CachedFile[]
   // 新栈:page 层通过 submitPrompt 发起 prompt 后调用此 action,创建占位并接管 SSE。
   startAssistantStream: (convId: string, opts?: AssistantStreamOptions) => void
   abortStream: (convId: string) => Promise<void>
@@ -773,6 +776,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         activeConvId: s.activeConvId === oldId ? newConvId : s.activeConvId,
         conversations: s.conversations.map((c) => c.id === oldId ? { ...c, id: newConvId } : c),
         pinnedConvs,
+        // 同一个会话换了 id：草稿（含正在导入/上传的附件）跟着走，不能留在 emp_ 旧 id 上。
+        draftsByConv: migrateDraftConversationId(s.draftsByConv, oldId, newConvId),
       }
     })
     const oldSub = subscriptions.get(oldId)
@@ -1084,13 +1089,12 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
   setConvDraft: (convId, text, files, mentionSnapshot) =>
     set((s) => ({ draftsByConv: { ...s.draftsByConv, [convId]: { text, files, mentionSnapshot } } })),
-  replaceDraftFile: (convId, clientId, file) => {
-    const draft = get().draftsByConv[convId]
-    const clientIdOf = (item: CachedFile) => (item as { upload?: { clientId?: string } }).upload?.clientId
-    if (!draft || !draft.files.some((item) => clientIdOf(item) === clientId)) return false
-    const files = draft.files.flatMap((item) => clientIdOf(item) !== clientId ? [item] : file ? [file] : [])
-    set((s) => ({ draftsByConv: { ...s.draftsByConv, [convId]: { ...draft, files } } }))
-    return true
+  setConvDraftText: (convId, text, mentionSnapshot) =>
+    set((s) => ({ draftsByConv: withDraftText(s.draftsByConv, convId, text, mentionSnapshot) })),
+  updateDraftFiles: (convId, update) => {
+    const { drafts, files } = withDraftFiles(get().draftsByConv, convId, update)
+    if (drafts !== get().draftsByConv) set({ draftsByConv: drafts })
+    return files
   },
 
   // -------- 流式订阅入口(核心) --------

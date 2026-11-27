@@ -78,5 +78,5 @@ test('单聊接入上传删除回调，点击发送立即清空编辑器、失�
   assert.doesNotMatch(chatSource, /for \(const f of files\)/)
   assert.match(inputSource, /sent = await onSend\(/)
   assert.match(inputSource, /const target = sent \? \{ kind: 'none' as const \} : composerRestoreTarget\(/)
-  assert.match(inputSource, /setPendingFiles\(files\)/)
+  assert.match(inputSource, /setFiles\(\(\) => files\)/)
 })

@@ -41,7 +41,7 @@ test('composer clears before awaiting onSend', () => {
   const awaitAt = send.indexOf('await onSend(')
   assert.ok(clearAt > 0 && awaitAt > clearAt, 'input must be cleared before the send request')
   const clearComposer = source.slice(source.indexOf('const clearComposer = '), source.indexOf('const readComposer = '))
-  assert.ok(clearComposer.includes('composer.clear()') && clearComposer.includes('setPendingFiles([])'))
+  assert.ok(clearComposer.includes('composer.clear()') && clearComposer.includes('setFiles(() => [])'))
 })
 
 test('new session restores the draft only after a failed send', () => {
@@ -53,7 +53,7 @@ test('new session restores the draft only after a failed send', () => {
 test('conversation drafts keep the @ mention tags, so switching back still submits mentions', () => {
   const bar = readFileSync(new URL('../src/components/Chat/ChatInputBar.tsx', import.meta.url), 'utf8')
   assert.ok(
-    bar.includes('onDraftChange(previousConvId, previousDraft, previousFiles, composer.snapshot())'),
+    bar.includes('onDraftTextChange(previousConvId, composer.valueRef.current.text, composer.snapshot())'),
     'leaving a conversation must store the mention snapshot next to the draft text',
   )
   assert.ok(

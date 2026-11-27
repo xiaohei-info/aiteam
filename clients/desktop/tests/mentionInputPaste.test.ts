@@ -118,12 +118,12 @@ test('附件导入走与点击附件按钮相同的上传路径', () => {
   const bar = readFileSync(new URL('../src/components/Chat/ChatInputBar.tsx', import.meta.url), 'utf8')
   const importStart = bar.indexOf('const handleImportFiles = useCallback')
   assert.ok(importStart > 0, 'ChatInputBar 缺少 handleImportFiles')
-  const importBody = bar.slice(importStart, bar.indexOf('}, [importInto, onImportFile])', importStart))
+  const importBody = bar.slice(importStart, bar.indexOf('}, [onImportFile, startImports])', importStart))
   assert.ok(importBody.includes('() => onImportFile(file)'), '未把粘贴/拖入的文件缓存成 CachedFile')
-  // 粘贴/拖入都经 importInto：在当前会话就走与点击附件按钮相同的 handleUploadFile，没有上传回调则原样放回。
-  const importInto = bar.slice(bar.indexOf('const importInto = useCallback'), bar.indexOf('const handlePickFile'))
-  assert.ok(importInto.includes('if (onScreen) handleUploadFile(cached, clientId)'), '导入未复用点击附件按钮的上传路径')
-  assert.ok(importInto.includes('placeFile(clientId, cached)'), '无上传回调时应直接进待发送附件列表')
+  // 粘贴/拖入都经 runImport：在当前会话就走与点击附件按钮相同的 handleUploadFile，没有上传回调则原样放回。
+  const runImport = bar.slice(bar.indexOf('const runImport = useCallback'), bar.indexOf('const startImports = useCallback'))
+  assert.ok(runImport.includes('if (onScreen) handleUploadFile(cached, clientId)'), '导入未复用点击附件按钮的上传路径')
+  assert.ok(runImport.includes('placeFile(clientId, cached)'), '无上传回调时应直接进待发送附件列表')
   assert.ok(bar.includes('onFiles={onImportFile && !isInteractionDisabled ? handleImportFiles : undefined}'), '未把 onFiles 接到 MentionInput')
 })
 
