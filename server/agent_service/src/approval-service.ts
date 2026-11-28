@@ -456,7 +456,7 @@ export class ApprovalService {
  */
 const READ_ONLY_TOOLS = new Set([
   "read", "grep", "find", "ls", "knowledge_search", "knowledge_get",
-  "local_dir_search", "local_dir_read",
+  "local_dir_search", "local_dir_read", "attachment_read",
   "hindsight_recall", "memory_recall", "todo_update", "mention_employee", "delegate_employee",
 ]);
 

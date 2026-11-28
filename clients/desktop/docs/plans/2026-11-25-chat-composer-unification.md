@@ -1,7 +1,7 @@
 # 聊天输入框统一方案（单聊 textarea ↔ 群聊 contentEditable）
 
 - 日期：2026-11-25
-- 状态：**未开始**（待排期；不在 `fix/avatar-sync-and-group-paste` 这个 bugfix 分支内实施）
+- 状态：**已实施方案 A**（2026-11-26，分支 `feat/desktop-chat-composer-unify`，基于 `fix/avatar-sync-and-group-paste`；实施记录见 §9）
 - 触发问题：群聊粘贴富文本后发送键变灰（已修，见 `docs/部署运维/2026-11-25-头像三端同步与群聊粘贴发送键排查复盘.md`）
 - 结论：**应该统一**，推荐方案 A（单 contentEditable 实现 + 可选 mention）。桌面端是 outlier，`web/agent` 早已统一。
 
@@ -18,7 +18,7 @@ const isMentionMode = members !== undefined && members.length > 0
 - `isMentionMode === true`（群聊，有成员列表）→ `<MentionInput>`：`contentEditable`，支持 `@` 成员 chip；
 - `isMentionMode === false`（单聊）→ 受控 `<textarea value={input} onChange={e => setInput(e.target.value)}>`。
 
-同一文件围绕这个判断有 **18 处引用，归为 10 组逻辑**：
+同一文件围绕这个判断有 **16 行引用，归为 10 组逻辑**（行号按 `dc32beeb` 核对；实施前快照）：
 
 | 行 | 用途 |
 | --- | --- |
@@ -26,12 +26,12 @@ const isMentionMode = members !== undefined && members.length > 0
 | 177 / 182–183 | 切换会话时恢复/清空 contentEditable DOM（防草稿串会话） |
 | 193 / 195 | 读取当前输入内容（草稿快照） |
 | 347 | 提交前的空内容判定 |
-| 358–359 | 读取消息（普通发送） |
+| 359 | 读取消息（普通发送） |
 | 398–399 | 读取消息（发送中排队） |
 | 448 | **发送键使能**：`(isMentionMode ? !!mentionText.trim() : !!input.trim())` |
 | 535 / 538 | 草稿恢复 |
 | 568 / 573 | 高度自适应 / 依赖 |
-| 741 / 759 | 渲染分支：`<MentionInput>` / `<textarea>` |
+| 741 | 渲染分支：`<MentionInput>` / `<textarea>` |
 
 ## 2. 为什么当初会分叉
 
@@ -116,3 +116,36 @@ mentionRoster?: MentionRosterExpert[]
 - 不做「单聊也支持 @ 成员」的产品能力变更（只是组件统一，单聊仍不展示 mention 菜单）；
 - 不改消息协议 / 后端接口；
 - 不顺手改发送按钮的视觉与工具栏布局。
+
+## 9. 实施记录（2026-11-26）
+
+### 改动
+
+| 文件 | 内容 |
+| --- | --- |
+| `src/components/Chat/useComposerValue.ts`（新） | 唯一取值来源：`valueRef`（事件回调同步读）+ `text`（渲染用）；`handleChange / setText / clear / snapshot / restore / focus / insertText / getScrollHeight` |
+| `src/components/Chat/ChatInputBar.tsx` | 删除 `<textarea>` 分支、`input/setInput`、`mentionTextRef/mentionText`、`textareaRef`、`prevMentionModeRef`、`isComposingRef`、`isMentionMode`；单聊传 `members ?? []`；读取/清空/失败放回/排队编辑/语音插入都走 `composer`；高度改为随 `composer.text` 的 layout effect |
+| `src/components/Chat/MentionInput.tsx` | `emit(el)` = `extract` + 空态标记 + `onChange`，所有改内容的路径（输入、粘贴、插 chip、删 chip、`setText`、`clear`、`restore`、`insertText` 兜底）统一经过它；`setText` 现在也回调 `onChange`；无成员时不声明 `aria-autocomplete`；补 `autoCorrect/autoCapitalize="off"`（与原 textarea 一致） |
+| `MentionInput.css` / `pages/Chat/Chat.css` | 占位文字同时认 `:empty` 与 `[data-empty="true"]`（全删后 contentEditable 会留下占位 `<br>`，`:empty` 失效）；hero 占位字号/颜色同步到 contentEditable |
+
+### 与原单聊 textarea 的行为差异（已知、有意）
+
+- 语音转写插入：原单聊直接拼接，现在与群聊一致——前面已有非空白内容时补一个空格。
+- 输入区下沿少 6px：textarea 是行内元素，下方有基线空隙；现在单聊与群聊间距一致。字号、行高、颜色、占位样式、宽高经计算样式对比完全一致。
+- 群聊成员异步加载（`members` 从 `[]` 变为非空）时不再切换组件，已输入内容不会被重置为草稿。
+
+### 图片 / 文件的粘贴与拖入（2026-11-26 复核后修正）
+
+粘贴和拖入的图片 / 文件**与点击附件按钮走同一条路**，不再拦截：
+
+- `MentionInput` 新增 `onFiles`：粘贴 / 拖入里的文件交给宿主，纯文本仍然插入输入框（两者同时存在时都不丢）；宿主没接 `onFiles` 时才回到「请用附件按钮」提示。
+- `ChatInputBar.onImportFile` 把 `File` 缓存成 `CachedFile`，之后复用 `handlePickFile` 的上传与待发送列表逻辑。
+- 剪贴板截图没有磁盘路径，因此新增 Tauri 命令 `cache_file_bytes`（base64 传入，文件名按路径段校验，上限 64 MB），写入会话附件目录。2026-11-27 起它**只用于本机没有文件的粘贴内容**（截图、WPS/Word 图文里的图片）；访达 / 资源管理器复制的文件粘贴时读系统剪贴板拿路径，与拖入同一条路（见 `2026-11-27-attachment-by-path.md` §8.2）。
+- ~~`tauri.conf.json` 设 `dragDropEnabled: false`~~（2026-11-27 owner 改定）：保留 Tauri 默认的原生拖放。从访达/资源管理器拖入的文件由 `src/lib/nativeFileDrop.ts` 监听 `onDragDropEvent`，按松手坐标判断是否落在输入栏，按路径导入（与「+ 导入」相同）。~~随后上传给本机 Agent 仍受 5 MiB 限制~~：附件按路径引用（原 #235）已并入本 PR，拖入 / 「+ 导入」/ 粘贴复制的文件都只记原路径（`describe_local_file`），不复制、不上传、不限大小，Agent 用 `attachment_read` 按需读取，见 `2026-11-27-attachment-by-path.md`。文字拖入不接收（原生拖放吞掉；`MentionInput` 的 `onDrop` 也拦掉应用内拖动），文字请粘贴。`cache_file_bytes` 的 64 MB 上限只剩截图等本机没有文件的粘贴内容。
+
+### 验证
+
+- 结构守卫：`tests/chatComposerUnified.test.ts`（无 `<textarea>`、无 `isMentionMode`、只有一个 `<MentionInput>`、取值/使能走 `useComposerValue`、`setText/clear/restore` 均回调 `onChange`、空态占位）；`mentionInputPaste` / `mentionRichText` / `chatComposerRestore` 守卫同步改为认 `emit(el)` / `composer.clear()`。
+- 浏览器冒烟：`tests/chat-composer-unified-smoke.mjs` + `tests/chat-composer-smoke.html`（Vite 1437 + Chrome CDP 9238），单聊/群聊各跑同一组：占位、发送键使能、Shift+Enter 换行 / Enter 发送、IME 合成期间回车不发送、Cmd+Z 撤销、全删后占位恢复、20 行长文本高度封顶 240 且发送键 `elementFromPoint` 命中、切会话草稿不串、发送失败原样放回（含 chip）、群聊 mentions 提交 / 单聊不弹 @ 菜单、真实剪贴板（`text/html` + `text/plain`）粘贴、真实剪贴板图片进附件区、拖入文件进附件区；另有 1440×640 小窗口与 hero 截图。
+- 原有 `tests/chat-paste-real-clipboard.mjs`（单聊断言改为 contentEditable）与 `tests/chat-paste-browser-smoke.mjs` 通过。
+- 未验证：真机 Tauri WebView（macOS WKWebView）下的输入法、撤销与粘贴；移动端软键盘（桌面端不涉及）。

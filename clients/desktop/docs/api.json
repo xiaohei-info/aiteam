@@ -6079,6 +6079,34 @@
             "uniqueItems": true,
             "description": "已上传本地附件 ID；最多 8 个且不能重复。"
           },
+          "attachment_paths": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "path"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096,
+                  "description": "本机文件的绝对路径；必须是普通文件（会先解析符号链接）。只在 Agent 本地使用，不写进模型上下文。"
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 255,
+                  "pattern": "^[^\\x00-\\x1F\\x7F/\\\\]+$",
+                  "description": "展示用文件名；缺省取路径的文件名。"
+                }
+              },
+              "additionalProperties": false,
+              "description": "按路径引用的附件。"
+            },
+            "maxItems": 8,
+            "description": "桌面端按路径引用的附件；不上传字节、不限大小。与 attachment_ids 合计最多 8 个。5 MiB 以内的图片随消息作为图片输入，其余文件由员工用 attachment_read 工具按需分段读取。"
+          },
           "mentions": {
             "type": "array",
             "items": {
@@ -9380,6 +9408,68 @@
         },
         "additionalProperties": false,
         "description": "地址、工具与鉴权方式都以企业目录为准，不接受客户端传值。"
+      },
+      "AttachmentRef": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "mime_type",
+          "byte_size",
+          "path",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "附件引用 ID（ref-…）；与员工清单里看到的编号一致。"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255,
+            "description": "附件文件名。"
+          },
+          "mime_type": {
+            "type": "string",
+            "minLength": 1,
+            "description": "按扩展名推断的 MIME 类型。"
+          },
+          "byte_size": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "登记时的文件字节数。"
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "description": "附件在本机的绝对路径；本机接口，路径不出本机。"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "首次登记时间（ISO 8601 UTC）。"
+          }
+        },
+        "additionalProperties": false,
+        "description": "按路径引用的会话附件；内容不复制，只记位置。"
+      },
+      "AttachmentRefListEnvelope": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AttachmentRef"
+            },
+            "description": "按登记时间正序的附件引用。"
+          }
+        },
+        "description": "当前成员该会话的附件引用列表。"
       }
     }
   },
@@ -14601,6 +14691,95 @@
           },
           "409": {
             "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ManagerUnavailable"
+          }
+        },
+        "tags": [
+          "agent"
+        ]
+      }
+    },
+    "/api/agent/conversations/{conversation_id}/attachment-refs": {
+      "get": {
+        "operationId": "listConversationAttachmentRefs",
+        "summary": "列出会话的附件引用",
+        "description": "按路径引用的附件清单；客户端按 ref ID 定位历史消息里的附件，不再按文件名猜。本机接口，路径不跳出本机；只返回当前成员自己的会话。",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "本地会话 ID。"
+            },
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "description": "本地会话 ID。",
+            "example": "conversation-1"
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "按路径引用的附件及其本机位置；同名的两个文件各自一个 ref ID。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttachmentRefListEnvelope"
+                },
+                "examples": {
+                  "refs": {
+                    "summary": "两个同名不同文件",
+                    "value": {
+                      "data": [
+                        {
+                          "id": "ref-1a2b",
+                          "name": "报价.pdf",
+                          "mime_type": "application/pdf",
+                          "byte_size": 12582912,
+                          "path": "/Users/me/a/报价.pdf",
+                          "created_at": "2026-11-27T02:00:00.000Z"
+                        },
+                        {
+                          "id": "ref-3c4d",
+                          "name": "报价.pdf",
+                          "mime_type": "application/pdf",
+                          "byte_size": 2048,
+                          "path": "/Users/me/b/报价.pdf",
+                          "created_at": "2026-11-27T03:00:00.000Z"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
           },
           "422": {
             "$ref": "#/components/responses/ValidationError"

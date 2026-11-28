@@ -373,6 +373,20 @@ export interface ReplyFile {
   chars: number;
 }
 
+/** A file the user attached by reference: only its location and the size/mtime seen when it was sent are stored, never its bytes. */
+export interface LocalFileRef {
+  id: string;
+  conversation_id: string;
+  tenant_id: string;
+  member_id: string;
+  path: string;
+  name: string;
+  mime_type: string;
+  byte_size: number;
+  mtime_ms: number;
+  created_at: string;
+}
+
 export type UnplacedArtifact = Pick<LocalFileRecord, "id" | "conversation_id" | "tenant_id" | "member_id" | "filename" | "byte_size" | "sha256">;
 
 interface LocalFileRow extends LocalFileRecord {
@@ -652,6 +666,21 @@ export class AgentSqliteStore {
         referenced_at TEXT
       );
       CREATE INDEX IF NOT EXISTS local_file_conversation_idx ON local_file(conversation_id, created_at, id);
+
+      -- 按路径引用的附件（桌面端）：只记位置与发送时的大小/修改时间，不存字节，大小不限。
+      CREATE TABLE IF NOT EXISTS local_file_ref (
+        id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL,
+        tenant_id TEXT NOT NULL,
+        member_id TEXT NOT NULL,
+        path TEXT NOT NULL,
+        name TEXT NOT NULL,
+        mime_type TEXT NOT NULL,
+        byte_size INTEGER NOT NULL CHECK (byte_size >= 0),
+        mtime_ms INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE (conversation_id, tenant_id, member_id, path)
+      );
 
       -- 成员授权「以后从平台目录安装同种能力时直接安装」（设计 §11.3）。按种类（mcp / skill）各一条，成员可在设置里撤销。
       CREATE TABLE IF NOT EXISTS capability_autoinstall (
@@ -1312,7 +1341,31 @@ export class AgentSqliteStore {
     for (const id of ids) mark.run(now, id, conversationId, tenantId, memberId, kind);
   }
 
+  /** Registers (or refreshes) the files a message refers to; the same path in one conversation keeps one ID. */
+  upsertLocalFileRefs(owner: { conversationId: string; tenantId: string; memberId: string }, refs: ReadonlyArray<Pick<LocalFileRef, "path" | "name" | "mime_type" | "byte_size" | "mtime_ms">>): LocalFileRef[] {
+    const now = new Date().toISOString();
+    const find = this.db.prepare("SELECT id FROM local_file_ref WHERE conversation_id = ? AND tenant_id = ? AND member_id = ? AND path = ?");
+    const insert = this.db.prepare("INSERT INTO local_file_ref (id, conversation_id, tenant_id, member_id, path, name, mime_type, byte_size, mtime_ms, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    const update = this.db.prepare("UPDATE local_file_ref SET name = ?, mime_type = ?, byte_size = ?, mtime_ms = ? WHERE id = ?");
+    return refs.map((ref) => {
+      const existing = find.get(owner.conversationId, owner.tenantId, owner.memberId, ref.path) as { id: string } | undefined;
+      const id = existing?.id ?? `ref-${randomUUID()}`;
+      if (existing) update.run(ref.name, ref.mime_type, ref.byte_size, ref.mtime_ms, id);
+      else insert.run(id, owner.conversationId, owner.tenantId, owner.memberId, ref.path, ref.name, ref.mime_type, ref.byte_size, ref.mtime_ms, now);
+      return this.getOwnedLocalFileRef(id, owner.conversationId, owner.tenantId, owner.memberId)!;
+    });
+  }
+
+  getOwnedLocalFileRef(id: string, conversationId: string, tenantId: string, memberId: string): LocalFileRef | undefined {
+    return this.db.prepare("SELECT id, conversation_id, tenant_id, member_id, path, name, mime_type, byte_size, mtime_ms, created_at FROM local_file_ref WHERE id = ? AND conversation_id = ? AND tenant_id = ? AND member_id = ?").get(id, conversationId, tenantId, memberId) as LocalFileRef | undefined;
+  }
+
+  listOwnedLocalFileRefs(conversationId: string, tenantId: string, memberId: string): LocalFileRef[] {
+    return this.db.prepare("SELECT id, conversation_id, tenant_id, member_id, path, name, mime_type, byte_size, mtime_ms, created_at FROM local_file_ref WHERE conversation_id = ? AND tenant_id = ? AND member_id = ? ORDER BY created_at ASC, id ASC").all(conversationId, tenantId, memberId) as unknown as LocalFileRef[];
+  }
+
   deleteConversationLocalFiles(conversationId: string, tenantId: string, memberId: string): void {
+    this.db.prepare("DELETE FROM local_file_ref WHERE conversation_id = ? AND tenant_id = ? AND member_id = ?").run(conversationId, tenantId, memberId);
     const rows = this.db.prepare("SELECT storage_path FROM local_file WHERE conversation_id = ? AND tenant_id = ? AND member_id = ?").all(conversationId, tenantId, memberId) as { storage_path: string }[];
     const paths = rows.map((row) => this.managedFilePath(row.storage_path));
     this.db.prepare("DELETE FROM local_file WHERE conversation_id = ? AND tenant_id = ? AND member_id = ?").run(conversationId, tenantId, memberId);

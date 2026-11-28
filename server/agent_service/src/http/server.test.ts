@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { readdirSync } from "node:fs";
+import { mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
 import { AgentHttpServer } from "./server.js";
 import { HttpManagerClient, ManagerTimeoutError, type ManagerClient } from "../manager-client.js";
 import { createFixture } from "../test-fixture.js";
@@ -487,6 +488,100 @@ test("Agent prompt resolves only owned image attachment IDs into Pi", async () =
   }
 });
 
+test("Agent prompt attaches files by path: no size limit, no path in the model input, read on demand", async () => {
+  const fixture = await createFixture();
+  fixture.store.replaceProjections([{ employee_id: "employee-1", tenant_id: "tenant-1", version: "1", handle: "helper", display_name: "Helper", revoked: false, synced_at: new Date().toISOString(), model_policy: { model: "test" } }], [], [{ employee_id: "employee-1", tenant_id: "tenant-1", version: "1", snapshot_version: "snapshot-1", display_name: "Helper", tool_policy: { allowed_tools: [] } }]);
+  fixture.store.updateConversation("c1", { entryEmployeeId: "employee-1" });
+  const http = new AgentHttpServer({ host: fixture.host, store: fixture.store, authenticate: () => ({ callerId: "member-1", userId: "member-1", tenantId: "tenant-1", roles: ["member"] }) });
+  await http.listen(0);
+  const address = http.server.address();
+  assert(address && typeof address === "object");
+  const base = `http://127.0.0.1:${address.port}`;
+  const dir = mkdtempSync(join(tmpdir(), "attach-by-path-"));
+  const big = join(dir, "big-notes.md");
+  // 6 MiB: larger than the 5 MiB upload limit.
+  const body = `${"第一段".repeat(10)}\n${"x".repeat(6 * 1024 * 1024)}\nTAIL-MARKER`;
+  writeFileSync(big, body);
+  const photo = join(dir, "photo.png");
+  writeFileSync(photo, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  const send = (key: string, payload: unknown) => fetch(`${base}/api/agent/conversations/c1/prompt`, { method: "POST", headers: { Authorization: "Bearer test", "Content-Type": "application/json", "Idempotency-Key": key }, body: JSON.stringify(payload) });
+  try {
+    let firstInput: { text: string; images: number; tools: string[] } | undefined;
+    let toolText = "";
+    fixture.faux.setResponses([
+      (context) => {
+        const user = context.messages.at(-1) as { content: Array<{ type: string; text?: string }> };
+        firstInput = { text: user.content.filter((part) => part.type === "text").map((part) => part.text).join(""), images: user.content.filter((part) => part.type === "image").length, tools: (context.tools ?? []).map((tool) => tool.name) };
+        const id = /- (ref-[^：]+)：big-notes\.md/u.exec(firstInput.text)?.[1] ?? "missing";
+        return fauxAssistantMessage(fauxToolCall("attachment_read", { attachment: id, offset: 0, limit: 30 }), { stopReason: "toolUse" });
+      },
+      (context) => {
+        const result = context.messages.at(-1) as { content: Array<{ type: string; text?: string }> };
+        toolText = result.content.map((part) => part.text ?? "").join("");
+        return fauxAssistantMessage("ok");
+      },
+    ]);
+    const prompt = await send("by-path", { text: "看看这两个文件", attachment_paths: [{ path: big }, { path: photo, name: "截图.png" }, { path: big }] });
+    assert.equal(prompt.status, 202, await prompt.clone().text());
+    await waitForEntries(`${base}/api/agent/conversations/c1/entries`, "Bearer test");
+    for (let i = 0; i < 100 && !toolText; i += 1) await new Promise((resolve) => setTimeout(resolve, 20));
+    assert(firstInput);
+    assert.match(firstInput.text, /\[用户附件，可用 attachment_read 工具按编号读取\]/u);
+    assert.match(firstInput.text, /big-notes\.md（文本，6\.0 MB）/u);
+    assert.equal(firstInput.text.match(/big-notes\.md（/gu)?.length, 1, "the same file sent twice is listed once");
+    assert.match(firstInput.text, /截图\.png（图片，8 B，已随消息附上）/u);
+    assert.equal(firstInput.text.includes(dir), false, "absolute paths never reach the model");
+    assert.equal(firstInput.images, 1, "small images still go with the message");
+    assert(firstInput.tools.includes("attachment_read"), "every employee can read attachments");
+    assert.match(toolText, /^第一段第一段/u);
+    assert.match(toolText, /继续读取请传 offset=30/u);
+    assert.equal(fixture.store.listOwnedLocalFileRefs("c1", "tenant-1", "member-1").length, 2);
+    // Another member's conversation sees none of them.
+    assert.equal(fixture.store.listOwnedLocalFileRefs("c1", "tenant-1", "member-2").length, 0);
+
+    // Same name, two different files: the client opens each by its own ref ID, so they cannot be confused.
+    const otherDir = mkdtempSync(join(tmpdir(), "attach-same-name-"));
+    const sameName = join(otherDir, "big-notes.md");
+    writeFileSync(sameName, "another file that happens to share the name");
+    const second = await send("same-name", { text: "再看一份", attachment_paths: [{ path: sameName }] });
+    assert.equal(second.status, 202, await second.clone().text());
+    const refsResponse = await fetch(`${base}/api/agent/conversations/c1/attachment-refs`, { headers: { Authorization: "Bearer test" } });
+    assert.equal(refsResponse.status, 200);
+    const refs = (await refsResponse.json() as { data: Array<{ id: string; name: string; path: string; mime_type: string; byte_size: number }> }).data;
+    const sameNamed = refs.filter((ref) => ref.name === "big-notes.md");
+    assert.equal(sameNamed.length, 2, "both files are listed, each with its own ref ID");
+    assert.notEqual(sameNamed[0].id, sameNamed[1].id);
+    // 落库的是 realpath（符号链接已解开，macOS 上 /var → /private/var）。
+    assert.deepEqual(new Set(sameNamed.map((ref) => ref.path)), new Set([realpathSync(big), realpathSync(sameName)]), "each ref keeps its own location");
+    assert(refs.every((ref) => ref.id.startsWith("ref-")));
+    const otherConversation = await fetch(`${base}/api/agent/conversations/c2/attachment-refs`, { headers: { Authorization: "Bearer test" } });
+    assert.equal(otherConversation.status, 404, "a conversation the caller does not own returns 404");
+    rmSync(otherDir, { recursive: true, force: true });
+
+    const missing = await send("missing-path", { text: "x", attachment_paths: [{ path: join(dir, "gone.pdf") }] });
+    assert.equal(missing.status, 422);
+    assert.equal((await missing.json() as { code: string }).code, "attachment_not_found");
+    // A rejected file is not recorded under the key: once the user puts it back, the same retry goes through.
+    const restored = join(dir, "restored.md");
+    const firstTry = await send("restored-path", { text: "x", attachment_paths: [{ path: restored }] });
+    assert.equal(firstTry.status, 422);
+    assert.match((await firstTry.json() as { detail: string }).detail, /restored\.md/u, "the reason names the file");
+    writeFileSync(restored, "back again");
+    const retried = await send("restored-path", { text: "x", attachment_paths: [{ path: restored }] });
+    assert.equal(retried.status, 202, await retried.clone().text());
+    const folder = await send("folder-path", { text: "x", attachment_paths: [{ path: dir }] });
+    assert.equal((await folder.json() as { code: string }).code, "attachment_not_a_file");
+    const relative = await send("relative-path", { text: "x", attachment_paths: [{ path: "notes.md" }] });
+    assert.equal(relative.status, 422);
+    const tooMany = await send("too-many", { text: "x", attachment_paths: Array.from({ length: 9 }, () => ({ path: big })) });
+    assert.equal(tooMany.status, 422);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    await http.close();
+    await fixture.close();
+  }
+});
+
 test("Agent context HUD is authenticated and thinking changes apply to later prompts without sending non-images to Pi", async () => {
   const fixture = await createFixture();
   const reasoning = fauxProvider({
@@ -530,7 +625,10 @@ test("Agent context HUD is authenticated and thinking changes apply to later pro
     assert.equal((await changed.json() as { data: { thinking_level: string } }).data.thinking_level, "high");
 
     reasoning.setResponses([(context) => {
-      assert.equal(JSON.stringify(context.messages).includes('"type":"image"'), false);
+      const sent = JSON.stringify(context.messages);
+      assert.equal(sent.includes('"type":"image"'), false);
+      assert.match(sent, /local notes/u, "uploaded text still reaches the model with the message");
+      assert.ok(sent.includes(`- ${attachmentId}：notes.md（文本，11 B，已随消息附上）`), "uploaded files are listed so clients can show cards");
       return fauxAssistantMessage("ok");
     }]);
     const prompt = await fetch(`${base}/api/agent/conversations/c1/prompt`, {
@@ -750,8 +848,9 @@ test("Agent OpenAPI gives every frontend operation structured parameters, respon
     //       + MCP 鉴权 8 个（登录进度/取消/回调/探测/添加 MCP/重新登录/更新令牌/清除凭据）
     //      + 自动安装授权列出与撤销两个接口（设计 §11.3）+ 重新打开 MCP 登录页 + 添加个人技能
     //      + 导入自定义技能（设计 2026-11-18 §3）+ 能力授权列出与撤销（2026-11-19 §3.2）
-    //      + 「从企业拿」MCP 列表与一键安装（2026-11-20 §4.4b）。
-    assert.equal(frontendOperations.length, 106);
+    //      + 「从企业拿」MCP 列表与一键安装（2026-11-20 §4.4b）
+    //      + 会话附件引用列表（历史消息按 ref ID 定位本机文件）。
+    assert.equal(frontendOperations.length, 107);
     for (const { path, method, operation } of frontendOperations) {
       const label = `${method.toUpperCase()} ${path}`;
       assert(operation.summary, `${label} missing summary`);

@@ -1,4 +1,4 @@
-// 「粘贴后发送键变灰」的真实剪贴板冒烟：单聊 textarea 与群聊 contentEditable 各一次。
+// 「粘贴后发送键变灰」的真实剪贴板冒烟：单聊与群聊（同一个 MentionInput，单聊不传成员）各一次。
 //
 // 与 chat-paste-browser-smoke.mjs 的区别：
 //  - 前者派发合成 ClipboardEvent（只走组件 onPaste 处理器）；
@@ -108,11 +108,11 @@ async function run(mode, selector, screenshot) {
   return { before, after }
 }
 
-const single = await run('single', 'textarea', 'single-chat')
-assert.equal(single.before.hasTextarea, true, '单聊应为受控 textarea')
-assert.equal(single.before.hasEditable, false, '单聊不应出现 contentEditable')
+const single = await run('single', '[contenteditable="true"]', 'single-chat')
+assert.equal(single.before.hasTextarea, false, '单聊不应再渲染 textarea（与群聊共用 MentionInput）')
+assert.equal(single.before.hasEditable, true, '单聊应为 contentEditable')
 assert.equal(single.after.sendDisabled, false, '单聊：真实粘贴后发送键应可用')
-assert.ok((single.after.text ?? '').includes('第一行') && (single.after.text ?? '').includes('第二行'), `单聊 textarea 应包含粘贴内容，实际：${single.after.text}`)
+assert.ok((single.after.text ?? '').includes('第一行') && (single.after.text ?? '').includes('第二行'), `单聊输入框应包含粘贴内容，实际：${single.after.text}`)
 
 const group = await run('group', '[contenteditable="true"]', 'group-chat')
 assert.equal(group.before.hasEditable, true, '群聊应为 contentEditable')

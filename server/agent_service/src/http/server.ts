@@ -23,12 +23,13 @@ import swaggerUi from "@fastify/swagger-ui";
 import { Type } from "typebox";
 import { ConversationBusyError, EventCursorStaleError, InvalidEventCursorError, type PiEventEnvelope, SessionHost } from "../pi/session-host.js";
 import type { ImageContent } from "@earendil-works/pi-ai";
-import { avatarCacheKey, IdempotencyConflictError, IdempotencyUnknownError, type AgentSqliteStore, type ConversationMetadata as StoredConversationMetadata, type IdempotencyReceipt } from "../storage/sqlite.js";
+import { avatarCacheKey, IdempotencyConflictError, IdempotencyUnknownError, type AgentSqliteStore, type LocalFileRef, type ConversationMetadata as StoredConversationMetadata, type IdempotencyReceipt } from "../storage/sqlite.js";
 import { JwtClockError, type AuthenticatedCaller, type AuthenticateRequest } from "./auth.js";
 import { AgentUpgradeRequiredError, ManagerAuthError, ManagerAuthorizationError, ManagerPolicyDeniedError, ManagerUnavailableError, ManagerValidationError, normalizeAuthorizedConfig, type ManagerAvatar, type ManagerClient, type MarketplaceTemplate } from "../manager-client.js";
 import { SessionAuthorizationError, type PromptDeliveryOptions } from "../pi/session-host.js";
 import { serializePiEntry, serializePiEvent } from "../pi/event-sse.js";
 import { materializeAttachments } from "../pi/attachment-tool.js";
+import { AttachmentPathError, attachmentManifest, loadInlineImage, MAX_PROMPT_ATTACHMENTS, parseAttachmentPaths, resolveAttachmentPath, type AttachmentPathInput, type ResolvedAttachmentPath, type UploadedAttachmentEntry } from "../pi/attachment-refs.js";
 import { visibleHistoryText } from "../pi/session-history.js";
 import { InvalidReadCursorError } from "../storage/read-cursor.js";
 import { ConversationReadError, ConversationReadService, readPageLimit, validateReadQuery } from "../services/conversation-reads.js";
@@ -779,6 +780,10 @@ const PromptRequest = Type.Object({
   text: Type.String({ minLength: 1, maxLength: 200_000, description: "提交给当前员工的文本提示。" }),
   images: Type.Optional(Type.Array(Type.Ref("PromptImage"), { maxItems: MAX_PROMPT_IMAGES, description: "最多 8 张内联图片；单张解码后不超过 5 MiB，总大小不超过 20 MiB。" })),
   attachment_ids: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 256, description: "本地附件 ID；只有图片附件会作为 Pi 图片输入，其余文件保持本地元数据。" }), { maxItems: MAX_PROMPT_IMAGES, uniqueItems: true, description: "已上传本地附件 ID；最多 8 个且不能重复。" })),
+  attachment_paths: Type.Optional(Type.Array(Type.Object({
+    path: Type.String({ minLength: 1, maxLength: 4096, description: "本机文件的绝对路径；必须是普通文件（会先解析符号链接）。只在 Agent 本地使用，不写进模型上下文。" }),
+    name: Type.Optional(Type.String({ minLength: 1, maxLength: 255, pattern: "^[^\\x00-\\x1F\\x7F/\\\\]+$", description: "展示用文件名；缺省取路径的文件名。" })),
+  }, { additionalProperties: false, description: "按路径引用的附件。" }), { maxItems: MAX_PROMPT_IMAGES, description: "桌面端按路径引用的附件；不上传字节、不限大小。与 attachment_ids 合计最多 8 个。5 MiB 以内的图片随消息作为图片输入，其余文件由员工用 attachment_read 工具按需分段读取。" })),
   mentions: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 128, description: "被 @提及的员工句柄；仅群聊允许。" }), { maxItems: 16, description: "群聊中的员工提及；最多 16 个。重复句柄会合并。" })),
 }, { $id: "PromptRequest", additionalProperties: false, description: "向本地会话提交提示的请求。" });
 const PromptAccepted = Type.Object({ conversation_id: Type.String({ minLength: 1, description: "会话 ID。" }), accepted: Type.Boolean({ const: true, description: "是否已接受执行；成功响应固定为 true。" }), state: Type.Union([Type.Literal("accepted", { description: "本次请求已接收，后台执行尚未完成。" }), Type.Literal("completed", { description: "相同 Idempotency-Key 已完成，返回幂等收据。" })], { description: "幂等收据状态。" }), idempotency_key: Type.String({ minLength: 1, maxLength: 256, description: "本次请求使用的幂等键。" }) }, { $id: "PromptAccepted", description: "提示提交收据；202 表示已接收或幂等重放。" });
@@ -804,6 +809,15 @@ const LocalFileMetadata = Type.Object({
 const LocalFileEnvelope = Type.Object({ data: Type.Ref("LocalFileMetadata") }, { $id: "LocalFileEnvelope", description: "单个本地文件响应。" });
 const Page = Type.Object({ next_cursor: Type.Union([Type.String({ minLength: 1, description: "下一页游标。" }), Type.Null()], { description: "下一页游标；无下一页时为 null。" }), has_more: Type.Boolean({ description: "是否还有更多。" }) }, { $id: "Page", description: "分页信息；当前文件、授权和市场列表返回 null 游标表示一次性结果。" });
 const LocalFileListEnvelope = Type.Object({ data: Type.Array(Type.Ref("LocalFileMetadata"), { description: "文件元数据列表。" }), page: Type.Ref("Page") }, { $id: "LocalFileListEnvelope", description: "本地文件列表响应。" });
+const AttachmentRef = Type.Object({
+  id: Type.String({ minLength: 1, description: "附件引用 ID（ref-…）；与员工清单里看到的编号一致。" }),
+  name: Type.String({ minLength: 1, maxLength: 255, description: "附件文件名。" }),
+  mime_type: Type.String({ minLength: 1, description: "按扩展名推断的 MIME 类型。" }),
+  byte_size: Type.Integer({ minimum: 0, description: "登记时的文件字节数。" }),
+  path: Type.String({ minLength: 1, description: "附件在本机的绝对路径；本机接口，路径不出本机。" }),
+  created_at: Type.String({ format: "date-time", description: "首次登记时间（ISO 8601 UTC）。" }),
+}, { $id: "AttachmentRef", additionalProperties: false, description: "按路径引用的会话附件；内容不复制，只记位置。" });
+const AttachmentRefListEnvelope = Type.Object({ data: Type.Array(Type.Ref("AttachmentRef"), { description: "按登记时间正序的附件引用。" }) }, { $id: "AttachmentRefListEnvelope", description: "当前成员该会话的附件引用列表。" });
 const LocalFileDeleteEnvelope = Type.Object({ data: Type.Object({ deleted: Type.Boolean({ const: true, description: "是否删除成功；成功响应固定为 true。" }), id: Type.String({ minLength: 1, description: "删除的文件 ID。" }) }, { additionalProperties: false }) }, { $id: "LocalFileDeleteEnvelope", description: "本地文件删除结果。" });
 const MarketplaceOutputType = Type.Union([Type.Literal("document"), Type.Literal("spreadsheet"), Type.Literal("code"), Type.Literal("presentation"), Type.Literal("system_operation")], { $id: "MarketplaceOutputType", description: "交付物类型。" });
 const MarketplaceTemplate = Type.Object({
@@ -885,7 +899,7 @@ const ProblemSchema = Type.Object({ type: Type.String({ description: "错误类�
 const LOCAL_FILE_DOWNLOAD_CONTENT = Object.fromEntries([...ALLOWED_FILE_MIMES].map((mime) => [mime, { schema: { type: "string", format: "binary", description: `${mime} 文件内容。` } }]));
 const AVATAR_DOWNLOAD_CONTENT = { "image/webp": { schema: { type: "string", format: "binary", description: "静态 WebP 头像内容。" } } };
 const AvatarVersionQuery = Type.Object({ v: Type.Optional(Type.String({ pattern: "^[0-9]{1,10}$", description: "头像版本；只用于让浏览器缓存随版本失效，服务端以本机投影/Manager 为准。" })) }, { additionalProperties: false });
-const OPENAPI_SCHEMAS = [ConversationFailureOut, CustomGroupCreateRequest, GroupOrchestration, GroupOrchestrationUpdateRequest, GroupMembersUpdateRequest, GroupMembersUpdateEnvelope,...WORK_RECORD_SCHEMAS, ...CONVERSATION_READ_SCHEMAS, ...CONVERSATION_WORKSPACE_SCHEMAS, ConversationSchedule, ConversationScheduleInput, ResolveTenantRequest, AgentLoginRequest, AgentResetPasswordRequest, ConversationMetadata, ConversationCreateRequest, ConversationUpdateRequest, ConversationStateUpdateRequest, ConversationProjectFolderRequest, ConversationState, ConversationEnvelope, ConversationListEnvelope, ConversationStateOut, ConversationStateEnvelope, ThinkingLevel, ConversationContextOut, ConversationContextEnvelope, ConversationThinkingLevelRequest, ContextResetMemoryReason, ConversationContextResetRequest, ConversationContextResetParticipantOut, ConversationContextResetOut, ConversationContextResetEnvelope, GrantSyncRequest, UsageFlushRequest, ConversationDeleteEnvelope, ConversationContentPart, ConversationMessage, ConversationEntry, ConversationEntriesEnvelope, BoundedJsonValue, PiSseToolCall, PiSseAssistantMessageEvent, PiSseEventData, PiSseReconciliation, AbortEnvelope, AuthClaims, AuthResult, AuthResultEnvelope, TenantResolution, TenantResolutionEnvelope, PingEnvelope, ClaimsEnvelope, ModelPolicy, SkillSigningKeyMetadata, ExpertProjection, SolutionProjection, SnapshotProjection, ExpertListEnvelope, SolutionListEnvelope, LocalCapability, LocalCapabilityListEnvelope, InstallableSkillOut, InstallableSkillListEnvelope, CapabilityAutoInstall, CapabilityAutoInstallListEnvelope, LocalCapabilityDeleteEnvelope, McpLoginOut, McpLoginEnvelope, McpLoginStartEnvelope, McpLoginCancelEnvelope, McpProbeRequest, McpProbeOut, McpProbeEnvelope, McpInstallRequest, McpInstallEnvelope, CatalogMcpOut, CatalogMcpListEnvelope, CatalogMcpInstallRequest, McpTokenRequest, McpTokenEnvelope, SkillInstallRequest, SkillInstallEnvelope, CustomSkillImportRequest, CustomSkillPreviewOut, CustomSkillScanItem, CustomSkillInstallResultItem, CustomSkillClawHubCandidate, CustomSkillClawHubSecurity, CustomSkillClawHubPreview, CustomSkillImportEnvelope, LocalSkillPathEnvelope, SnapshotListEnvelope, ReadinessState, SkillReadiness, CapabilityReadiness, ExpertReadiness, ReadinessEnvelope, ExpertReadinessEnvelope, GrantSyncEnvelope, UsageFlushEnvelope, OrgTreeNode, OrgTreeEnvelope, OrgDepartmentCreateRequest, OrgDepartmentUpdateRequest, OrgDepartmentPromoteRequest, OrgDepartmentEnvelope, OrgDepartmentDeleteEnvelope, OrgAssignmentRequest, OrgAssignmentEnvelope, OfficeSceneEnvelope, OfficeFeedEnvelope, GoneEnvelope, PromptImage, PromptRequest, PromptAccepted, PromptAcceptedEnvelope, LocalFileUpload, AudioTranscriptionRequest, AudioTranscriptionResponse, AudioTranscriptionEnvelope, LocalFileMetadata, LocalFileEnvelope, Page, LocalFileListEnvelope, LocalFileDeleteEnvelope, MarketplaceOutputType, MarketplaceTemplate, MarketplaceTemplateEnvelope, MarketplaceTemplateListEnvelope, UsageSummary, UsageOutboxItem, UsageOutboxListEnvelope, ApprovalRecordSchema, ApprovalListEnvelope, ApprovalEnvelope, ApprovalDecisionRequest, ProblemSchema] as const;
+const OPENAPI_SCHEMAS = [ConversationFailureOut, CustomGroupCreateRequest, GroupOrchestration, GroupOrchestrationUpdateRequest, GroupMembersUpdateRequest, GroupMembersUpdateEnvelope,...WORK_RECORD_SCHEMAS, ...CONVERSATION_READ_SCHEMAS, ...CONVERSATION_WORKSPACE_SCHEMAS, ConversationSchedule, ConversationScheduleInput, ResolveTenantRequest, AgentLoginRequest, AgentResetPasswordRequest, ConversationMetadata, ConversationCreateRequest, ConversationUpdateRequest, ConversationStateUpdateRequest, ConversationProjectFolderRequest, ConversationState, ConversationEnvelope, ConversationListEnvelope, ConversationStateOut, ConversationStateEnvelope, ThinkingLevel, ConversationContextOut, ConversationContextEnvelope, ConversationThinkingLevelRequest, ContextResetMemoryReason, ConversationContextResetRequest, ConversationContextResetParticipantOut, ConversationContextResetOut, ConversationContextResetEnvelope, GrantSyncRequest, UsageFlushRequest, ConversationDeleteEnvelope, ConversationContentPart, ConversationMessage, ConversationEntry, ConversationEntriesEnvelope, BoundedJsonValue, PiSseToolCall, PiSseAssistantMessageEvent, PiSseEventData, PiSseReconciliation, AbortEnvelope, AuthClaims, AuthResult, AuthResultEnvelope, TenantResolution, TenantResolutionEnvelope, PingEnvelope, ClaimsEnvelope, ModelPolicy, SkillSigningKeyMetadata, ExpertProjection, SolutionProjection, SnapshotProjection, ExpertListEnvelope, SolutionListEnvelope, LocalCapability, LocalCapabilityListEnvelope, InstallableSkillOut, InstallableSkillListEnvelope, CapabilityAutoInstall, CapabilityAutoInstallListEnvelope, LocalCapabilityDeleteEnvelope, McpLoginOut, McpLoginEnvelope, McpLoginStartEnvelope, McpLoginCancelEnvelope, McpProbeRequest, McpProbeOut, McpProbeEnvelope, McpInstallRequest, McpInstallEnvelope, CatalogMcpOut, CatalogMcpListEnvelope, CatalogMcpInstallRequest, McpTokenRequest, McpTokenEnvelope, SkillInstallRequest, SkillInstallEnvelope, CustomSkillImportRequest, CustomSkillPreviewOut, CustomSkillScanItem, CustomSkillInstallResultItem, CustomSkillClawHubCandidate, CustomSkillClawHubSecurity, CustomSkillClawHubPreview, CustomSkillImportEnvelope, LocalSkillPathEnvelope, SnapshotListEnvelope, ReadinessState, SkillReadiness, CapabilityReadiness, ExpertReadiness, ReadinessEnvelope, ExpertReadinessEnvelope, GrantSyncEnvelope, UsageFlushEnvelope, OrgTreeNode, OrgTreeEnvelope, OrgDepartmentCreateRequest, OrgDepartmentUpdateRequest, OrgDepartmentPromoteRequest, OrgDepartmentEnvelope, OrgDepartmentDeleteEnvelope, OrgAssignmentRequest, OrgAssignmentEnvelope, OfficeSceneEnvelope, OfficeFeedEnvelope, GoneEnvelope, PromptImage, PromptRequest, PromptAccepted, PromptAcceptedEnvelope, LocalFileUpload, AudioTranscriptionRequest, AudioTranscriptionResponse, AudioTranscriptionEnvelope, LocalFileMetadata, LocalFileEnvelope, Page, LocalFileListEnvelope, LocalFileDeleteEnvelope, AttachmentRef, AttachmentRefListEnvelope, MarketplaceOutputType, MarketplaceTemplate, MarketplaceTemplateEnvelope, MarketplaceTemplateListEnvelope, UsageSummary, UsageOutboxItem, UsageOutboxListEnvelope, ApprovalRecordSchema, ApprovalListEnvelope, ApprovalEnvelope, ApprovalDecisionRequest, ProblemSchema] as const;
 
 const GLOBAL_ACTIVITY_STREAM_EXAMPLES = {
   promptStarted: {
@@ -1044,6 +1058,10 @@ const OPENAPI_OPERATION_DOCS: Record<string, OpenApiOperationDocs> = {
   ...CONVERSATION_READ_DOCS,
   ...CONVERSATION_WORKSPACE_DOCS,
   ...WORK_RECORD_DOCS,
+  listConversationAttachmentRefs: { responses: { "200": { description: "按路径引用的附件及其本机位置；同名的两个文件各自一个 ref ID。", examples: { refs: { summary: "两个同名不同文件", value: { data: [
+    { id: "ref-1a2b", name: "报价.pdf", mime_type: "application/pdf", byte_size: 12_582_912, path: "/Users/me/a/报价.pdf", created_at: "2026-11-27T02:00:00.000Z" },
+    { id: "ref-3c4d", name: "报价.pdf", mime_type: "application/pdf", byte_size: 2048, path: "/Users/me/b/报价.pdf", created_at: "2026-11-27T03:00:00.000Z" },
+  ] } } } } } },
   healthz: { responses: { "200": { description: "Agent 存活时返回就绪状态。", examples: { ok: { summary: "存活", value: { data: { status: "ok" } } } } } } },
   metrics: { responses: { "200": { description: "Prometheus 文本指标。", examples: { metrics: { summary: "指标文本", value: "# TYPE aiteam_agent_http_requests_total counter\\naiteam_agent_http_requests_total 12\\n" } } } } },
   readyz: { responses: {
@@ -1667,6 +1685,12 @@ export class AgentHttpServer {
     this.registerRoute("GET", "/api/agent/conversations/:conversation_id/participants", (_request, response, caller, fastifyRequest) => {
       this.writeJson(response, 200, this.conversationReads.participants((fastifyRequest?.params as { conversation_id: string }).conversation_id, caller!));
     }, routeSchema("listConversationParticipants", { summary: "读取真实会话成员", description: "仅返回已存在的固定 participant Session 索引成员，不回退到授权全集；撤权成员仍可见但不可执行，不返回本机路径。", params: ConversationParams, response: { 200: jsonResponse(Type.Ref("ConversationParticipantsEnvelope")), 404: problemResponse("NotFound") } }));
+    this.registerRoute("GET", "/api/agent/conversations/:conversation_id/attachment-refs", (_request, response, caller, fastifyRequest) => {
+      const conversationId = String((fastifyRequest?.params as { conversation_id: string }).conversation_id);
+      this.requireOwnedConversation(conversationId, caller!);
+      const refs = this.options.store.listOwnedLocalFileRefs(conversationId, caller!.tenantId!, caller!.userId ?? caller!.callerId);
+      this.writeJson(response, 200, { data: refs.map((ref) => ({ id: ref.id, name: ref.name, mime_type: ref.mime_type, byte_size: ref.byte_size, path: ref.path, created_at: ref.created_at })) });
+    }, routeSchema("listConversationAttachmentRefs", { summary: "列出会话的附件引用", description: "按路径引用的附件清单；客户端按 ref ID 定位历史消息里的附件，不再按文件名猜。本机接口，路径不跳出本机；只返回当前成员自己的会话。", params: ConversationParams, response: { 200: jsonResponse(Type.Ref("AttachmentRefListEnvelope")), 404: problemResponse("NotFound") } }));
     this.registerRoute("PATCH", "/api/agent/conversations/:conversation_id/participants", (request, response, caller, fastifyRequest) => this.updateGroupParticipants(request, response, (fastifyRequest?.params as { conversation_id: string }).conversation_id, caller!), routeSchema("updateConversationParticipants", {
       summary: "增减自选成员群/自由群成员", description: "在两轮对话之间原子地加入或移出自选成员群或自由群的成员，可同时提交新的群简介；自选成员群还可同时提交编排，自由群没有编排规则。方案群成员由方案固定，不可修改。成员、简介和编排按合并后的结果统一校验：协调人不能移出，自定义规则不能引用已不在群内的成员（需在同一请求里一并改写规则）。移出的成员保留其历史发言，重新加入后沿用原 Session；新成员在首次被调用时才创建 Session。会话正在执行时返回 409。",
       params: ConversationParams, body: Type.Ref("GroupMembersUpdateRequest"), response: { 200: jsonResponse(Type.Ref("GroupMembersUpdateEnvelope")), 403: problemResponse("Forbidden"), 404: problemResponse("NotFound"), 409: problemResponse("Conflict"), 422: problemResponse("ValidationError") },
@@ -3058,12 +3082,32 @@ export class AgentHttpServer {
     const images = this.validateInlineImages(payload.images);
     const attachmentIds = payload.attachment_ids === undefined ? [] : this.stringArray(payload.attachment_ids, "attachment_ids", MAX_PROMPT_IMAGES);
     if (new Set(attachmentIds).size !== attachmentIds.length) throw new HttpProblem(422, "invalid_attachment_ids", "attachment_ids must not contain duplicates");
+    let attachmentPaths: AttachmentPathInput[];
+    try {
+      attachmentPaths = parseAttachmentPaths(payload.attachment_paths);
+    } catch (error) {
+      if (error instanceof AttachmentPathError) throw new HttpProblem(422, error.code, error.message);
+      throw error;
+    }
+    if (attachmentIds.length + attachmentPaths.length > MAX_PROMPT_ATTACHMENTS) throw new HttpProblem(422, "too_many_attachments", `A prompt may reference at most ${MAX_PROMPT_ATTACHMENTS} attachments`);
     const mentions = payload.mentions === undefined ? [] : this.stringArray(payload.mentions, "mentions", 16);
     if (mentions.length > 0 && conversation.kind !== "group") throw new HttpProblem(422, "invalid_mentions", "mentions are only supported for group conversations");
     this.assertProjectAvailable(conversation);
     this.assertRunnableTargets(caller, this.resolvePromptTargets(conversation, caller, mentions));
     // Fingerprint IDs, not mutable attachment bytes, so completed/accepted retries can return their receipt.
-    const fingerprint = createHash("sha256").update(JSON.stringify({ text, images, attachment_ids: attachmentIds, mentions })).digest("hex");
+    // Check attached paths before reserving a new key: a rejected file (moved, credential folder, hard link) is the
+    // client's to fix, and recording it under the key would turn the key unknown, so the same retry would keep
+    // failing after the user fixed the file. A key that already has a receipt replays it and never reads the files.
+    let resolvedPaths: ResolvedAttachmentPath[] = [];
+    try {
+      if (attachmentPaths.length > 0 && !this.options.store.getPromptReceipt(conversationId, callerId, key)) {
+        resolvedPaths = attachmentPaths.map(resolveAttachmentPath);
+      }
+    } catch (error) {
+      if (error instanceof AttachmentPathError) throw new HttpProblem(422, error.code, error.message);
+      throw error;
+    }
+    const fingerprint = createHash("sha256").update(JSON.stringify({ text, images, attachment_ids: attachmentIds, ...(attachmentPaths.length > 0 ? { attachment_paths: attachmentPaths } : {}), mentions })).digest("hex");
     const receipt = this.options.store.reservePrompt({ conversationId, callerId, key, fingerprint });
     if (!receipt.isNew) return this.writeReceipt(response, conversationId, key, receipt.state);
 
@@ -3082,12 +3126,14 @@ export class AgentHttpServer {
           throw new HttpProblem(422, "attachment_not_supported", error instanceof Error ? error.message : "Attachment cannot be used as model input");
         }
       }
+      const uploadedEntries: UploadedAttachmentEntry[] = [];
       const loadedImages: ImageContent[] = [];
       let decodedImageBytes = images.reduce((total, image) => total + Buffer.byteLength(image.data, "base64"), 0);
       for (const attachmentId of attachmentIds) {
         const metadata = this.options.store.getOwnedLocalFile(attachmentId, conversationId, caller.tenantId!, caller.userId ?? caller.callerId);
         if (!metadata) throw new HttpProblem(404, "attachment_not_found", "Attachment not found");
         if (metadata.kind !== "attachment") throw new HttpProblem(422, "invalid_attachment", "Only conversation attachments can be referenced by a prompt");
+        uploadedEntries.push({ id: metadata.id, filename: metadata.filename, mime_type: metadata.mime_type, byte_size: metadata.byte_size });
         // Non-image attachments remain local metadata. Never load their bytes into
         // the Pi image content array; the current Pi prompt contract accepts images only.
         if (!IMAGE_MIMES.has(metadata.mime_type)) continue;
@@ -3098,11 +3144,25 @@ export class AgentHttpServer {
       }
       if (loadedImages.length + images.length > MAX_PROMPT_IMAGES) throw new HttpProblem(422, "invalid_images", "A prompt may contain at most 8 images");
       if (decodedImageBytes > MAX_PROMPT_IMAGE_BYTES) throw new HttpProblem(413, "prompt_images_too_large", "Decoded prompt images exceed 20 MiB");
+      // Files attached by path: stat them now (missing / folder → 422), keep only their location, and hand small
+      // images over with the message as before. Everything else is read on demand through attachment_read.
+      const owner = { conversationId, tenantId: caller.tenantId!, memberId: caller.userId ?? caller.callerId };
+      // The same file sent twice in one message is listed once.
+      const refs: LocalFileRef[] = resolvedPaths.length > 0 ? [...new Map(this.options.store.upsertLocalFileRefs(owner, resolvedPaths).map((ref) => [ref.id, ref])).values()] : [];
+      const inlinedRefs = new Set<string>();
+      for (const ref of refs) {
+        if (loadedImages.length + images.length >= MAX_PROMPT_IMAGES || decodedImageBytes + ref.byte_size > MAX_PROMPT_IMAGE_BYTES) break;
+        const image = loadInlineImage(ref);
+        if (!image) continue;
+        loadedImages.push(image);
+        decodedImageBytes += ref.byte_size;
+        inlinedRefs.add(ref.id);
+      }
       const promptImages = [...images, ...loadedImages];
       const attachmentText = materializedAttachments.length > 0
         ? `\n\n[本地附件材料，仅来自当前会话已绑定文件]\n${materializedAttachments.map((item) => `--- ${item.filename} ---\n${item.extracted.text}`).join("\n")}`
         : "";
-      const worker = this.runPrompt(conversationId, caller, key, receipt.ownerInstance, `${text}${attachmentText}`, promptImages, mentions, attachmentIds);
+      const worker = this.runPrompt(conversationId, caller, key, receipt.ownerInstance, `${text}${attachmentText}${attachmentManifest(refs, inlinedRefs, uploadedEntries)}`, promptImages, mentions, attachmentIds);
       this.promptWorkers.add(worker);
       void worker.finally(() => this.promptWorkers.delete(worker));
       this.writeReceipt(response, conversationId, key, "accepted");

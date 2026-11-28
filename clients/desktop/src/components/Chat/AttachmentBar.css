@@ -17,6 +17,15 @@
   line-height: 1.4;
 }
 
+/* 应用内打不开、已在文件夹里定位：是结果而不是错误。 */
+.att-notice {
+  max-width: 280px;
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
 /* ─── 单附件 ─── */
 
 .att-single {

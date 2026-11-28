@@ -103,7 +103,8 @@ export async function startTalentEmployeeChat(
     conversationId = (await agentApi.createConversation({ entry_employee_id: employee.employee_id })).id
     if (!isActive()) return
   }
-  if (draftMessage?.trim()) useChatStore.getState().setConvDraft(conversationId, draftMessage.trim(), [])
+  // 只带文字过去：该会话里已有的附件不属于本次跳转，不能被清掉。
+  if (draftMessage?.trim()) useChatStore.getState().setConvDraftText(conversationId, draftMessage.trim())
   // introduce：会话为空时由对话页请求员工自我介绍；已有消息时对话页直接跳过。
   navigate('/chat', { state: { employeeId: employee.employee_id, conversationId, profileName: employee.display_name, agentName: employee.display_name, introduce: true, refreshWorkbench: true } })
 }

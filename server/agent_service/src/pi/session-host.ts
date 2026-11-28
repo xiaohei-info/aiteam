@@ -1,4 +1,5 @@
 import { approvedSkillVersion, capabilityInstallTool, capabilitySearchTool, checkCapabilityInstall, connectorTools, personalConnectorTools, type McpCatalog, type McpRuntimeAuth, type SkillInstaller } from "../connectors.js";
+import { ATTACHMENT_READ_TOOL_NAME, createAttachmentRefReadTool } from "./attachment-refs.js";
 import type { McpAuthService } from "../mcp-auth.js";
 import { appLogger, makeRequestContext, requestContext, safeError } from "../observability.js";
 import { orchestrationContext, validateMemberReferences } from "../groups/orchestration.js";
@@ -1398,6 +1399,11 @@ export class SessionHost {
     const installer = owner && !authorization.background ? [capabilityInstallTool(this.options.store, owner, this.skillInstaller(authorization.caller), this.mcpCatalog(authorization.caller), mcpAuth, this.options.customSkillStore)] : [];
     for (const tool of [...connectors, ...personal, ...searcher, ...installer]) allowed.add(tool.name);
     tools.push(...connectors, ...personal, ...searcher, ...installer);
+    // Files the user attached by path are readable by every employee, whatever its other capabilities (attachment-by-path plan §3.4).
+    if (record && owner) {
+      tools.push(createAttachmentRefReadTool(this.options.store, () => ({ conversationId: record.conversationId, ...owner })));
+      allowed.add(ATTACHMENT_READ_TOOL_NAME);
+    }
     const selected = tools.filter((tool, index) => allowed.has(tool.name) && tools.findIndex((candidate) => candidate.name === tool.name) === index) as ToolDefinition[];
     if (!record) return selected;
     return selected.map((tool) => this.withApprovalGate(tool, authorization, record));

@@ -1,6 +1,8 @@
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod agent;
 mod agent_projects;
+mod clipboard_files;
+mod clipboard_images;
 mod diagnostics;
 mod external_links;
 mod file_access;
@@ -66,6 +68,10 @@ pub fn run() {
             secure_session::secure_login_credentials_list,
             files::save_conversation_file,
             files::cache_file,
+            files::cache_file_bytes,
+            files::describe_local_file,
+            clipboard_images::read_clipboard_rtf_images,
+            clipboard_files::read_clipboard_file_paths,
             files::cache_conversation_file,
             files::resolve_cached_file,
             files::show_in_folder,
