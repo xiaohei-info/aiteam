@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>外部审批平台接入 · 方案总览（2026-11-28 改写）</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--ink:#1d2330;--sub:#667085;--line:#e4e7ec;--brand:#3b5bdb;--ok:#12a150;--warn:#d98a00;--bad:#d92d20;
+--d0:#0A0A0F;--d1:#16161D;--d2:#1E1E28;--d3:#252532;--gold:#D4AF37;--gold-soft:rgba(212,175,55,.12);--dt1:#F5F5F7;--dt2:#A0A0A8;--dt3:#6B6B73;--dline:rgba(255,255,255,.08);--dok:#2ECC71;--dwarn:#F39C12;--dbad:#E74C3C}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;font:14px/1.65 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;color:var(--ink);background:var(--bg)}
+nav{position:fixed;top:0;left:0;bottom:0;width:190px;background:#fff;border-right:1px solid var(--line);padding:18px 12px;overflow:auto}
+nav h1{font-size:14px;margin:0 0 14px;color:var(--brand)}
+nav a{display:block;padding:7px 10px;border-radius:6px;color:var(--ink);text-decoration:none;font-size:13px}
+nav a:hover{background:#eef2ff}
+main{margin-left:190px;padding:28px 36px 80px;max-width:1280px}
+section{margin-bottom:46px}
+h2{font-size:21px;margin:0 0 6px}
+h3{font-size:15px;margin:22px 0 8px}
+p{margin:6px 0}
+.lead{color:var(--sub);margin-bottom:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:10px 0}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+table{border-collapse:collapse;width:100%;background:#fff;border:1px solid var(--line);border-radius:8px;overflow:hidden;font-size:13px}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{background:#f9fafb;font-weight:600;color:#344054}
+tr:last-child td{border-bottom:0}
+.tag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;background:#eef2ff;color:var(--brand)}
+.tag.ok{background:#e6f6ec;color:var(--ok)}.tag.bad{background:#fdeceb;color:var(--bad)}.tag.gray{background:#f2f4f7;color:var(--sub)}
+.callout{border-left:4px solid var(--warn);background:#fffaf0;padding:10px 14px;border-radius:0 8px 8px 0;margin:12px 0}
+.callout.green{border-color:var(--ok);background:#f3fbf6}
+.flow{display:flex;align-items:stretch;flex-wrap:wrap;margin:10px 0}
+.flow .s{background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px 10px;min-width:118px;font-size:12px;flex:1}
+.flow .s b{display:block;font-size:12.5px}
+.flow .a{align-self:center;padding:0 6px;color:var(--sub);font-size:18px}
+/* dark product mock */
+.app{background:var(--d0);color:var(--dt1);border-radius:12px;overflow:hidden;border:1px solid #2a2a35;font-size:12.5px;display:grid;grid-template-columns:56px 250px 1fr;min-height:520px}
+.app .rail{background:var(--d1);border-right:1px solid var(--dline);padding:12px 0;display:flex;flex-direction:column;align-items:center;gap:10px}
+.app .rail i{width:30px;height:30px;border-radius:8px;background:var(--d3);display:block}
+.app .rail i.on{background:var(--gold-soft);outline:1px solid rgba(212,175,55,.4)}
+.app .list{background:var(--d1);border-right:1px solid var(--dline);padding:10px 8px}
+.app .list .it{display:flex;gap:8px;padding:8px;border-radius:8px;align-items:center;position:relative}
+.app .list .it.on{background:var(--d3)}
+.av{width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,#3a3a4a,#2a2a35);flex:none;position:relative;display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--dt2)}
+.av.gold{background:var(--gold-soft);color:var(--gold);border:1px solid rgba(212,175,55,.5)}
+.av em{position:absolute;right:-2px;bottom:-2px;width:13px;height:13px;border-radius:4px;background:var(--gold);color:#000;font-size:9px;font-style:normal;display:flex;align-items:center;justify-content:center}
+.it .t{flex:1;min-width:0}.it .t b{display:block;font-weight:500;font-size:12.5px}.it .t span{color:var(--dt3);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
+.badge{background:var(--dbad);color:#fff;border-radius:9px;font-size:10px;padding:0 6px;line-height:16px}
+.app .main{padding:0;display:flex;flex-direction:column;min-width:0}
+.app .hd{display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid var(--dline);background:var(--d1)}
+.app .hd b{font-size:13.5px}.app .hd .sp{flex:1}.app .hd .m{color:var(--dt2);font-size:11.5px}
+.app .bd{padding:14px 16px;overflow:hidden}
+.sec{color:var(--dt2);font-size:11.5px;margin:4px 0 8px}
+.ac{background:rgba(255,255,255,.05);border:1px solid var(--dline);border-radius:12px;padding:12px 14px;margin-bottom:12px;position:relative}
+.ac.unread::before{content:"";position:absolute;left:0;top:12px;bottom:12px;width:3px;border-radius:2px;background:var(--gold)}
+.ac .h{display:flex;gap:8px;align-items:center;color:var(--dt2);font-size:11.5px}.ac .h .sp{flex:1}.ac .h a{color:var(--gold);text-decoration:none}
+.pf{width:16px;height:16px;border-radius:4px;background:#1677ff;color:#fff;font-size:10px;display:inline-flex;align-items:center;justify-content:center}.pf.fs{background:#00b96b}
+.ac .ti{font-size:13.5px;font-weight:600;margin:4px 0}
+.ac .kv{color:var(--dt2)}.ac .kv b{color:var(--dt1);font-weight:500}
+.adv{background:var(--d2);border:1px solid var(--dline);border-radius:10px;padding:10px 12px;margin:10px 0}
+.adv .r{color:var(--dt2);margin:3px 0}.adv .r i{color:var(--dt3);font-style:normal}
+.pill{display:inline-block;border-radius:999px;padding:0 9px;font-size:11.5px;line-height:20px;margin-right:6px}
+.pill.ok{background:rgba(46,204,113,.15);color:var(--dok)}.pill.warn{background:rgba(243,156,18,.15);color:var(--dwarn)}.pill.bad{background:rgba(231,76,60,.15);color:var(--dbad)}.pill.gray{background:rgba(255,255,255,.08);color:var(--dt2)}
+.acts{display:flex;gap:8px;align-items:center}.acts .sp{flex:1}
+.b{border:1px solid var(--dline);background:var(--d3);color:var(--dt1);border-radius:8px;padding:4px 12px;font-size:12px}
+.b.gold{border-color:var(--gold);color:var(--gold);background:var(--gold-soft)}
+.b.pri{background:linear-gradient(135deg,#F4E4BC,#D4AF37,#B8860B);color:#0A0A0F;border:0}
+.b.danger{background:var(--dbad);border:0;color:#fff}
+.b.dis{opacity:.4}
+.skel{height:10px;border-radius:5px;background:linear-gradient(90deg,#252532,#2e2e3c,#252532);margin:6px 0}
+.strip{background:rgba(243,156,18,.12);color:var(--dwarn);border-radius:8px;padding:6px 10px;margin-bottom:8px;font-size:12px}
+.done{display:flex;gap:8px;align-items:center;padding:8px 12px;border:1px solid var(--dline);border-radius:10px;color:var(--dt2);margin-bottom:6px}.done .sp{flex:1}
+.dlg{background:var(--d2);border:1px solid rgba(255,255,255,.12);border-radius:16px;width:520px;color:var(--dt1);font-size:12.5px;box-shadow:0 20px 60px rgba(0,0,0,.5)}
+.dlg .h{display:flex;padding:14px 18px;border-bottom:1px solid var(--dline)}.dlg .h b{flex:1;font-size:14px}
+.dlg .c{padding:14px 18px}.dlg .f{display:flex;justify-content:flex-end;gap:8px;padding:12px 18px;border-top:1px solid var(--dline)}
+.ta{background:var(--d0);border:1px solid rgba(212,175,55,.3);border-radius:8px;padding:8px 10px;min-height:70px;margin:6px 0;color:var(--dt1)}
+.muted{color:var(--dt3)}
+.stage{background:#0d0d13;border-radius:12px;padding:24px;display:flex;justify-content:center;overflow:hidden}
+.set{background:var(--d0);border-radius:12px;padding:16px;color:var(--dt1);font-size:12.5px;overflow:hidden}
+.set .box{background:rgba(255,255,255,.05);border:1px solid var(--dline);border-radius:12px;padding:14px 16px}
+.set .row{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--dline)}.set .row:last-child{border:0}.set .row .sp{flex:1}
+.set table{background:transparent;border-color:var(--dline);color:var(--dt1)}.set th{background:var(--d2);color:var(--dt2)}.set td,.set th{border-color:var(--dline)}
+.sel{border:1px solid var(--dline);background:var(--d3);border-radius:6px;padding:2px 8px;color:var(--dt1)}
+.sw{display:inline-block;width:28px;height:16px;border-radius:8px;background:var(--gold);position:relative;vertical-align:middle}.sw::after{content:"";position:absolute;right:2px;top:2px;width:12px;height:12px;border-radius:50%;background:#000}
+</style>
+</head>
+<body>
+<nav>
+<h1>外部审批接入</h1>
+<a href="#s1">1 一句话</a>
+<a href="#s2">2 改了什么</a>
+<a href="#s3">3 主流程</a>
+<a href="#s4">4 界面：员工审批对话</a>
+<a href="#s5">5 界面：确认浮层</a>
+<a href="#s6">6 界面：审批待办</a>
+<a href="#s7">7 界面：设置</a>
+<a href="#s8">8 多条待办怎么排</a>
+<a href="#s9">9 写回与防错</a>
+<a href="#s10">10 改动面</a>
+<a href="#s11">11 文档</a>
+</nav>
+<main>
+
+<section id="s1">
+<h2>外部审批平台接入 · 方案总览</h2>
+<p class="lead">2026-11-28 按 owner 确认的业务流程整体改写。原 9 方法插件、事件订阅、规则集、自动放行、原生确认框等方案作废。标「P0 实测」的内容只来自文档，尚未跑过。</p>
+<div class="callout green"><b>一句话：</b>审批还在钉钉、飞书里做，平台上的状态说了算。桌面端每 3 分钟拉一次「我的待办」，交给负责这个流程的 AI 员工给建议；建议以卡片出现在「员工名 · 审批」对话里，用户点同意 / 拒绝 / 退回并确认后，以本人身份经官方 CLI 写回平台。</div>
+<table>
+<tr><th>目标（owner）</th><th>怎么做到</th></tr>
+<tr><td>接入简单</td><td>钉钉：管理员开 CLI 访问，用户扫码。飞书：管理员在企业端填一次应用密钥，用户扫码。用户只需再选「这个流程交给谁」</td></tr>
+<tr><td>稳定</td><td>只轮询；平台是唯一真相；结果不明不自动重试</td></tr>
+<tr><td>改动小</td><td>本机 Agent 加一个审批模块（11 个本机接口、3 张表）；桌面端加对话与卡片；企业端只为飞书加 4 个接口；运营端不改</td></tr>
+<tr><td>安全</td><td>员工只有「提交建议」1 个工具，没有写回能力；每次写回都由用户点击、本人身份；执行前复查；内容不离开本机</td></tr>
+<tr><td>好用</td><td>卡片上直接处理和追问；多条自动排队；新流程只问一次</td></tr>
+</table>
+</section>
+
+<section id="s2">
+<h2>改了什么</h2>
+<table>
+<tr><th>原方案</th><th>现在</th></tr>
+<tr><td>9 方法通用插件、fake 插件</td><td>每平台一个薄适配器，调官方 CLI（钉钉 dws、飞书 lark-cli）固定命令</td></tr>
+<tr><td>推送 + 轮询、常驻事件进程</td><td>只轮询，3 分钟 + 手动刷新</td></tr>
+<tr><td>全部动作透传、参数候选</td><td>同意、拒绝、退回发起人；其余「在原平台打开」</td></tr>
+<tr><td>模板、节点、字段白名单、规则集下发</td><td>「流程 → 员工」对应表 + 默认员工；用员工已有知识库</td></tr>
+<tr><td>只读会话 3 工具、群聊</td><td>每条待办一份分析上下文，1 个工具「提交建议」</td></tr>
+<tr><td>自动放行、确认票据、原生框、风险分级</td><td>不做；确认浮层 + 执行前复查</td></tr>
+<tr><td>5 状态 + 原因码，24 个本机接口</td><td>3 个主状态，11 个本机接口</td></tr>
+</table>
+</section>
+
+<section id="s3">
+<h2>主流程</h2>
+<div class="flow">
+<div class="s"><b>① 连接</b>用户扫码授权（本人身份）</div><div class="a">→</div>
+<div class="s"><b>② 同步</b>每 3 分钟拉我的待办 + 新待办详情</div><div class="a">→</div>
+<div class="s"><b>③ 分给员工</b>按流程 → 员工；没有则默认员工；都没有等用户选</div><div class="a">→</div>
+<div class="s"><b>④ 员工分析</b>排队；员工读单据和知识库，提交建议</div><div class="a">→</div>
+<div class="s"><b>⑤ 卡片</b>「员工名 · 审批」对话里出现，未读 +1</div><div class="a">→</div>
+<div class="s"><b>⑥ 确认</b>用户点动作，浮层核对意见后提交</div><div class="a">→</div>
+<div class="s"><b>⑦ 写回</b>复查仍是我的待办 → 本人身份调 CLI</div>
+</div>
+<p>在平台上被别人或用户自己处理掉的待办：下一轮完整拉取后不在列表里，卡片收起为「已在钉钉 / 飞书处理」。</p>
+</section>
+
+<section id="s4">
+<h2>界面：员工审批对话</h2>
+<p class="lead">单聊列表顶部固定「审批待办」，每个负责审批的员工多一项「员工名 · 审批」。一条待办一张卡片，卡片上直接处理和追问；和普通私聊分开。</p>
+<div class="app">
+ <div class="rail"><i class="on"></i><i></i><i></i><i></i><i></i></div>
+ <div class="list">
+  <div class="it"><div class="av gold">✓</div><div class="t"><b>审批待办</b><span>待处理 7 · 1 条待选员工</span></div><span class="badge">1</span></div>
+  <div class="it on"><div class="av">张<em>✓</em></div><div class="t"><b>张三 · 审批</b><span>差旅报销 · 李四</span></div><span class="badge">2</span></div>
+  <div class="it"><div class="av">张</div><div class="t"><b>张三</b><span>好的，周报已经整理好了</span></div></div>
+  <div class="it"><div class="av">王<em>✓</em></div><div class="t"><b>王财务 · 审批</b><span>排队中 3 条</span></div></div>
+  <div class="it"><div class="av">赵</div><div class="t"><b>赵助理</b><span>会议纪要见附件</span></div></div>
+ </div>
+ <div class="main">
+  <div class="hd"><b>张三 · 审批</b><span class="sp"></span><span class="m">全部平台 ▾</span><span class="m">⟳ 刷新 · 2 分钟前同步</span><span class="m">⚙</span></div>
+  <div class="bd">
+   <div class="sec">待处理 3</div>
+   <div class="ac unread">
+    <div class="h"><span class="pf">钉</span>差旅报销 · 李四 · 今天 09:12<span class="sp"></span><a>在原平台打开 ↗</a></div>
+    <div class="ti">上海出差报销 3 天</div>
+    <div class="kv">金额 <b>¥4,280</b> · 出差地点 <b>上海</b> · 部门 <b>销售二部</b> · <span class="muted">展开全部字段 ▾</span></div>
+    <div class="kv">附件 3：发票.pdf（1.2MB）、行程单.png、酒店水单.pdf · 当前节点：部门负责人审批（我）</div>
+    <div class="adv">
+     <div><span class="muted">张三的建议</span>　<span class="pill warn">退回</span><b>住宿超标且缺酒店发票</b></div>
+     <div class="r">· 住宿每晚 680 元，超过标准 500 元 <i>（依据：差旅制度.docx）</i></div>
+     <div class="r">· 只有水单没有发票 <i>（依据：附件清单）</i></div>
+     <div class="r">缺少：酒店发票</div>
+     <div class="r">拟写意见：住宿超标，请补酒店发票并说明超标原因。</div>
+    </div>
+    <div class="acts"><span class="b gold">退回</span><span class="b">同意</span><span class="b">拒绝</span><span class="sp"></span><span class="b">追问 ▾</span><span class="b">⋯</span></div>
+   </div>
+   <div class="ac">
+    <div class="h"><span class="pf fs">飞</span>采购申请 · 王五 · 今天 09:40<span class="sp"></span><a>在原平台打开 ↗</a></div>
+    <div class="ti">办公椅 20 把</div>
+    <div class="adv"><div class="muted">张三正在看…</div><div class="skel" style="width:70%"></div><div class="skel" style="width:45%"></div></div>
+    <div class="acts"><span class="b">同意</span><span class="b">拒绝</span><span class="b">退回</span><span class="sp"></span><span class="b">追问 ▾</span><span class="b">⋯</span></div>
+   </div>
+   <div class="ac">
+    <div class="h"><span class="pf">钉</span>差旅报销 · 周六 · 今天 09:51<span class="sp"></span><a>在原平台打开 ↗</a></div>
+    <div class="ti">北京客户拜访 1 天</div>
+    <div class="adv"><span class="muted">排队中，前面还有 1 条</span>　<span class="b">先分析这条</span></div>
+    <div class="acts"><span class="b">同意</span><span class="b">拒绝</span><span class="b">退回</span><span class="sp"></span><span class="b">追问 ▾</span><span class="b">⋯</span></div>
+   </div>
+   <div class="sec">▾ 已处理（最近 7 天 2 条）</div>
+   <div class="done"><span class="pf">钉</span>差旅报销 · 孙七 · 杭州培训<span class="sp"></span>已同意 · 我在这里处理 · 08:30 ▸</div>
+   <div class="done"><span class="pf fs">飞</span>用印申请 · 吴八 · 合同盖章<span class="sp"></span>已在飞书处理 · 昨天 ▸</div>
+  </div>
+ </div>
+</div>
+<h3>卡片状态</h3>
+<table>
+<tr><th>状态</th><th>显示</th></tr>
+<tr><td>排队中 / 待手动分析 / 分析中</td><td>「前面还有 k 条 · 先分析这条」/「点此分析」/ 骨架屏</td></tr>
+<tr><td>有建议</td><td>建议块；未读时左侧金色竖条</td></tr>
+<tr><td>单据已更新</td><td>黄色条「建议可能已过时」，自动重新分析或「重新分析」</td></tr>
+<tr><td>分析失败</td><td>原因 +「重试」，动作按钮照常可用</td></tr>
+<tr><td>提交中 / 结果待确认</td><td>动作按钮置灰；黄色条「已提交，结果待确认」</td></tr>
+<tr><td>已处理 / 已在平台处理</td><td>收起为一行，点开只读</td></tr>
+<tr><td>需要处理</td><td>动作置灰，「重新连接后可处理」</td></tr>
+</table>
+</section>
+
+<section id="s5">
+<h2>界面：确认浮层</h2>
+<p class="lead">所有动作都用这个浮层（owner 决策 #2）；不再用系统原生框。提交中不能关闭。</p>
+<div class="stage">
+ <div class="dlg">
+  <div class="h"><b>确认退回</b><span class="muted">×</span></div>
+  <div class="c">
+   <div>差旅报销 · 李四 · 上海出差报销 3 天</div>
+   <div class="muted">退回给发起人，申请人修改后可重新提交。</div>
+   <div style="margin-top:12px;display:flex"><span style="flex:1">审批意见（必填）</span><span class="muted">23/1000</span></div>
+   <div class="ta">住宿超标，请补酒店发票并说明超标原因。</div>
+   <div class="muted">已填入张三拟写的意见，可修改。</div>
+   <div style="margin-top:8px;color:var(--dt2)">ⓘ 张三建议的是「退回」。</div>
+  </div>
+  <div class="f"><span class="b">取消</span><span class="b danger">提交退回</span></div>
+ </div>
+</div>
+<table style="margin-top:12px">
+<tr><th>提交结果</th><th>用户看到</th></tr>
+<tr><td>成功</td><td>Toast「已退回」，卡片 3 秒后移到已处理</td></tr>
+<tr><td>单据已更新（409）</td><td>浮层不关，「请重新查看后再提交」，意见草稿保留</td></tr>
+<tr><td>已在别处处理（409）</td><td>浮层关闭，卡片刷新</td></tr>
+<tr><td>超时、查不清</td><td>「已提交，结果待确认」，下次同步判断，不自动重试</td></tr>
+<tr><td>其他失败</td><td>浮层不关，原因 +「重试」+「在原平台打开」</td></tr>
+</table>
+</section>
+
+<section id="s6">
+<h2>界面：审批待办</h2>
+<p class="lead">所有员工的待办汇总；还没有负责员工的流程在最上方，选一次以后自动交给他。</p>
+<div class="app" style="grid-template-columns:56px 250px 1fr;min-height:330px">
+ <div class="rail"><i class="on"></i><i></i><i></i></div>
+ <div class="list">
+  <div class="it on"><div class="av gold">✓</div><div class="t"><b>审批待办</b><span>待处理 7 · 1 条待选员工</span></div><span class="badge">1</span></div>
+  <div class="it"><div class="av">张<em>✓</em></div><div class="t"><b>张三 · 审批</b><span>差旅报销 · 李四</span></div><span class="badge">2</span></div>
+ </div>
+ <div class="main">
+  <div class="hd"><b>审批待办</b><span class="sp"></span><span class="m">全部员工 ▾</span><span class="m">⟳ 刷新 · 2 分钟前同步</span></div>
+  <div class="bd">
+   <div class="sec">待选员工 1</div>
+   <div class="ac">
+    <div class="h"><span class="pf fs">飞</span>用印申请 · 郑九 · 今天 10:05<span class="sp"></span><a>在原平台打开 ↗</a></div>
+    <div class="ti">框架合同盖章</div>
+    <div class="adv">这个流程（用印申请）还没有负责员工。<br><span class="sel">选择员工 ▾</span>　☑ 以后「用印申请」都交给他</div>
+   </div>
+   <div class="sec">张三 · 3 条　　王财务 · 3 条</div>
+  </div>
+ </div>
+</div>
+</section>
+
+<section id="s7">
+<h2>界面：设置 → 外部审批</h2>
+<div class="grid2">
+<div class="set"><div class="box">
+ <b>外部审批</b><div class="muted" style="margin:4px 0 8px">把钉钉、飞书里待你审批的单据交给 AI 员工先看一遍。审批内容只保存在这台电脑上。</div>
+ <div class="row"><span class="pf">钉</span>钉钉<span class="sp muted">已连接 · 张三（天元科技）· 2 分钟前同步</span><span class="b">断开</span></div>
+ <div class="row"><span class="pf fs">飞</span>飞书<span class="sp muted">未连接</span><span class="b pri">连接</span></div>
+ <div class="row">默认员工 <span class="sel">张三 ▾</span><span class="sp muted">新流程默认交给他</span></div>
+ <table style="margin-top:8px"><tr><th>流程</th><th>负责员工</th><th>自动分析</th></tr>
+ <tr><td>钉钉 · 差旅报销</td><td><span class="sel">张三 ▾</span></td><td><span class="sw"></span></td></tr>
+ <tr><td>钉钉 · 付款申请</td><td><span class="sel">王财务 ▾</span></td><td><span class="sw"></span></td></tr>
+ </table>
+</div></div>
+<div class="set" style="display:flex;justify-content:center;align-items:center">
+ <div class="dlg" style="width:360px">
+  <div class="h"><b>连接飞书</b><span class="muted">×</span></div>
+  <div class="c" style="text-align:center">
+   <div style="width:120px;height:120px;margin:6px auto;background:repeating-conic-gradient(#fff 0 25%,#000 0 50%) 0 0/16px 16px;border-radius:6px"></div>
+   <div>用飞书扫码授权</div><div class="muted">二维码 4:32 后过期 · 无法扫码？复制链接</div>
+   <div class="muted" style="margin-top:8px;text-align:left">之后 AI 员工只给建议，每次同意、拒绝、退回都要你点击确认，以你本人名义提交。</div>
+  </div>
+ </div>
+</div>
+</div>
+<p>企业端（仅飞书）：企业设置里加「飞书审批应用」表单，填 App ID / App Secret（只写不读），可测试连接。</p>
+</section>
+
+<section id="s8">
+<h2>多条待办怎么排</h2>
+<table>
+<tr><th>规则</th><th>内容</th></tr>
+<tr><td>上下文隔离</td><td>每条待办一个隐藏分析会话，追问只在这条里</td></tr>
+<tr><td>每个员工一次一条</td><td>同一员工按到达顺序逐条分析</td></tr>
+<tr><td>全局最多 2 条</td><td>不同员工之间并行</td></tr>
+<tr><td>插队</td><td>「先分析这条」、展开追问、让员工看附件</td></tr>
+<tr><td>刚连上</td><td>只自动分析最近 20 条，其余「点此分析」</td></tr>
+<tr><td>不合并不批量</td><td>同一流程多条也是各自一张卡片，首版没有批量同意</td></tr>
+</table>
+</section>
+
+<section id="s9">
+<h2>写回与防错</h2>
+<div class="flow">
+<div class="s"><b>浮层提交</b>动作 + 意见 + 看到的快照版本 + 幂等键</div><div class="a">→</div>
+<div class="s"><b>版本比对</b>不一致 → 「单据已更新」</div><div class="a">→</div>
+<div class="s"><b>复查</b>仍是我的待办？否 → 「已变化」</div><div class="a">→</div>
+<div class="s"><b>本人身份调 CLI</b>同意 / 拒绝 / 退回</div><div class="a">→</div>
+<div class="s"><b>结果</b>成功 / 已变化（查一次）/ 超时（查一次，查不清待确认）/ 失败</div>
+</div>
+<p>同一任务提交中拒绝新提交；结果不明一律不自动重试；平台拒绝已处理任务作最终兜底。</p>
+</section>
+
+<section id="s10">
+<h2>改动面</h2>
+<table>
+<tr><th>位置</th><th>改动</th><th>量</th></tr>
+<tr><td>server/agent_service</td><td>审批模块（自带轮询定时器、两个适配器、3 张表、分析会话工具限制、11 个本机接口、1 种全局事件）</td><td><span class="tag">M</span></td></tr>
+<tr><td>clients/desktop</td><td>单聊列表两类新项、审批对话与卡片、确认浮层、审批待办、设置卡片与连接对话框；打包锁定版本的 dws / lark-cli（不放 PATH）</td><td><span class="tag">M</span></td></tr>
+<tr><td>Manager（服务 + 网页）</td><td>仅飞书：应用配置 2 个接口 + 表单，换票 2 个接口；不保存用户 token</td><td><span class="tag ok">S</span></td></tr>
+<tr><td>Operator</td><td>不改</td><td><span class="tag gray">0</span></td></tr>
+</table>
+</section>
+
+<section id="s11">
+<h2>文档</h2>
+<table>
+<tr><th>文档</th><th>内容</th></tr>
+<tr><td><a href="./2026-11-28-外部审批平台接入-业务流程.md">业务流程</a></td><td>owner 确认稿，7 张流程图</td></tr>
+<tr><td><a href="./2026-11-23-外部审批平台接入-需求与设计.md">需求与设计</a></td><td>适配器、数据模型、同步、分析、写回、接口、安全</td></tr>
+<tr><td><a href="./2026-11-23-外部审批平台接入-UI交互方案.md">UI 交互方案</a></td><td>界面、状态、文案、验证清单</td></tr>
+<tr><td><a href="./2026-11-23-外部审批平台接入-数据流转.md">数据流转</a></td><td>数据从哪来、存哪、给谁、何时删</td></tr>
+<tr><td><a href="./2026-11-24-外部审批平台接入-实施计划.md">实施计划</a></td><td>P0 实测与 P1 实现拆分</td></tr>
+<tr><td><a href="./2026-11-23-外部审批平台接入-调查报告.md">调查报告</a></td><td>四平台 CLI / 接口调研</td></tr>
+</table>
+</section>
+</main>
+</body>
+</html>
