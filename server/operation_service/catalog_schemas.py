@@ -60,8 +60,7 @@ class RegisterExpertTemplateRequest(ExpertTemplateProfile):
     字段对齐 PRD-v2 S02：name->display_name / category / avatar_url / system_prompt /
     platform_model_ref / platform_skill_refs / description。
     创建专家模板的最小字段：名称、分类、系统提示词、默认模型、岗位描述；头像可选。
-    ``avatar_url`` 保留为 Catalog 兼容字段；新头像必须是经过校验的本地图片 data URL，
-    旧 HTTP/path 值仅为兼容历史 API 数据。
+    ``avatar_url`` 承载头像上传（图片 data URL）；服务端转静态 WebP 文件存储，payload 只记版本与摘要。
     技能只接受 Operator 内部平台技能的固定版本引用，未选择时为空。
     人才市场展示字段（tagline/use_cases/pricing 等，议题 7）继承自 ExpertTemplateProfile，全部可选。
     """
@@ -83,7 +82,7 @@ class RegisterExpertTemplateRequest(ExpertTemplateProfile):
     avatar_url: str = Field(
         default="",
         max_length=AVATAR_MAX_DATA_URL_LENGTH,
-        description="可选本地头像图片 data URL；兼容历史 HTTP/path 值，不接受其他 URI scheme",
+        description="可选头像上传：PNG/JPEG/GIF/WebP data URL；服务端转为静态 WebP 文件存储，不入库",
     )
     system_prompt: str = Field(min_length=1, description="岗位描述系统提示词（纯文本）(PRD: system_prompt, 必填)")
 
@@ -242,8 +241,9 @@ class CatalogEntryResponse(ExpertTemplateProfile):
     category: str = Field(default="")
     avatar_url: str = Field(
         default="",
-        description="经校验的本地头像图片 data URL；兼容历史 HTTP/path 值",
+        description="模板头像内容路径（同源相对路径，带 ?v=版本）；无头像为空串",
     )
+    avatar_version: int | None = Field(default=None, ge=1, description="模板头像版本；每次更换 +1，无头像为 null")
     system_prompt: str = Field(default="")
     skill_ids: list[str] = Field(default_factory=list, description="Deprecated compatibility projection")
     platform_skill_refs: list[PlatformSkillRef] = Field(default_factory=list)

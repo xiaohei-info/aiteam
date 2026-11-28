@@ -45,7 +45,7 @@ import type {
   OfficeScene,
   Page,
 } from './types'
-import { deleteFile, listFiles, uploadFile } from './files'
+import { deleteFile, listAttachmentRefs, listFiles, uploadFile } from './files'
 import { subscribeConversationEvents } from './events'
 import { subscribeGlobalActivity } from './globalEvents'
 import {
@@ -261,6 +261,7 @@ export const agentApi = {
     convId: string,
     kind?: Parameters<typeof listFiles>[2],
   ) => listFiles(getClient(), convId, kind),
+  listAttachmentRefs: (convId: string) => listAttachmentRefs(getClient(), convId),
   uploadFile: (
     convId: string,
     kind: Parameters<typeof uploadFile>[2],

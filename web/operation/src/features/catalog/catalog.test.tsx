@@ -1503,6 +1503,40 @@ describe("详情页多 section", () => {
     expect(body.sort_order).toBeUndefined();
   });
 
+  it("还没转换的模板只改别的字段时不提交空头像", async () => {
+    // 详情接口对「只有 payload 内联 avatar_url、没有 avatar_version」的旧模板返回空串。
+    // 若原样带回 avatar_url: ""，服务端会当成删除，把唯一的旧图永久抹掉。
+    const legacy = makeCatalogItem({
+      catalog_type: "expert_template",
+      template_id: "exp-full",
+      display_name: "未转换模板",
+      status: "draft",
+      visible_scope: null,
+      version: "1",
+      category: "support",
+      avatar_url: "",
+      system_prompt: "你是客服",
+      platform_skill_refs: [],
+      description: "旧描述",
+    });
+    mockFetch.mockImplementation(async (url: unknown, init?: RequestInit) => {
+      const value = String(url);
+      if (value.includes("/skill-market/internal")) return listPage([]);
+      if (value.includes("/skill-market/external")) return singleResponse([]);
+      if (init?.method === "PATCH") return singleResponse(legacy);
+      return singleResponse(legacy);
+    });
+    renderCatalogDetail(makeSystemAdminSession(), "exp-full", "expert_template");
+    await waitFor(() => expect(screen.getByText("编辑")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("编辑"));
+    await waitFor(() => expect(screen.getByText("保存")).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText("category"), { target: { value: "finance" } });
+
+    const body = await savedPatchBody();
+    expect(body.category).toBe("finance");
+    expect(body).not.toHaveProperty("avatar_url");
+  });
+
   it("编辑专家替换头像后提交本地图片 data URL", async () => {
     await openFullExpertEditor();
     fireEvent.change(screen.getByLabelText("头像（可选，本地图片）"), { target: { files: [avatarFile("new-avatar.png")] } });

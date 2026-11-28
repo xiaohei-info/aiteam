@@ -25,7 +25,11 @@ function FileTypeIcon({ mime }: { mime: string }) {
 }
 
 export function FileChip({ file, onRemove, uploadStatus, uploadError, onRetry, disabled }: FileChipProps) {
-  const uploadLabel = uploadStatus === 'uploading'
+  const uploadLabel = uploadStatus === 'importing'
+    ? '正在导入'
+    : uploadStatus === 'queued'
+      ? '等待上传'
+      : uploadStatus === 'uploading'
     ? '正在上传'
     : uploadStatus === 'uploaded'
       ? '上传完成'
@@ -41,11 +45,11 @@ export function FileChip({ file, onRemove, uploadStatus, uploadError, onRetry, d
       aria-label={`${file.name}，${uploadLabel}`}
       aria-live="polite"
     >
-      {isImageMime(file.mime)
+      {isImageMime(file.mime) && file.asset_url
         ? <img src={file.asset_url} className="chat-file-chip-thumb" alt="" />
         : <FileTypeIcon mime={file.mime} />}
       <span className="chat-file-chip-name">{file.name}</span>
-      {uploadStatus === 'uploading' && <LoaderCircle className="chat-file-chip-spinner" size={13} aria-hidden="true" />}
+      {(uploadStatus === 'uploading' || uploadStatus === 'importing') && <LoaderCircle className="chat-file-chip-spinner" size={13} aria-hidden="true" />}
       {uploadStatus === 'failed' && onRetry && (
         <button type="button" className="chat-file-chip-retry" onClick={onRetry} title="重试上传" aria-label={`重试上传 ${file.name}`} disabled={disabled}>
           <RotateCcw size={11} strokeWidth={2} aria-hidden="true" />

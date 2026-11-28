@@ -24,8 +24,9 @@ import type {
 } from '../api/agent/types'
 import { CONTEXT_RESET_ENTRY_TYPE, type ContextResetMemoryReason } from '../api/agent/types.ts'
 import { dividerMemoryText, isContextResetMemoryReason } from './contextResetMemory.ts'
-import type { Message, ThinkingStep, ToolCall } from '../stores/chat'
+import type { Message, MessageAttachment, ThinkingStep, ToolCall } from '../stores/chat'
 import { splitLocalContext, type LocalContextAction } from './localContextBlock.ts'
+import { splitAttachmentManifest } from './attachmentManifest.ts'
 import { assistantFailure, type ReplyFailure } from './replyFailure.ts'
 import { replyPreview } from './replyPreview.ts'
 
@@ -120,6 +121,7 @@ function messageToFields(msg: ConversationMessage): {
   toolCalls?: ToolCall[]
   isError?: boolean
   localContext?: LocalContextAction
+  attachments: MessageAttachment[]
   truncated: boolean
 } {
   let content = ''
@@ -141,9 +143,12 @@ function messageToFields(msg: ConversationMessage): {
   const role = msg.role === 'user' ? 'user' : msg.role === 'toolResult' ? 'toolResult' : 'assistant'
   // 用户消息末尾可能带有本机网关追加的授权目录检索块，正文只展示用户自己输入的内容。
   const local = role === 'user' ? splitLocalContext(content) : { text: content }
+  // 按路径引用的附件清单是给模型看的，展示为附件卡片。
+  const manifest = role === 'user' ? splitAttachmentManifest(local.text) : { text: local.text, attachments: [] }
   return {
     role,
-    content: local.text,
+    content: manifest.text,
+    attachments: manifest.attachments,
     thinkingSteps,
     toolCalls,
     isError: msg.isError,
@@ -299,7 +304,7 @@ export function entriesToMessages(
       // 无 message 的 entry(纯系统条目)暂不展示,交给上游按需扩展。
       continue
     }
-    const { role, content, thinkingSteps, toolCalls, localContext, truncated } = messageToFields(message)
+    const { role, content, thinkingSteps, toolCalls, localContext, attachments, truncated } = messageToFields(message)
     const failure = assistantFailure(message)
 
     if (role === 'toolResult') {
@@ -338,6 +343,7 @@ export function entriesToMessages(
       recipientEmployeeId,
       recipientName,
       ...(localContext ? { localContext } : {}),
+      ...(attachments.length > 0 ? { attachments } : {}),
       ...(truncated ? { truncated } : {}),
       ...(role === 'assistant' && isReplyFile(entry.reply_file)
         ? { replyFile: entry.reply_file, replyPreview: replyPreview(content) } : {}),

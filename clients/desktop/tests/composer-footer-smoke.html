@@ -34,7 +34,8 @@ createRoot(document.getElementById('root')).render(
         convId: conversationId,
         onSend: () => true,
         onPickFile: async () => null,
-        onDraftChange: () => {},
+        onDraftTextChange: () => {},
+        onDraftFilesChange: (convId, update) => update([]),
         enableKnowledgeFiles: true,
         enableVoiceInput: true,
         tools: React.createElement(ContextOutcomePrompt, {

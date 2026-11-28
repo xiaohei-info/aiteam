@@ -46,18 +46,27 @@ interface AvatarImageProps {
   fallback?: ReactNode
 }
 
+type ProtectedAvatarTarget = { kind: 'employee' | 'template'; id: string; version: string | null }
+
+const PROTECTED_AVATAR_PATHS: ReadonlyArray<[ProtectedAvatarTarget['kind'], RegExp]> = [
+  ['employee', /^\/api\/agent\/employees\/([^/]+)\/avatar\/content$/u],
+  ['template', /^\/api\/agent\/marketplace\/templates\/([^/]+)\/avatar\/content$/u],
+]
+
 /**
- * 受保护头像只可能是 `GET /api/agent/employees/{employee_id}/avatar/content`；
- * 解析出员工 ID 与缓存键后交由文档契约内的客户端请求，不经任意 URL 直连。
+ * 受保护头像只可能是本机 Agent 的员工头像或人才市场模板头像（都需 Bearer）；
+ * 解析出 ID 与版本（`?v=`）后交由文档契约内的客户端请求，不经任意 URL 直连。
  */
-function protectedEmployeeAvatarTarget(src: string): { employeeId: string; version: string | null } | null {
+function protectedAvatarTarget(src: string): ProtectedAvatarTarget | null {
   try {
     const url = new URL(src)
     const backend = new URL(BACKEND_BASE_URL)
     if (url.origin !== backend.origin) return null
-    const match = /^\/api\/agent\/employees\/([^/]+)\/avatar\/content$/u.exec(url.pathname)
-    if (!match) return null
-    return { employeeId: decodeURIComponent(match[1]), version: url.searchParams.get('v') }
+    for (const [kind, pattern] of PROTECTED_AVATAR_PATHS) {
+      const match = pattern.exec(url.pathname)
+      if (match) return { kind, id: decodeURIComponent(match[1]), version: url.searchParams.get('v') }
+    }
+    return null
   } catch {
     return null
   }
@@ -73,7 +82,7 @@ const allocatedObjectUrls: string[] = []
 
 function loadProtectedAvatarObjectUrl(
   src: string,
-  target: { employeeId: string; version: string | null },
+  target: ProtectedAvatarTarget,
   token: string,
 ): Promise<string> {
   if (cachedAvatarToken !== token) {
@@ -87,7 +96,9 @@ function loadProtectedAvatarObjectUrl(
   if (existing) return existing
 
   const task = (async () => {
-    const blob = await backendApi.getEmployeeAvatarContent(target.employeeId, target.version)
+    const blob = target.kind === 'employee'
+      ? await backendApi.getEmployeeAvatarContent(target.id, target.version)
+      : await backendApi.getMarketplaceTemplateAvatarContent(target.id, target.version)
     if (cachedAvatarToken !== token) {
       throw new Error('avatar token changed during request')
     }
@@ -104,10 +115,11 @@ function loadProtectedAvatarObjectUrl(
 }
 
 function AvatarImage({ src, alt = '', fallback = '?' }: AvatarImageProps) {
-  const target = protectedEmployeeAvatarTarget(src)
-  const employeeId = target?.employeeId ?? null
+  const target = protectedAvatarTarget(src)
+  const targetKind = target?.kind ?? null
+  const targetId = target?.id ?? null
   const avatarVersion = target?.version ?? null
-  const protectedUrl = employeeId !== null
+  const protectedUrl = targetId !== null
   const [displaySrc, setDisplaySrc] = useState<string | null>(() => protectedUrl ? null : src)
 
   useEffect(() => {
@@ -116,7 +128,7 @@ function AvatarImage({ src, alt = '', fallback = '?' }: AvatarImageProps) {
     // CDN/data/blob URLs can be loaded by the browser directly. Local Agent
     // avatar content is an authenticated binary endpoint, so read it through
     // the documented service client and reuse the session-cached object URL.
-    if (!employeeId) {
+    if (!targetId || !targetKind) {
       setDisplaySrc(src)
       return () => { disposed = true }
     }
@@ -128,7 +140,7 @@ function AvatarImage({ src, alt = '', fallback = '?' }: AvatarImageProps) {
     }
 
     setDisplaySrc(null)
-    void loadProtectedAvatarObjectUrl(src, { employeeId, version: avatarVersion }, token)
+    void loadProtectedAvatarObjectUrl(src, { kind: targetKind, id: targetId, version: avatarVersion }, token)
       .then((objectUrl) => {
         if (!disposed) setDisplaySrc(objectUrl)
       })
@@ -139,7 +151,7 @@ function AvatarImage({ src, alt = '', fallback = '?' }: AvatarImageProps) {
     return () => {
       disposed = true
     }
-  }, [avatarVersion, employeeId, src])
+  }, [avatarVersion, targetId, targetKind, src])
 
   if (!displaySrc) return <>{fallback}</>
 

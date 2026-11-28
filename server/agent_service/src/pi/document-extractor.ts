@@ -16,29 +16,58 @@ export interface ExtractedDocument {
   format: "text" | "pdf" | "docx";
 }
 
+export interface ExtractionLimits {
+  /** Truncate the text to this many characters; Infinity keeps everything. */
+  maxChars: number;
+  maxPages: number;
+  maxDocxBytes: number;
+}
+
+const UPLOAD_LIMITS: ExtractionLimits = { maxChars: MAX_DOCUMENT_TEXT_CHARS, maxPages: MAX_DOCUMENT_PAGES, maxDocxBytes: MAX_DOCX_UNCOMPRESSED_BYTES };
+/** Files attached by path are read in pages by attachment_read, so the whole text is kept. */
+export const REFERENCE_LIMITS: ExtractionLimits = { maxChars: Number.POSITIVE_INFINITY, maxPages: Number.POSITIVE_INFINITY, maxDocxBytes: 256 * 1024 * 1024 };
+
+const TEXT_MIMES = new Set(["text/plain", "text/markdown", "text/csv", "application/json", "application/xml", "application/yaml", "text/html", "text/css", "text/javascript", "text/xml"]);
+
+export function isTextMime(mime: string): boolean {
+  return TEXT_MIMES.has(mime.toLowerCase());
+}
+
+/** Whether attachment_read can turn this kind of file into text. */
+export function isExtractableMime(mime: string): boolean {
+  const lower = mime.toLowerCase();
+  return isTextMime(lower) || lower === "application/pdf" || lower === "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+}
+
 export function extractDocument(record: Pick<LocalFileRecord, "filename" | "mime_type" | "byte_size">, data: Buffer): ExtractedDocument {
   if (data.byteLength !== record.byte_size || data.byteLength > 5 * 1024 * 1024) throw new UnsupportedDocumentError("Attachment exceeds the materialization limit");
+  return extractDocumentText(record, data, UPLOAD_LIMITS);
+}
+
+export function extractDocumentText(record: Pick<LocalFileRecord, "filename" | "mime_type">, data: Buffer, limits: ExtractionLimits): ExtractedDocument {
   const mime = record.mime_type.toLowerCase();
-  if (mime === "text/plain" || mime === "text/markdown" || mime === "text/csv" || mime === "application/json" || mime === "application/xml" || mime === "application/yaml") {
-    return { text: boundedUtf8(data), format: "text" };
-  }
-  if (mime === "application/pdf") return { text: extractPdf(data), format: "pdf" };
-  if (mime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") return { text: extractDocx(data), format: "docx" };
+  if (isTextMime(mime)) return { text: boundedUtf8(data, limits.maxChars), format: "text" };
+  if (mime === "application/pdf") return { text: extractPdf(data, limits), format: "pdf" };
+  if (mime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") return { text: extractDocx(data, limits), format: "docx" };
   throw new UnsupportedDocumentError(`Attachment ${record.filename} is storage-only and cannot be read by Pi`);
 }
 
-function boundedUtf8(data: Buffer): string {
+function truncate(text: string, maxChars: number): string {
+  return text.length <= maxChars ? text : `${text.slice(0, maxChars - 1)}…`;
+}
+
+function boundedUtf8(data: Buffer, maxChars: number): string {
   if (data.includes(0)) throw new UnsupportedDocumentError("Binary content is not supported as text input");
   const text = new TextDecoder("utf-8", { fatal: true }).decode(data).replace(/\r\n?/gu, "\n");
   if (!text.trim()) throw new UnsupportedDocumentError("Attachment has no readable text");
-  return text.length <= MAX_DOCUMENT_TEXT_CHARS ? text : `${text.slice(0, MAX_DOCUMENT_TEXT_CHARS - 1)}…`;
+  return truncate(text, maxChars);
 }
 
-function extractPdf(data: Buffer): string {
+function extractPdf(data: Buffer, limits: ExtractionLimits): string {
   if (!data.subarray(0, 5).equals(Buffer.from("%PDF-"))) throw new UnsupportedDocumentError("PDF signature does not match its MIME type");
   const source = data.toString("latin1");
   const pages = (source.match(/\/Type\s*\/Page(?:\s|\/)/gu) ?? []).length;
-  if (pages > MAX_DOCUMENT_PAGES) throw new UnsupportedDocumentError("PDF has too many pages");
+  if (pages > limits.maxPages) throw new UnsupportedDocumentError("PDF has too many pages");
   const chunks: string[] = [];
   // Ordinary PDF text operators are supported. Small FlateDecode content
   // streams are also expanded locally; scanned/image PDFs and other encodings
@@ -50,7 +79,7 @@ function extractPdf(data: Buffer): string {
     if (!/\/FlateDecode(?:\s|\/|>)/u.test(dictionary) || !match[1]) continue;
     try {
       const encoded = Buffer.from(match[1], "latin1");
-      const decoded = inflateSync(encoded, { maxOutputLength: 8 * 1024 * 1024 }).toString("latin1");
+      const decoded = inflateSync(encoded, { maxOutputLength: 64 * 1024 * 1024 }).toString("latin1");
       collectPdfStrings(decoded, chunks);
     } catch {
       // Unsupported/corrupt streams are not text evidence.
@@ -58,7 +87,7 @@ function extractPdf(data: Buffer): string {
   }
   const text = chunks.join(" ").replace(/\s+/gu, " ").trim();
   if (!text) throw new UnsupportedDocumentError("Scanned PDF/OCR input is not supported");
-  return text.length <= MAX_DOCUMENT_TEXT_CHARS ? text : `${text.slice(0, MAX_DOCUMENT_TEXT_CHARS - 1)}…`;
+  return truncate(text, limits.maxChars);
 }
 
 function collectPdfStrings(source: string, chunks: string[]): void {
@@ -76,9 +105,9 @@ function decodePdfLiteral(value: string): string {
   return value.replace(/\\([nrtbf()\\])/gu, (_all, escaped: string) => ({ n: "\n", r: "\r", t: "\t", b: "\b", f: "\f", "(": "(", ")": ")", "\\": "\\" }[escaped] ?? escaped)).replace(/\\([0-7]{1,3})/gu, (_all, octal: string) => String.fromCharCode(Number.parseInt(octal, 8)));
 }
 
-function extractDocx(data: Buffer): string {
+function extractDocx(data: Buffer, limits: ExtractionLimits): string {
   if (!data.subarray(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04]))) throw new UnsupportedDocumentError("DOCX ZIP signature does not match its MIME type");
-  const documentXml = readZipEntry(data, "word/document.xml");
+  const documentXml = readZipEntry(data, "word/document.xml", limits.maxDocxBytes);
   if (!documentXml) throw new UnsupportedDocumentError("DOCX document body is missing");
   const text = documentXml
     .replace(/<w:tab\s*\/?>(?=.)/gu, "\t")
@@ -88,10 +117,10 @@ function extractDocx(data: Buffer): string {
     .replace(/&amp;/gu, "&").replace(/&lt;/gu, "<").replace(/&gt;/gu, ">").replace(/&quot;/gu, '"').replace(/&apos;/gu, "'")
     .replace(/\n{3,}/gu, "\n\n").trim();
   if (!text) throw new UnsupportedDocumentError("DOCX has no readable text");
-  return text.length <= MAX_DOCUMENT_TEXT_CHARS ? text : `${text.slice(0, MAX_DOCUMENT_TEXT_CHARS - 1)}…`;
+  return truncate(text, limits.maxChars);
 }
 
-function readZipEntry(data: Buffer, wanted: string): string | undefined {
+function readZipEntry(data: Buffer, wanted: string, maxBytes: number): string | undefined {
   let offset = 0;
   let entries = 0;
   let totalUncompressed = 0;
@@ -110,14 +139,14 @@ function readZipEntry(data: Buffer, wanted: string): string | undefined {
       if (flags & 0x08) throw new UnsupportedDocumentError("DOCX data descriptors are unsupported");
       if (name.includes("..") || name.startsWith("/") || name.includes("\\")) throw new UnsupportedDocumentError("DOCX contains an unsafe path");
       totalUncompressed += uncompressedSize;
-      if (totalUncompressed > MAX_DOCX_UNCOMPRESSED_BYTES) throw new UnsupportedDocumentError("DOCX expands beyond the materialization limit");
+      if (totalUncompressed > maxBytes) throw new UnsupportedDocumentError("DOCX expands beyond the materialization limit");
       const start = offset + 30 + nameLength + extraLength;
       const end = start + compressedSize;
       if (end > data.length || compressedSize === 0 && uncompressedSize > 0) throw new UnsupportedDocumentError("DOCX ZIP entry is malformed");
       if (name === wanted) {
-        const raw = method === 0 ? data.subarray(start, end) : method === 8 ? inflateRawSync(data.subarray(start, end), { maxOutputLength: MAX_DOCX_UNCOMPRESSED_BYTES }) : undefined;
+        const raw = method === 0 ? data.subarray(start, end) : method === 8 ? inflateRawSync(data.subarray(start, end), { maxOutputLength: maxBytes }) : undefined;
         if (!raw) throw new UnsupportedDocumentError("DOCX compression method is unsupported");
-        if (raw.byteLength > MAX_DOCX_UNCOMPRESSED_BYTES) throw new UnsupportedDocumentError("DOCX entry is too large");
+        if (raw.byteLength > maxBytes) throw new UnsupportedDocumentError("DOCX entry is too large");
         return raw.toString("utf8");
       }
       offset = end;

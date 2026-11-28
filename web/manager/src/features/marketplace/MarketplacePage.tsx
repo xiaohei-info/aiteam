@@ -10,7 +10,8 @@
  * 招募成功后提示可前往专家实例配置 Provider / LLM（AITEAM-683）。
  */
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { ApiError, DigitalEmployeeAvatar, EnterpriseRole, hasRole } from "@aiteam/shared";
+import { ApiError, EnterpriseRole, ProtectedAvatar, hasRole } from "@aiteam/shared";
+import { createManagerApiClient } from "../../api";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
 import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
@@ -89,8 +90,17 @@ export function solutionNamesByTemplate(solutions: SolutionPackage[]): Map<strin
   return names;
 }
 
+const MARKET_AVATAR = /^\/api\/manager\/recruit\/catalog\/experts\/[^/?#]+\/avatar\/content(?:\?v=[0-9]+)?$/u;
+
+/** 人才市场头像是 Manager 同源路径（转拉 Operator），需 Bearer：经本端 ApiClient 取图。 */
+export function isMarketAvatar(src: string): boolean {
+  return MARKET_AVATAR.test(src);
+}
+
 function MarketplaceAvatar({ name, src }: { name: string; src?: string | null }): ReactNode {
-  return <DigitalEmployeeAvatar name={name} src={src} size={54} />;
+  const { token, onUnauthorized } = useSession();
+  const client = useMemo(() => createManagerApiClient({ getToken: () => token, onUnauthorized }), [token, onUnauthorized]);
+  return <ProtectedAvatar client={client} isProtected={isMarketAvatar} name={name} src={src} size={54} />;
 }
 
 export function MarketplacePage(): ReactNode {

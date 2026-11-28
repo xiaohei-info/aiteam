@@ -16,6 +16,8 @@ import { formatConversationTime, resolveConversationSummary } from '../src/lib/c
 import { latestEmployeeConversations } from '../src/lib/projectConversation.ts'
 import { rememberEmployeeConversation } from '../src/lib/employeeConversationMap.ts'
 import { skillDisplayNames } from '../src/lib/skillDisplay.ts'
+import { migrateDraftConversationId, withDraftFiles, withDraftText } from '../src/lib/chatDraftFiles.ts'
+import { migratePinnedConversationId } from '../src/lib/pinnedConversations.ts'
 
 function chatStore(api: Record<string, unknown>) {
   const source = readFileSync(new URL('../src/stores/chat.ts', import.meta.url), 'utf8')
@@ -30,7 +32,7 @@ function chatStore(api: Record<string, unknown>) {
     } }
     if (id === '../api/agent') return { agentApi: api, AgentApiError: Error }
     if (id === './agentAuth') return { useAgentAuthStore: { getState: () => ({}), subscribe: () => {} } }
-    if (id === '../lib/pinnedConversations') return { getPinnedStorageKey: () => null }
+    if (id === '../lib/pinnedConversations') return { getPinnedStorageKey: () => null, migratePinnedConversationId }
     if (id === '../lib/piConverters') return { entriesToMessages, dispatchPiEvent, resolvePiEventSenderIdentity }
     if (id === '../lib/replyFailure') return { applyLocalFailures, describeFailure, settledFailure }
     if (id === '../lib/replyProjection') return { mergeReplyProjection, reconcileReplyProjection }
@@ -43,6 +45,7 @@ function chatStore(api: Record<string, unknown>) {
     if (id === '../lib/projectConversation') return { latestEmployeeConversations }
     if (id === '../lib/employeeConversationMap') return { rememberEmployeeConversation }
     if (id === '../lib/skillDisplay') return { skillDisplayNames }
+    if (id === '../lib/chatDraftFiles') return { migrateDraftConversationId, withDraftFiles, withDraftText }
     return {}
   }
   const code = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText
@@ -415,7 +418,7 @@ test('new-session send skips empty history loading on activation', async () => {
   let clears = 0
   let sent = false
   const send = pageCallback('startNewSession', {
-    workbenchEmployees: [{ employeeId: 'employee' }], uploadedAttachmentIds: () => [],
+    workbenchEmployees: [{ employeeId: 'employee' }], areAttachmentsReady: () => true,
     setNewSessionError: () => {}, setSendError: () => {}, setIsGenerating: () => {},
     ensureNewSessionConversation: async () => ({ id: 'new-chat', item: {} }),
     useChatStore: { getState: () => ({ conversations: [] }) }, addConversation: () => {}, setConvDraft: () => {},
@@ -939,4 +942,40 @@ test('reconciliation 的运行中快照与已持久化回复共用一条气泡',
   assert.equal(afterDelta.length, 1)
   assert.equal(afterDelta[0].content, '部分回答更多')
   store.getState().abortStream('c')
+})
+
+const importingFile = { rel_path: '', asset_url: '', name: 'big.mov', size: 0, mime: 'video/quicktime', upload: { clientId: 'c1', status: 'importing' } }
+const plainFile = { rel_path: 'a/b.pdf', asset_url: 'asset://b', name: 'b.pdf', size: 1, mime: 'application/pdf' }
+const copiedFile = { rel_path: 'a/big.mov', asset_url: 'asset://big', name: 'big.mov', size: 9, mime: 'video/quicktime', upload: { clientId: 'c1', status: 'queued' } }
+
+test('updateDraftFiles is the single place a conversation’s attachments change', () => {
+  const store = chatStore({})
+  store.getState().setConvDraft('conv-a', 'hi', [importingFile, plainFile])
+  // An import that finished elsewhere replaces its own chip and leaves the rest alone.
+  const replaced = store.getState().updateDraftFiles('conv-a', (files: any[]) =>
+    files.map((file) => file.upload?.clientId === 'c1' ? copiedFile : file))
+  assert.deepEqual(replaced, [copiedFile, plainFile], 'returns the attachments after the change')
+  assert.deepEqual(store.getState().draftsByConv['conv-a'].files, [copiedFile, plainFile])
+  assert.equal(store.getState().draftsByConv['conv-a'].text, 'hi', 'attachments must not touch the text')
+  // Adding to a conversation with no draft yet works (new session page, background conversation).
+  assert.deepEqual(store.getState().updateDraftFiles('conv-b', (files: any[]) => [...files, plainFile]), [plainFile])
+  assert.deepEqual(store.getState().draftsByConv['conv-b'].files, [plainFile])
+  assert.equal(store.getState().draftsByConv['conv-a'].files.length, 2, 'another conversation is untouched')
+})
+
+test('setConvDraftText saves the typed text without clearing attachments', () => {
+  const store = chatStore({})
+  store.getState().setConvDraft('conv-a', 'hi', [importingFile])
+  store.getState().setConvDraftText('conv-a', '切走前写的半句话')
+  assert.equal(store.getState().draftsByConv['conv-a'].text, '切走前写的半句话')
+  assert.deepEqual(store.getState().draftsByConv['conv-a'].files, [importingFile], '正在导入的附件留在原会话')
+})
+
+test('emp_ becoming a real conversation carries its draft and in-flight attachments to the new id', () => {
+  const store = chatStore({})
+  store.getState().setConvDraft('emp_1', '帮我看这份', [importingFile])
+  store.getState().upgradeConversationId('emp_1', 'conv-real', 'emp-1')
+  assert.equal(store.getState().draftsByConv['emp_1'], undefined, '不能留在旧 id 上')
+  assert.equal(store.getState().draftsByConv['conv-real'].text, '帮我看这份')
+  assert.deepEqual(store.getState().draftsByConv['conv-real'].files, [importingFile])
 })

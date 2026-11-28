@@ -17,6 +17,7 @@ from .catalog_service import CatalogService
 from .platform_skill_market import PlatformSkillRepository
 from .platform_provider_service import build_platform_provider_service
 from .repository import apply_migrations
+from .template_avatar_store import TemplateAvatarStore
 
 
 @lru_cache(maxsize=1)
@@ -53,4 +54,5 @@ def get_catalog_service() -> CatalogService:
     return CatalogService(
         get_catalog_repository(), get_catalog_gateway(),
         platform_skills=skills, platform_providers=providers, enterprises=get_repository(),
+        avatars=TemplateAvatarStore(settings.operation_data_root),
     )

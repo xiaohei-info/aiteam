@@ -20,9 +20,11 @@ import type { AuthClaims } from '../api/agent/types'
 import {
   invalidateSecureCredential,
   isPasswordResetRequired,
+  passwordResetTenantId,
   resolveAuthenticatedTenantId,
 } from '../lib/authSession'
 import { deleteSavedLoginCredentials, readSavedLoginCredentials } from '../lib/loginCredentials'
+import { isEnterpriseLoginFailure } from '../lib/loginFailure'
 
 // 旧版 WebView 持久化 key,只用于启动时清理,禁止再写入。
 const LEGACY_STORAGE_KEY = 'aifred.agent-auth.v1'
@@ -54,6 +56,8 @@ interface AgentAuthState {
   connectingAccount: string | null
   // 自动登录失败的原始错误，由登录页转成提示文案。
   autoLoginFailure: unknown
+  // 失败的自动登录用的是上次保存的企业（tenant_id）：登录页提示重新选择企业。
+  autoLoginTenantRejected: boolean
   // 最近一次授权同步中未更新的员工（Agent partial 同步）；空数组表示完整同步或无结果。
   grantsSyncSkipped: string[]
   sessionGeneration: number
@@ -65,7 +69,8 @@ interface AgentAuthState {
   runPendingAutoLogin: () => Promise<void>
   // 企业代码或名称通过 enterprise 登录；留空时按账号解析内部租户。
   // 失败会抛 AgentApiError 交给 UI 层判断。
-  login: (enterprise: string, account: string, password: string) => Promise<AgentLoginOutcome>
+  // tenantId：409 tenant_selection_required 候选中选定的企业；给出时忽略 enterprise。
+  login: (enterprise: string, account: string, password: string, tenantId?: string) => Promise<AgentLoginOutcome>
   resetPassword: (oldPassword: string, newPassword: string) => Promise<void>
   cancelPasswordReset: () => void
   setSession: (session: AuthSession, generation?: number) => Promise<void>
@@ -141,8 +146,9 @@ async function syncGrantsWithoutBlocking(
 
 async function attemptPendingAutoLogin(): Promise<void> {
   const store = useAgentAuthStore
+  let saved: Awaited<ReturnType<typeof readSavedLoginCredentials>> = null
   try {
-    const saved = canAttemptAutoLogin() ? await readSavedLoginCredentials().catch(() => null) : null
+    saved = canAttemptAutoLogin() ? await readSavedLoginCredentials().catch(() => null) : null
     const eligible = shouldAutoLogin({
       enabled: readAutoLoginPreference(),
       hasSavedCredentials: Boolean(saved),
@@ -150,9 +156,11 @@ async function attemptPendingAutoLogin(): Promise<void> {
     })
     if (!saved || !eligible) return
     store.setState({ connectingAccount: saved.account })
-    await store.getState().login(saved.enterprise, saved.account, saved.password)
+    // 带上次实际登录的企业；没有时（旧记录）按企业标识或账号密码匹配。
+    await store.getState().login(saved.enterprise, saved.account, saved.password, saved.tenantId)
   } catch (error) {
-    store.setState({ autoLoginFailure: error })
+    // 只有企业本身的原因（停用、需重新选择）才提示重新选企业；网络抖动、503、密码错误保留原提示。
+    store.setState({ autoLoginFailure: error, autoLoginTenantRejected: Boolean(saved?.tenantId) && isEnterpriseLoginFailure(error) })
   } finally {
     store.setState({ isConnecting: false, connectingAccount: null })
   }
@@ -169,6 +177,7 @@ function clearRuntimeSession(set: (partial: Partial<AgentAuthState>) => void): v
     pendingPasswordReset: null,
     isAuthenticated: false,
     autoLoginFailure: null,
+    autoLoginTenantRejected: false,
     grantsSyncSkipped: [],
   })
 }
@@ -184,6 +193,7 @@ export const useAgentAuthStore = create<AgentAuthState>((set, get) => ({
   isConnecting: false,
   connectingAccount: null,
   autoLoginFailure: null,
+  autoLoginTenantRejected: false,
   grantsSyncSkipped: [],
   sessionGeneration: 0,
 
@@ -206,17 +216,18 @@ export const useAgentAuthStore = create<AgentAuthState>((set, get) => ({
     return pendingAutoLogin
   },
 
-  login: async (inputEnterprise, account, password) => {
+  login: async (inputEnterprise, account, password, pickedTenantId) => {
     // Re-authentication can select another tenant. Drop the current token
-    // before tenant lookup/login so it is never sent.
+    // before login so it is never sent.
     const generation = beginSessionOperation()
     clearRuntimeSession(set)
-    const enterprise = inputEnterprise.trim()
-    const identity: EnterpriseIdentity = enterprise
-      ? { enterprise }
-      : { tenant_id: (await backendApi.resolveTenantByAccount({ account })).tenant_id }
-    if (!isCurrentSession(generation)) return 'authenticated'
-    if (identity.tenant_id !== undefined) resolveAuthenticatedTenantId(identity.tenant_id, identity.tenant_id)
+    const tenantChoice = pickedTenantId?.trim() ?? ''
+    const enterprise = tenantChoice ? '' : inputEnterprise.trim()
+    // 不再预先查企业：未填企业标识时直接登录，由企业服务按账号和密码匹配企业
+    // （多个匹配时 409 带候选，页面选定后带 tenant_id 再调用本方法）。
+    const identity: EnterpriseIdentity = tenantChoice
+      ? { tenant_id: tenantChoice }
+      : enterprise ? { enterprise } : {}
     let result
     try {
       result = await backendApi.login({
@@ -227,7 +238,10 @@ export const useAgentAuthStore = create<AgentAuthState>((set, get) => ({
     } catch (error) {
       if (!isCurrentSession(generation)) return 'authenticated'
       if (isPasswordResetRequired(error)) {
-        set({ pendingPasswordReset: { ...identity, account } })
+        // 改密沿用登录定位到的企业：企业服务在 403 meta.tenant_id 回传密码匹配到的企业；
+        // 没回传时保留本次登录的企业标识（都没有则改密时凭旧密码再匹配）。
+        const resetTenantId = passwordResetTenantId(error)
+        set({ pendingPasswordReset: resetTenantId ? { tenant_id: resetTenantId, account } : { ...identity, account } })
         return 'password_reset_required'
       }
       throw error
@@ -252,8 +266,10 @@ export const useAgentAuthStore = create<AgentAuthState>((set, get) => ({
     if (!pending) throw new Error('password reset was not requested by the authentication server')
 
     const generation = beginSessionOperation()
+    // 沿用登录时定位到的企业（tenant_id / 企业标识）；都没有时由企业服务凭旧密码匹配企业。
+    const { account: _account, ...identity } = pending
     const result = await backendApi.resetPassword({
-      ...(pending.enterprise !== undefined ? { enterprise: pending.enterprise } : { tenant_id: pending.tenant_id }),
+      ...(identity as EnterpriseIdentity),
       account: pending.account,
       old_password: oldPassword,
       new_password: newPassword,
@@ -305,6 +321,7 @@ export const useAgentAuthStore = create<AgentAuthState>((set, get) => ({
       isConnecting: false,
       connectingAccount: null,
       autoLoginFailure: null,
+      autoLoginTenantRejected: false,
       grantsSyncSkipped,
     })
     recordAuthDiagnostic({ reason: 'login_succeeded', source: 'login', expiresInSeconds: sessionRemainingSeconds(validatedSession.claims.exp) })

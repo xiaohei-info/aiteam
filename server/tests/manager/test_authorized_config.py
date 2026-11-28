@@ -194,10 +194,7 @@ def test_avatar_only_change_uses_additive_sync_version_without_config_cas_change
     ctx = _ctx("t-a", roles=["owner"], user_id="admin-1")
     created = config_svc.create(ctx, _body(), employee_slug="exp-avatar")
     grant_svc.set_grant("t-a", created.employee_id, member_ids=["admin-1"])
-    avatar = SimpleNamespace(
-        avatar_url="/api/manager/employees/avatar/content",
-        version=4,
-    )
+    avatar = SimpleNamespace(employee_id=created.employee_id, version=4)
     avatar_repository = SimpleNamespace(get=lambda _ctx, _employee_id: avatar)
     svc = AuthorizedConfigService(
         config_service=config_svc,
@@ -213,6 +210,8 @@ def test_avatar_only_change_uses_additive_sync_version_without_config_cas_change
     assert first.experts[0]["version"] == created.version
     assert first.experts[0]["avatar_version"] == 4
     assert first.experts[0]["avatar_sync_version"] == f"{created.version}:avatar-4"
+    # 投影是同源相对路径，?v= 跟随头像版本，不依赖请求 Host。
+    assert first.experts[0]["avatar_url"] == f"/api/manager/employees/{created.employee_id}/avatar/content?v=4"
 
     same = svc.pull(ctx, AuthorizedConfigPullRequest(
         tenant_id="t-a", member_id="admin-1",

@@ -1,0 +1,185 @@
+# 附件改为按路径引用、Agent 按需读取（方案）
+
+状态：待确认 · 分支 `feat/attachment-by-path`（基于 PR #232 `f2ddcaf5`）
+
+## 1. 目标与已拍板的决定（2026-11-27）
+
+- 桌面端发消息时附件**只传文件路径**，不再把字节经 WebView 转 base64 上传给本机 Agent。
+- **放开附件大小限制**（不再有 5 MiB 上传上限）。
+- Agent **按需读取**：提示词只写文件名、类型、大小和路径；模型需要时调用工具去读。
+- **所有员工**都有附件读取工具，与员工有没有编程 / 本机目录能力无关；工具只能读本会话用户附上的文件。
+- 引用的是原文件：用户事后移动或删除，历史附件读不到（接受）。
+
+## 2. 现状（根因）
+
+| 位置 | 现状 |
+|---|---|
+| `server/agent_service/src/pi/attachment-tool.ts:15` | 附件只认本地库 ID，注释明确 "never accepts a filesystem path" |
+| `server/agent_service/src/http/server.ts:3071-3105` | 发消息时预先处理：文档抽文字整段拼进提示词（单文件 64k 字、合计 200k 字）；图片转 base64 作为图片输入 |
+| `local-files.ts:4`、`storage/sqlite.ts:475/648/1235`、`http/server.ts:3422` | 单文件 5 MiB：常量、建表 CHECK、HTTP 上传校验 |
+| `clients/desktop/src/components/Chat/ChatInputBar.tsx:265` | 附件先 `cache_file` 复制到会话目录，再 `readCachedFileBlob` → base64 → `uploadFile`，拿到 ID 才能发（转圈即此步） |
+| `pi/sandbox.ts` / `session-host.ts:1265-1310` | 读文件工具只在会话工作目录和授权文件夹内，且只给带编程能力的员工 |
+
+## 3. 设计
+
+### 3.1 接口（北向契约变更，需确认）
+`POST /api/agent/conversations/{id}/prompt` 新增字段：
+
+```jsonc
+"attachment_paths": [
+  { "path": "/Users/me/报告.pdf", "name": "报告.pdf" }   // 绝对路径；name 仅展示
+]
+```
+- 与现有 `attachment_ids` 并存：`web/agent` 浏览器端拿不到路径，继续走上传（保留 5 MiB）。桌面端只用 `attachment_paths`。
+- 校验：绝对路径、存在、是普通文件（不是文件夹 / 符号链接逃逸后再判断）、每条消息最多 N 个（沿用 8，可调）。大小不限。
+- 幂等指纹加入 `attachment_paths`。
+
+### 3.2 Agent 存储
+新表 `local_file_ref`（或 `local_file` 加 `source_path` 列 + 放开 `byte_size` CHECK，二选一，倾向新表，避免改动既有 5 MiB 上传语义）：
+`id, conversation_id, tenant_id, member_id, entry/message key, path, name, mime_type, byte_size(发送时), mtime(发送时), created_at`。
+- 只记元数据，不存字节。
+- 记录发送时的大小和修改时间，读取时发现文件变了要在工具结果里说明。
+
+### 3.3 提示词
+发送时不再抽全文。拼在消息后：
+```
+[用户附件，可用 attachment_read 工具按需读取]
+- 报告.pdf（PDF，12.3 MB）
+- 截图.png（图片，1.1 MB）
+```
+不把绝对路径写给模型（模型用附件编号调用工具，路径只在 Agent 内部映射，避免把用户目录结构带进模型上下文）。
+
+### 3.4 `attachment_read` 工具（所有员工）
+- 在 SessionHost 装配员工工具时**无条件**加入（不依赖 coding tools / sandbox）。
+- 参数：`attachment`（编号或文件名）、`offset` / `limit`（分段，按字符或页）。
+- 只能读本会话 `local_file_ref` 里登记的文件；不接受任意路径。
+- 文本 / PDF / DOCX：复用 `document-extractor`，改为流式 / 分段读取，去掉整文件读入内存与 50 页上限（分段时按页读）。
+- 图片：读出来作为图片内容返回给模型（模型要"看"图只能拿字节）；单张过大时先缩放到模型可接受尺寸。
+- 其他二进制（视频、压缩包等）：返回元数据和"不支持读取内容"。
+- 工具调用照常进时间线与审计。
+
+### 3.5 桌面端
+- 拖入 / 「+ 导入」：直接拿原文件路径，**不再 `cache_file` 复制**，不再上传，附件立即可发（不转圈）。
+- ~~粘贴截图 / 粘贴文件（没有路径）：仍 `cache_file_bytes` 写进会话目录~~（见 §8.2 修订）：访达 / 资源管理器复制的文件粘贴时也按原路径引用；只有本机没有对应文件的粘贴内容（截图、WPS/Word 图文里的图片）才 `cache_file_bytes` 写进会话目录、按缓存路径引用（64 MB 限制只剩这一类，来自 IPC 传输）。
+- 删除 `ChatInputBar` 的上传状态机（`handleUploadFile` / `beginAttachmentUpload` / 取消后删除远端附件）在桌面端的使用；`singleChatPrompt.ts` / `groupPrompt.ts` 改发 `attachment_paths`。
+- 历史消息里的附件 chip：显示名称；点击用路径打开，文件不在了显示"文件已移动或删除"。
+
+### 3.6 群聊
+`services/group-message-delivery.ts` 把附件转交给被 @ 的员工：改为转交 `local_file_ref` 编号，各员工会话可读同一组引用。
+
+## 4. 涉及文件（预估）
+
+- Agent：`http/server.ts`（prompt 校验与拼提示、OpenAPI schema）、`storage/sqlite.ts`（新表与迁移）、`pi/attachment-tool.ts`（按引用读、分段）、`pi/document-extractor.ts`（分段）、`pi/session-host.ts`（无条件装配工具）、`services/group-message-delivery.ts`。
+- 桌面：`ChatInputBar.tsx`、`fileCache.ts`、`lib/singleChatPrompt.ts`、`lib/groupPrompt.ts`、`pages/Chat/index.tsx`、`pages/GroupChat/index.tsx`、`api/agent/types.ts`、`docs/api.json` 契约快照。
+- 文档：v1 概要设计 06（Pi Resource / 附件装配）与 02（北向 API）对应段落。
+
+## 5. 实施顺序
+
+1. Agent：新表 + `attachment_paths` 校验与落库 + 提示词附件清单（测试：路径校验、幂等、文件夹 / 不存在拒绝）。
+2. Agent：`attachment_read` 分段读取 + 无条件装配（测试：只能读登记文件、越权编号拒绝、大 PDF 分段、文件被改 / 删除提示、图片返回）。
+3. Agent：群聊转交。
+4. 桌面：发 `attachment_paths`，去掉桌面端上传；粘贴走缓存路径；历史 chip。
+5. 契约快照与概要设计文档同步。
+6. 验证：Agent 全量测试、桌面全量测试 + 冒烟；真机发 200 MB PDF / 大图 / 视频各一次，单聊与群聊。
+
+## 6. 需要确认的点
+
+1. 新接口字段 `attachment_paths` 与新表（属于北向 API 与本地库表变更）。
+2. 提示词里不写绝对路径，模型只看到附件编号和文件名 —— 是否同意。
+3. `web/agent` 浏览器端保持上传与 5 MiB 不变 —— 是否同意。
+4. 每条消息附件数上限：沿用 8，还是放宽。
+
+## 7. 非目标
+
+- 不改企业知识库上传（走 Manager，另有限制）。
+- 不改 `web/agent` 的上传流程。
+- 不做附件内容跨端上传（本地优先不变）。
+
+## 8. 实施记录（2026-11-27）
+
+§6 四点按建议拍板：新增 `attachment_paths` 字段 + `local_file_ref` 表；模型只看到附件编号与文件名，不看到绝对路径；web/agent 继续走 5 MiB 上传；单条消息附件（上传 + 路径合计）最多 8 个。
+
+已实现：
+
+| 项 | 落点 |
+| --- | --- |
+| 请求字段 `attachment_paths: [{ path, name? }]`，缺失 / 文件夹 / 相对路径 → 422（`attachment_not_found` / `attachment_not_a_file` / `invalid_attachment_paths`），与 `attachment_ids` 合计超 8 个 → 422 `too_many_attachments` | `server/agent_service/src/http/server.ts`、`src/pi/attachment-refs.ts` |
+| `local_file_ref` 表（按会话 + 成员隔离，同一会话同一路径复用编号 `ref-…`；删除会话时一并删除） | `src/storage/sqlite.ts` |
+| 消息末尾追加「用户附件」清单（编号、文件名、类型、大小），不含路径 | `attachmentManifest` |
+| 5 MiB 以内的图片仍随消息作为图片输入（与原来一致）；更大的图片不缩放，`attachment_read` 返回「超过 5 MiB 无法查看」 | `loadInlineImage` |
+| `attachment_read(attachment, offset, limit)` 给所有员工、免审批（只读）；文本 / PDF / Word 整体提取后按字分段（默认 2 万字，最多 6.4 万字）；PDF 不再限 50 页；超过 256 MiB 的纯文本按字节窗口读取；视频、音频、压缩包等只给文件名和大小；文件被移动 / 删除 / 修改都会如实告诉员工 | `src/pi/attachment-refs.ts`、`src/pi/session-host.ts`、`src/approval-service.ts` |
+| 桌面端拖入、「+ 导入」只记录原文件位置（新命令 `describe_local_file`，不复制、不上传），粘贴仍写入会话缓存后按缓存路径引用（§8.2 已修订：复制的文件粘贴也按原路径）；历史消息里点按路径引用的附件直接打开本机文件 | `clients/desktop/src-tauri/src/files.rs`、`src/lib/fileCache.ts`、`src/lib/chatAttachmentUpload.ts`、`ChatInputBar.tsx`、`AttachmentBar.tsx`、单聊 / 群聊页面 |
+| 契约快照 `docs/api.json` 的 `PromptRequest` 增加 `attachment_paths` | `clients/desktop/docs/api.json` |
+
+已知边界：历史消息里的附件点开依赖系统授权范围（拖入 / 选择后本次启动内可打开；重启后可能提示需要重新授权或文件已移动）；Agent 只在员工调用工具时读取文件，所以发送后再改动文件，员工读到的是改动后的内容（工具结果会注明「发送后被修改过」）。
+
+### 8.1 实机验证后的补充（2026-11-27）
+
+- 历史消息：Agent 追加的「用户附件」清单不再显示在气泡正文里，改为附件卡片（`src/lib/attachmentManifest.ts` 的 `splitAttachmentManifest`，在 `piConverters` 里只处理用户消息）。
+- 历史消息里点开按路径引用的附件：按 ref ID 向本机 Agent 要位置（`GET /api/agent/conversations/{id}/attachment-refs`，路径不出本机，`src/lib/attachmentRefPaths.ts` 按会话缓存）。**不再按文件名记在 localStorage**：同一会话里两个同名不同位置的文件各自打开自己那个（评审必改 4）。
+- 打不开的类型（Excel / 视频 / 压缩包等不在应用内预览白名单里）改为在文件夹里定位它（`reveal_local_file`），并在附件区给一句说明。
+- 同一个文件再拖入 / 再选择不重复添加；同一条消息里重复的路径 Agent 只列一次。
+
+实机结果（macOS，本分支 `pnpm tauri dev`，Agent 由 `agent:build` 打包）：
+
+| 场景 | 结果 |
+| --- | --- |
+| 单聊从访达拖入 12 MiB 文本 | 立即出现附件卡片、无转圈；员工调用 `attachment_read` 分段读到开头和结尾标记 |
+| 拖入文件夹 | 提示「“a-folder”是文件夹，不能作为附件；请拖入文件」 |
+| 「+ 导入」选择 small.md + 粘贴 12 MiB 文件，同一条消息 | 两张卡片；员工答出口令与结尾标记；库里导入 / 拖入记原路径，粘贴记会话缓存路径 |
+| 历史消息点开附件 | 用系统默认应用打开原文件 |
+| 群聊拖入 + @成员 | 被 @ 的员工读到附件并回答 |
+| 同一文件拖入两次 | 只出现一张卡片 |
+
+### 8.2 粘贴复制的文件也按原路径引用（2026-11-27，提交 `e2c29750`）
+
+问题：8.1 之后，从访达复制文件再粘贴仍走 WebView 交来的文件字节（`cache_file_bytes`，base64 过 IPC），110 MB 的 zip 报「超过 64 MB 上限」，小一些的大文件也要整份复制、转圈。拖入和粘贴是两条路。
+
+修订后，**本机上有文件的，一律按原路径引用**；只有本机没有文件的粘贴内容才写缓存：
+
+| 来源 | 拿到什么 | 走哪条路 | 大小限制 |
+| --- | --- | --- | --- |
+| 拖入 | Tauri 原生拖放给出路径 | `importPathsRef` → `describe_local_file` | 无 |
+| 「+ 导入」 | 系统选择器给出路径 | 同上 | 无 |
+| 访达 / 资源管理器复制后粘贴 | 新命令 `read_clipboard_file_paths` 从系统剪贴板读路径 | 同上（去重、「正在导入」、出错文案与拖入相同） | 无 |
+| 截图、WPS/Word 图文里的图片 | 只有字节，本机没有文件 | `onFiles` → `cache_file_bytes` 写会话缓存，再按缓存路径引用 | 64 MB（IPC 传输） |
+
+实现：
+
+- `clients/desktop/src-tauri/src/clipboard_files.rs`：
+  - macOS 读每个 `NSPasteboardItem` 的 `public.file-url`。访达放的是文件引用地址 `file:///.file/id=…`（按 inode，不是路径），先用 `NSURL::filePathURL` 解析成真实路径，否则会去打开 `/.file/id=…` 报 `Not a directory (os error 20)`。
+  - Windows 读 `CF_HDROP`（`DragQueryFileW`）。
+  - 其它平台返回空。
+  - `Cargo.toml`：`url` 提到通用依赖；macOS 增加 `NSPasteboardItem`、`NSURL` 特性；Windows 增加 `Win32_System_DataExchange`、`Win32_System_Ole`、`Win32_UI_Shell`。
+- `src/components/Chat/MentionInput.tsx` `takeTransfer`：剪贴板里有文件时先调 `readClipboardFilePaths()`，拿到路径就交给 `onPaths`，**不读字节**；拿不到（截图等）才按原来的内容规则处理。因为多了一次异步，文字插入回到粘贴时的光标位置。
+- `ChatInputBar.tsx`：`onPaths={canDropFiles ? handlePastePaths : undefined}`，`handlePastePaths` 直接调用拖入用的 `importPathsRef`。
+- 路径同样经 `describe_local_file` → `canonicalize_scoped_path` 校验（必须是存在的普通文件，文件夹提示不能作为附件）。
+- 添加失败的提示统一由 `importErrorMessage`（`src/lib/chatAttachmentUpload.ts`）给出原因（超限 / 文件夹 / 宿主错误原文），不再只说「请重试」。
+
+验证：
+
+- `cargo test --lib clipboard_files`：`file://` 地址解码（中文、空格）、跳过非 file 地址；macOS 用真实文件生成 `file:///.file/id=…` 引用并解析回原路径。
+- `tests/composerImportOwnership.test.ts`：守卫粘贴路径必须走 `readClipboardFilePaths` → `onPaths` → `importPathsRef`，不读字节；`importErrorMessage` 文案。
+- 全量：desktop 971/971、`cargo test --lib` 98 通过、agent_service 569 中 567 通过 0 失败。
+- 真机（macOS，用户实测）：访达复制 `cc-haha-main.zip`（110 MB）粘贴，立即加入、无转圈，发送后员工能读到。
+- 未验证：Windows 的 `CF_HDROP` 只在独立小工程里交叉编译通过，未上 Windows 真机。
+
+### 8.3 读取侧也要重新判定路径（2026-11-27，复核必改）
+
+问题（用户复核，成立）：`a5fd85b0` 只在**登记时**（`resolveAttachmentPath`）解析软链并拒绝凭据目录，`attachment_read` 的读取侧只 `statSync`。于是 `attachment-refs.ts` 原注释里「渲染进程被攻破时 `~/.ssh/id_rsa` 不可读」这句承诺有两条绕法：
+
+1. **登记后换软链**：登记时是普通文件、通过检查；随后把该路径换成指向 `~/.ssh/id_rsa` 的软链，读取时 `statSync` 跟随软链，照读。
+2. **硬链接**：把密钥硬链接到 `~/Documents/report.pdf` 再附加。硬链接在自己的路径里不留目标痕迹，`realpathSync` 返回的就是 `report.pdf`，凭据目录判定命不中。
+
+另外 MIME 由客户端传来的 `name` 决定（`mimeForAttachment(name)`），客户端可以给真实文件任意换类型。
+
+改法（`server/agent_service/src/pi/attachment-refs.ts`）：
+
+- 抽出 `checkAttachmentFile(path, label)`：解析软链 → 凭据目录判定 → 必须是普通文件 → **`nlink > 1` 一律拒绝**（新错误码 `attachment_has_hard_links`，422）。登记与读取共用它，读取时**再判一次**。
+- 读取侧额外比对身份：`realpathSync(ref.path) !== ref.path` 即路径已指向别处 → 拒绝（`attachment_path_changed`，工具返回「现在指向另一个文件，为安全起见不再读取」）。
+- MIME 改由**磁盘上的真实文件名**推断（`mimeForAttachment(basename(real))`）；客户端的 `name` 只作显示标签。
+- 注释改为如实口径：这些检查**收窄**风险，对同时能写文件的被攻破渲染进程并不能消除风险。真正让普通情况安全的是客户端侧——Tauri 只交出用户自己拖入或选择过的路径（`canonicalize_scoped_path` + fs scope），没有用户亲自选中就拿不到密钥；桌面端并没有凭据目录黑名单。
+
+代价：确实有多个硬链接的正常文件会被拒（提示说明原因）。普通用户文档 `nlink` 基本为 1，而放过硬链接就等于放弃凭据目录这道检查。
+
+验证（`src/pi/attachment-refs.test.ts`，3 个新用例）：硬链接到 `.ssh/id_rsa` 的 `report.pdf` 登记即拒；登记后换软链指向 `.ssh/id_rsa` → 读取报「凭据」且内容不外泄，换软链指向普通文件 → 报「指向另一个文件」且内容不外泄；`{ path: notes.txt, name: 报告.pdf }` 的 MIME 为 `text/plain`。

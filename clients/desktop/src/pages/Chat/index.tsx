@@ -5,12 +5,16 @@ import { useChatStore, type Message, type ConversationItem } from '../../stores/
 import { employeeSendFailure, employeeUnavailableMessage } from '../../lib/employeeAvailability'
 import { projectSendFailure } from '../../lib/projectConversation'
 import { useAgentAuthStore } from '../../stores/agentAuth'
-import { pickAndCacheFile, readCachedFileBlob, type CachedFile } from '../../lib/fileCache'
+import { pickFilePath, cacheFileFromBlob, describeLocalFile, readCachedFileBlob, type CachedFile } from '../../lib/fileCache'
 import {
-  uploadedAttachmentIds,
+  attachmentKeys,
+  attachmentSendFailure,
+  areAttachmentsReady,
   uploadedMessageAttachments,
   type UploadableChatFile,
 } from '../../lib/chatAttachmentUpload'
+import { mergeDraftFiles } from '../../lib/chatDraftFiles'
+import { clearSendErrorFor, sendErrorFor, type ConversationSendError } from '../../lib/conversationSendError'
 import { blobToBase64, sendTextMessage, type SendContext } from '../../lib/messageSender'
 import { submitSingleChatPrompt } from '../../lib/singleChatPrompt'
 import { agentApi, AgentApiError } from '../../api/agent'
@@ -118,13 +122,16 @@ function isSameSendAttempt(
 
 interface NewSessionPageProps {
   onSend: (text: string, files: UploadableChatFile[], employeeId?: string) => boolean | Promise<boolean>
-  onPickFile: () => Promise<CachedFile | null>
+  onPickFile: () => Promise<string | null>
+  onImportFile: (file: File) => Promise<CachedFile | null>
+  onImportPath: (path: string) => Promise<CachedFile | null>
   onUploadFile: (file: CachedFile, employeeId?: string) => Promise<string>
   onDeleteUploadedFile: (attachmentId: string) => Promise<void>
   disabled?: boolean
   draft?: string
   draftFiles?: CachedFile[]
-  onDraftChange: (convId: string, text: string, files: CachedFile[]) => void
+  onDraftTextChange: (convId: string, text: string, mentionSnapshot?: readonly Node[]) => void
+  onDraftFilesChange: (convId: string, update: (files: UploadableChatFile[]) => UploadableChatFile[]) => UploadableChatFile[]
   error?: string | null
   employees?: WorkbenchEmployee[]
 }
@@ -132,12 +139,15 @@ interface NewSessionPageProps {
 function NewSessionPage({
   onSend,
   onPickFile,
+  onImportFile,
+  onImportPath,
   onUploadFile,
   onDeleteUploadedFile,
   disabled,
   draft,
   draftFiles,
-  onDraftChange,
+  onDraftTextChange,
+  onDraftFilesChange,
   error,
   employees,
 }: NewSessionPageProps) {
@@ -151,13 +161,16 @@ function NewSessionPage({
           enableKnowledgeFiles
           onSend={onSend}
           onPickFile={onPickFile}
+          onImportFile={onImportFile}
+          onImportPath={onImportPath}
           onUploadFile={onUploadFile}
           onDeleteUploadedFile={onDeleteUploadedFile}
           disabled={disabled}
           convId=""
           draft={draft}
           draftFiles={draftFiles}
-          onDraftChange={onDraftChange}
+          onDraftTextChange={onDraftTextChange}
+          onDraftFilesChange={onDraftFilesChange}
           placeholder="随心输入"
           autoFocus
           employees={employees}
@@ -179,7 +192,7 @@ export default function Chat() {
 
   const [isGenerating, setIsGenerating] = useState(false)
   const [newSessionError, setNewSessionError] = useState<string | null>(null)
-  const [sendError, setSendError] = useState<string | null>(null)
+  const [sendError, setSendError] = useState<ConversationSendError | null>(null)
   const sendFailureRef = useRef<string | null>(null)
   const [pendingInitialMessage, setPendingInitialMessage] = useState<PendingInitialMessage | null>(null)
   const [messageLoadAttempt, setMessageLoadAttempt] = useState(0)
@@ -190,7 +203,7 @@ export default function Chat() {
     activeConvId, conversations, activeConvMessages, activeConvRawItems, appendMessage, updateMessageStatus,
     loadConversation, refreshActiveEntries,
     refreshConversations, upgradeConversationId, toggleDetail,
-    highlightMsgId, setHighlightMsgId, draftsByConv, setConvDraft,
+    highlightMsgId, setHighlightMsgId, draftsByConv, setConvDraft, setConvDraftText, updateDraftFiles,
     addConversation, setActiveConvId, workbenchEmployees, clearUnread, loadMoreMessages, activePagination,
     startAssistantStream, abortStream, generatingConvIds, syncingConvIds, streamingMsgIds,
     dropStaleConversation,
@@ -450,6 +463,12 @@ export default function Chat() {
     return promise
   }, [conversations, upgradeConversationId, workbenchEmployees])
 
+  /** 失败内容写回草稿：文字覆盖，附件与期间新加的合并，不把它们覆盖掉。 */
+  const restoreFailedDraft = useCallback((convId: string, text: string, files: UploadableChatFile[]) => {
+    setConvDraftText(convId, text)
+    updateDraftFiles(convId, (current) => mergeDraftFiles(files, current))
+  }, [setConvDraftText, updateDraftFiles])
+
   const submitMessage = useCallback(async (
     conversation: EnsuredConversation,
     text: string,
@@ -457,8 +476,8 @@ export default function Chat() {
   ): Promise<boolean> => {
     const blocked = employeeUnavailableMessage(useChatStore.getState().workbenchEmployees.find((employee) => employee.employeeId === conversation.employeeId))
     if (blocked) return false
-    const attachmentIds = uploadedAttachmentIds(files)
-    if (attachmentIds.length !== files.length) return false
+    if (!areAttachmentsReady(files)) return false
+    const attachmentIds = attachmentKeys(files)
 
     const previousAttempt = pendingSendAttemptRef.current
     let messageId: string
@@ -496,14 +515,15 @@ export default function Chat() {
       )
     } catch (error) {
       console.error('[Chat] submitPrompt failed:', error)
-      sendFailureRef.current = projectSendFailure(error) ?? employeeSendFailure(error)
+      sendFailureRef.current = attachmentSendFailure(error) ?? projectSendFailure(error) ?? employeeSendFailure(error)
       updateMessageStatus(conversation.id, messageId, 'failed')
       return false
     }
 
     updateMessageStatus(conversation.id, messageId, 'sent')
     pendingSendAttemptRef.current = null
-    setConvDraft(conversation.id, '', [])
+    // 只清文字：输入框在点击当帧已清空自己，发送期间（员工回复时、队列自动发出时）新加的附件要留在输入框里。
+    setConvDraftText(conversation.id, '')
 
     const agentName = useChatStore.getState().conversations.find((item) => item.id === conversation.id)?.agentName
       ?? conversation.item.agentName
@@ -519,20 +539,20 @@ export default function Chat() {
     })
     startAssistantStream(conversation.id, { promptIdempotencyKey: idempotencyKey })
     return true
-  }, [buildSendContext, setConvDraft, startAssistantStream, updateMessageStatus])
+  }, [buildSendContext, setConvDraftText, startAssistantStream, updateMessageStatus])
 
   const sendMessage = useCallback(async (text: string, files: UploadableChatFile[] = []): Promise<boolean> => {
     if ((!text && files.length === 0) || !activeConvId) return false
     if (unavailableMessage) return false
-    setSendError(null)
+    setSendError((previous) => clearSendErrorFor(previous, activeConvId))
     try {
       const conversation = await ensureConversation(activeConvId)
       const sent = await submitMessage(conversation, text, files)
-      if (!sent) setSendError(sendFailureRef.current ?? '发送失败，请重试。')
+      if (!sent) setSendError({ conversationId: conversation.id, message: sendFailureRef.current ?? '发送失败，请重试。' })
       return sent
     } catch (error) {
       console.error('[Chat] createConversation failed:', error)
-      setSendError('创建会话失败，请重试。')
+      setSendError({ conversationId: activeConvId, message: '创建会话失败，请重试。' })
       return false
     }
   }, [activeConvId, ensureConversation, submitMessage, unavailableMessage])
@@ -616,9 +636,18 @@ export default function Chat() {
 
   // ── Pick & send file ─────────────────────────────────────────────────────────
 
-  const pickFileAction = useCallback(
-    () => pickAndCacheFile(userId, activeConvId || 'new-session'),
+  const pickFileAction = pickFilePath
+
+  /** Pasted content with no file on disk (screenshot, RTF picture): cache the bytes, then reference the cached path. */
+  const importFileAction = useCallback(
+    (file: File) => cacheFileFromBlob(userId, activeConvId || 'new-session', file, file.name),
     [userId, activeConvId]
+  )
+
+  /** Dragged in, picked, or copied in Finder/Explorer and pasted: the message refers to the file where it is (attachment by path), nothing is copied. */
+  const importPathAction = useCallback(
+    (path: string) => describeLocalFile(path),
+    [],
   )
 
   const handleUploadFile = useCallback(async (file: CachedFile): Promise<string> => {
@@ -700,7 +729,7 @@ export default function Chat() {
       setNewSessionError('暂无可用智能体,请先同步或创建一个智能体。')
       return false
     }
-    if (uploadedAttachmentIds(files).length !== files.length) return false
+    if (!areAttachmentsReady(files)) return false
 
     setNewSessionError(null)
     setSendError(null)
@@ -725,23 +754,19 @@ export default function Chat() {
 
       const sent = await submitMessage({ ...conversation, item }, trimmed, files)
       if (!sent) {
-        setSendError('发送失败，请重试。')
-        setConvDraft(conversation.id, trimmed, files)
+        setSendError({ conversationId: conversation.id, message: sendFailureRef.current ?? '发送失败，请重试。' })
+        restoreFailedDraft(conversation.id, trimmed, files)
       }
       return sent
     } catch (error) {
       console.error('[Chat] createConversation failed:', error)
-      if (activatedConversationId) setConvDraft(activatedConversationId, trimmed, files)
+      if (activatedConversationId) restoreFailedDraft(activatedConversationId, trimmed, files)
       setNewSessionError(error instanceof Error && error.message ? error.message : '创建新会话失败，请重试。')
       return false
     } finally {
       setIsGenerating(false)
     }
-  }, [workbenchEmployees, addConversation, ensureNewSessionConversation, setActiveConvId, setConvDraft, submitMessage])
-
-  const handleDraftChange = useCallback((convId: string, text: string, files: CachedFile[]) => {
-    setConvDraft(convId, text, files)
-  }, [setConvDraft])
+  }, [workbenchEmployees, addConversation, ensureNewSessionConversation, restoreFailedDraft, setActiveConvId, setConvDraft, submitMessage])
 
   const getDisplayContent = (msg: Message): { content: string; streaming: boolean } => ({
     content: msg.content,
@@ -769,12 +794,15 @@ export default function Chat() {
       <NewSessionPage
         onSend={(text, files, employeeId) => startNewSession(text, files, employeeId ?? (location.state as { employeeId?: string } | null)?.employeeId)}
         onPickFile={pickFileAction}
+        onImportFile={importFileAction}
+        onImportPath={importPathAction}
         onUploadFile={handleNewSessionUpload}
         onDeleteUploadedFile={handleDeleteNewSessionUpload}
         disabled={isGenerating}
         draft={draftsByConv['']?.text}
         draftFiles={draftsByConv['']?.files}
-        onDraftChange={handleDraftChange}
+        onDraftTextChange={setConvDraftText}
+        onDraftFilesChange={updateDraftFiles}
         error={newSessionError}
         employees={workbenchEmployees}
       />
@@ -873,6 +901,8 @@ export default function Chat() {
       <ChatInputBar
         onSend={sendMessage}
         onPickFile={pickFileAction}
+        onImportFile={importFileAction}
+        onImportPath={importPathAction}
         onUploadFile={handleUploadFile}
         onDeleteUploadedFile={handleDeleteUploadedFile}
         disabled={activeMessagesLoading || Boolean(activeMessagesError) || Boolean(unavailableMessage)}
@@ -881,7 +911,8 @@ export default function Chat() {
         conversationUpgradeFrom={[...upgradedConversationIdsRef.current].find(([, id]) => id === activeConvId)?.[0]}
         draft={draftsByConv[activeConvId]?.text}
         draftFiles={draftsByConv[activeConvId]?.files}
-        onDraftChange={handleDraftChange}
+        onDraftTextChange={setConvDraftText}
+        onDraftFilesChange={updateDraftFiles}
         isGenerating={generatingConvIds.has(activeConvId)}
         isSyncing={syncingConvIds.has(activeConvId)}
         onAbort={() => handleAbort(activeConvId)}
@@ -897,7 +928,7 @@ export default function Chat() {
           />
         )}
         helper={<>
-          {sendError && <p className="chat-input-error" role="alert">{sendError}</p>}
+          {sendErrorFor(sendError, activeConvId) && <p className="chat-input-error" role="alert">{sendErrorFor(sendError, activeConvId)}</p>}
           <div className="chat-composer-footer">
             <ConversationPermissions conversationId={activeConvId} generating={generatingConvIds.has(activeConvId)} ensureConversation={() => ensureConversation(activeConvId)} />
             <ConversationStatus key={`${activeConvId}:${contextResetCount}`} conversationId={activeConvId} generating={generatingConvIds.has(activeConvId)} unavailable={Boolean(unavailableMessage)} />

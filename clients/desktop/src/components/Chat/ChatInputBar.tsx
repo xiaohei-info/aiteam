@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useLayoutEffect, useCallback, useId, memo, type ReactNode } from 'react'
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, useId, memo, type ReactNode } from 'react'
 import { flushSync } from 'react-dom'
 import { ArrowUp, BookOpen, ChevronDown, Mic, Paperclip, Plus, Square, X } from 'lucide-react'
 import { useMergeRefs } from '@floating-ui/react'
@@ -9,11 +9,18 @@ import {
   completeAttachmentUpload,
   failAttachmentUpload,
   hasBlockingAttachmentUpload,
+  importErrorMessage,
+  isImportingAttachment,
+  planAttachmentImports,
+  queueAttachmentUpload,
+  isReferencedByPath,
+  referenceAttachmentByPath,
   removeAttachmentUpload,
   runWhenAttachmentsReady,
   type UploadableChatFile,
 } from '../../lib/chatAttachmentUpload'
 import { composerRestoreTarget } from '../../lib/chatComposerRestore'
+import { mergeDraftFiles } from '../../lib/chatDraftFiles'
 import type { WorkbenchEmployee } from '../../lib/employeeConversationMap'
 import type { GroupMember } from '../../stores/chat'
 // Phase 3:语音转写从旧 /api/team/stt 切到新栈 /api/agent/audio/transcriptions。
@@ -24,7 +31,8 @@ import { useGlobalShortcutClose } from '../../hooks/useGlobalShortcut'
 import { useVoiceInput, type VoiceRecording } from '../../hooks/useVoiceInput'
 import { PopoverPortal, PopoverTabOrder } from '../Popover/PopoverLayer'
 import { useAnchoredPopover } from '../Popover/useAnchoredPopover'
-import MentionInput, { type MentionInputHandle, type MentionInputSnapshot } from './MentionInput'
+import MentionInput, { type MentionInputSnapshot } from './MentionInput'
+import { useComposerValue } from './useComposerValue'
 import { ChatSendQueue } from './ChatSendQueue'
 import {
   enqueueMessage,
@@ -41,14 +49,26 @@ import {
 } from '../../lib/chatSendQueue'
 import { KnowledgeFilePicker } from './KnowledgeFilePicker'
 import { FileChip } from './FileChip'
-import { isImeKeyboardEvent } from '../../lib/imeKeyboard'
+import { registerFileDropZone } from '../../lib/nativeFileDrop'
+
+/** One file to add: what to show straight away, how to copy it in, and what to say if that fails. */
+interface ImportRequest {
+  meta: { name: string; mime: string; size: number }
+  load: () => Promise<CachedFile | null>
+  failure: (error: unknown) => string
+}
 
 const CHAT_TEXTAREA_MIN_HEIGHT = 60
 const CHAT_TEXTAREA_MAX_HEIGHT = 240
 
 export interface ChatInputBarProps {
   onSend: (text: string, files: UploadableChatFile[], employeeId?: string, mentions?: string[]) => boolean | Promise<boolean>
-  onPickFile: () => Promise<CachedFile | null>
+  /** Opens the file picker and returns the chosen path; the file is then imported like a dropped one. */
+  onPickFile: () => Promise<string | null>
+  /** Caches pasted content that has no file on disk (screenshot, RTF picture) so it can be referenced by path. */
+  onImportFile?: (file: File) => Promise<CachedFile | null>
+  /** Caches a file dragged in from Finder/Explorer by its path, like「+ 导入」(no size limit). */
+  onImportPath?: (path: string) => Promise<CachedFile | null>
   onUploadFile?: (file: CachedFile, employeeId?: string) => Promise<string>
   onDeleteUploadedFile?: (attachmentId: string) => Promise<unknown>
   disabled?: boolean
@@ -56,7 +76,17 @@ export interface ChatInputBarProps {
   conversationUpgradeFrom?: string
   draft?: string
   draftFiles?: CachedFile[]
-  onDraftChange: (convId: string, text: string, files: CachedFile[]) => void
+  /** 草稿里的 @ 成员标签（输入框自己克隆的节点）；有快照就原样放回，没有才退回纯文本。 */
+  draftMentions?: MentionInputSnapshot
+  /** Saves the typed text of a conversation without touching its attachments. */
+  onDraftTextChange: (convId: string, text: string, mentionSnapshot?: MentionInputSnapshot) => void
+  /**
+   * Changes the attachments of one conversation — the only copy of that state, shown by this input
+   * box while that conversation is on screen. Imports and uploads that finish later (or while the
+   * input box is closed) update the conversation they were added to through here, so nothing is
+   * lost and nothing is shadowed by a stale copy. Returns the attachments after the change.
+   */
+  onDraftFilesChange: (convId: string, update: (files: UploadableChatFile[]) => UploadableChatFile[]) => UploadableChatFile[]
   employees?: WorkbenchEmployee[]
   members?: GroupMember[]
   variant?: 'dock' | 'hero'
@@ -76,25 +106,23 @@ export interface ChatInputBarProps {
 }
 
 export const ChatInputBar = memo(({
-  onSend, onPickFile, onUploadFile, onDeleteUploadedFile,
-  disabled, convId, conversationUpgradeFrom, draft, draftFiles, onDraftChange,
+  onSend, onPickFile, onImportFile, onImportPath, onUploadFile, onDeleteUploadedFile,
+  disabled, convId, conversationUpgradeFrom, draft, draftFiles, draftMentions,
+  onDraftTextChange, onDraftFilesChange,
   variant = 'dock', placeholder = '输入消息…', autoFocus, helper, tools,
   employees = [], members, isGenerating, isSyncing, onAbort, onHeightChange, enableVoiceInput, enableKnowledgeFiles,
 }: ChatInputBarProps) => {
   const [knowledgeOpen, setKnowledgeOpen] = useState(false)
   const [fileError, setFileError] = useState('')
-  const [input, setInput] = useState(draft ?? '')
-  const [pendingFiles, setPendingFiles] = useState<UploadableChatFile[]>(draftFiles ?? [])
   const [isPickingFile, setIsPickingFile] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [textareaHeight, setTextareaHeight] = useState(CHAT_TEXTAREA_MIN_HEIGHT)
   const [selectedRoles, setSelectedRoles] = useState<string[]>([])
   const [roleOpen, setRoleOpen] = useState(false)
-  const mentionInputRef = useRef<MentionInputHandle>(null)
-  const mentionTextRef = useRef({ text: draft ?? '', mentions: [] as string[] })
-  const [mentionText, setMentionText] = useState(draft ?? '')
+  // 单聊与群聊共用同一个 MentionInput：单聊不传成员，@ 菜单不出现，其余输入行为完全一致。
+  const composer = useComposerValue(draft ?? '')
+  const mentionMembers = members ?? []
   const dragRef = useRef<{ startY: number; startH: number } | null>(null)
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
   const roleRef = useRef<HTMLDivElement>(null)
   const roleTriggerRef = useRef<HTMLButtonElement>(null)
   const roleMenuRef = useRef<HTMLDivElement>(null)
@@ -103,21 +131,25 @@ export const ChatInputBar = memo(({
   const rolePopover = useAnchoredPopover({ open: roleOpen, placement: 'bottom-start', fallbackPlacements: ['top-start'], offset: 6, fit: { maxHeight: 240 } })
   const roleTriggerRefs = useMergeRefs([roleTriggerRef, rolePopover.refs.setReference])
   const roleMenuRefs = useMergeRefs([roleMenuRef, rolePopover.refs.setFloating])
-  const inputRef = useRef(input)
-  inputRef.current = input
+  // 附件按会话只存一份：这里显示的就是该会话草稿里的附件，没有第二份本地副本，
+  // 所以离开聊天页再回来时跟的是最新状态，不会停在旧的「正在导入」。
+  // useMemo keeps the identity stable while the draft is unchanged, so the「等待上传」effect below
+  // does not re-run on every render.
+  const pendingFiles = useMemo(() => (draftFiles ?? []) as UploadableChatFile[], [draftFiles])
   const filesRef = useRef(pendingFiles)
   filesRef.current = pendingFiles
   const cancelledUploadIdsRef = useRef(new Set<string>())
+  // Which conversation each importing/uploading attachment belongs to, pinned when it is added.
+  // Imports and uploads keep running when the user switches away; the result goes back to that
+  // conversation only.
+  const fileOwnersRef = useRef(new Map<string, string>())
   const prevConvRef = useRef(convId)
   const conversationUpgradeFromRef = useRef(conversationUpgradeFrom)
   conversationUpgradeFromRef.current = conversationUpgradeFrom
-  const prevMentionModeRef = useRef(members !== undefined && members.length > 0)
-  const isComposingRef = useRef(false)
-  const isMentionMode = members !== undefined && members.length > 0
   // 正在发送的会话；emp_ 升级为真实会话时跟着更新，用于判断失败时把内容放回哪里。
   const submittingConvRef = useRef<string | null>(null)
   const mountedRef = useRef(false)
-  const adoptedDraftRef = useRef({ convId, draft, draftFiles })
+  const adoptedDraftRef = useRef({ convId, draft, draftFiles, draftMentions })
   // 生成中发送的消息按会话排队，本轮结束后依次发出；队首发送失败时暂停该会话的队列。
   const [queues, setQueues] = useState<ChatSendQueues<MentionInputSnapshot>>({})
   const queuesRef = useRef(queues)
@@ -129,6 +161,19 @@ export const ChatInputBar = memo(({
     mountedRef.current = true
     return () => { mountedRef.current = false }
   }, [])
+
+  /** Changes one conversation's attachments; defaults to the conversation on screen. */
+  const setFiles = useCallback((
+    update: (previous: UploadableChatFile[]) => UploadableChatFile[],
+    conversationId?: string,
+  ): UploadableChatFile[] => {
+    const target = conversationId ?? prevConvRef.current
+    const next = onDraftFilesChange(target, update)
+    // The store is the single copy, but this render's props are a frame behind: keep the ref that
+    // sending and ownership checks read in step with what was just written.
+    if (target === prevConvRef.current) filesRef.current = next
+    return next
+  }, [onDraftFilesChange])
 
   const handleCloseRolePicker = useCallback(() => {
     setRoleOpen(false)
@@ -147,22 +192,17 @@ export const ChatInputBar = memo(({
       && previousConvId === conversationUpgradeFrom
       && !convId.startsWith('emp_')
     if (conversationChanged && !isConversationUpgrade) {
-      const previousDraft = prevMentionModeRef.current
-        ? mentionTextRef.current.text
-        : inputRef.current
-      const previousFiles = filesRef.current.filter((file) => {
-        if (file.upload?.status !== 'uploading') return true
-        cancelledUploadIdsRef.current.add(file.upload.clientId)
-        return false
-      })
       setKnowledgeOpen(false)
       setFileError('')
-      onDraftChange(previousConvId, previousDraft, previousFiles)
-      setInput(nextDraft)
-      setPendingFiles(draftFiles ?? [])
+      // 只存文字：附件已经在各自会话的草稿里（正在导入/上传的也留在原会话，完成后回到那里）。
+      // 带上 @ 成员快照：只存纯文本的话切回来「@某人」只剩文字，发送时不再提及对方。
+      onDraftTextChange(previousConvId, composer.valueRef.current.text, composer.snapshot())
     }
     if (isConversationUpgrade && submittingConvRef.current === previousConvId) submittingConvRef.current = convId
     if (isConversationUpgrade) {
+      for (const [clientId, owner] of fileOwnersRef.current) {
+        if (owner === previousConvId) fileOwnersRef.current.set(clientId, convId)
+      }
       setQueues((previous) => renameQueue(previous, previousConvId, convId))
       setPausedQueues((previous) => {
         if (!previous.has(previousConvId)) return previous
@@ -174,42 +214,29 @@ export const ChatInputBar = memo(({
     if (conversationChanged) prevConvRef.current = convId
 
     // MentionInput 是 contenteditable，必须显式随 convId 恢复/清空 DOM，避免草稿串会话。
-    if (isMentionMode && !isConversationUpgrade) {
-      mentionTextRef.current = { text: nextDraft, mentions: [] }
-      setMentionText(nextDraft)
-      mentionInputRef.current?.setText(nextDraft)
-    }
-    prevMentionModeRef.current = isMentionMode
-  }, [convId, isMentionMode]) // eslint-disable-line react-hooks/exhaustive-deps
+    if (!isConversationUpgrade) composer.restore(nextDraft ? draftMentions : undefined, nextDraft)
+  }, [convId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // 新会话页发送后已切到会话、输入框换了一个；发送失败时页面把内容写回该会话草稿，
   // 这里在输入框为空时采用它。切换会话的草稿由上面的 effect 处理。
   useLayoutEffect(() => {
     const previous = adoptedDraftRef.current
-    adoptedDraftRef.current = { convId, draft, draftFiles }
+    adoptedDraftRef.current = { convId, draft, draftFiles, draftMentions }
     if (previous.convId !== convId) return
     if (previous.draft === draft && previous.draftFiles === draftFiles) return
     if ((!draft && !draftFiles?.length) || isSubmitting) return
-    const current = isMentionMode ? mentionTextRef.current.text : inputRef.current
-    if (current.trim() || filesRef.current.length > 0) return
-    if (isMentionMode) {
-      mentionTextRef.current = { text: draft ?? '', mentions: [] }
-      setMentionText(draft ?? '')
-      mentionInputRef.current?.setText(draft ?? '')
-    } else {
-      setInput(draft ?? '')
-    }
-    setPendingFiles(draftFiles ?? [])
+    // Attachments come from the draft on their own now, so only the typed text is adopted — and only
+    // when the user has not started typing something else.
+    if (composer.valueRef.current.text.trim()) return
+    composer.restore(draftMentions, draft ?? '')
   }, [convId, draft, draftFiles]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // 高度随内容自适应（输入、粘贴、草稿恢复、清空都会改 composer.text）。
+  const { getScrollHeight } = composer
   useLayoutEffect(() => {
-    const textarea = textareaRef.current
-    if (!textarea) return
-    textarea.style.height = 'auto'
-    const nextHeight = Math.max(CHAT_TEXTAREA_MIN_HEIGHT, Math.min(CHAT_TEXTAREA_MAX_HEIGHT, textarea.scrollHeight))
-    textarea.style.height = `${nextHeight}px`
-    setTextareaHeight(nextHeight)
-  }, [input])
+    const scrollHeight = getScrollHeight() ?? CHAT_TEXTAREA_MIN_HEIGHT
+    setTextareaHeight(Math.max(CHAT_TEXTAREA_MIN_HEIGHT, Math.min(CHAT_TEXTAREA_MAX_HEIGHT, scrollHeight)))
+  }, [composer.text, getScrollHeight])
 
   useEffect(() => {
     if (!roleOpen) return
@@ -278,61 +305,181 @@ export const ChatInputBar = memo(({
     else options[(currentIndex - 1 + options.length) % options.length].focus()
   }
 
+  /**
+   * Puts the new state of one attachment into the conversation it was added to — the same place the
+   * input box reads, whether or not that conversation is on screen. Returns false when that
+   * conversation no longer holds the attachment (removed, sent or cleared).
+   */
+  const placeFile = useCallback((clientId: string, next: UploadableChatFile | null): boolean => {
+    const owner = fileOwnersRef.current.get(clientId) ?? prevConvRef.current
+    if (next?.upload?.status !== 'importing' && next?.upload?.status !== 'uploading') fileOwnersRef.current.delete(clientId)
+    let held = false
+    setFiles((previous) => {
+      held = previous.some((item) => item.upload?.clientId === clientId)
+      if (!held) return previous
+      return previous.flatMap((item) => item.upload?.clientId !== clientId ? [item] : next ? [next] : [])
+    }, owner)
+    return held
+  }, [setFiles])
+
   const handleUploadFile = useCallback((file: CachedFile, clientId: string = crypto.randomUUID()) => {
+    if (isReferencedByPath(file)) {
+      // Attached by path: ready at once, nothing to upload (the Agent reads it when needed).
+      const ready = referenceAttachmentByPath(file, clientId)
+      const owner = fileOwnersRef.current.get(clientId) ?? prevConvRef.current
+      fileOwnersRef.current.delete(clientId)
+      setFiles((previous) => {
+        const index = previous.findIndex((item) => item.upload?.clientId === clientId)
+        if (index < 0) return [...previous, ready]
+        return previous.map((item, itemIndex) => itemIndex === index ? ready : item)
+      }, owner)
+      return
+    }
     if (!onUploadFile) return
-    const uploadingFile = beginAttachmentUpload(file, clientId)
-    setPendingFiles((previous) => {
+    const { upload: _previousUpload, ...plainFile } = file as UploadableChatFile
+    const uploadingFile = beginAttachmentUpload(plainFile, clientId)
+    if (!fileOwnersRef.current.has(clientId)) fileOwnersRef.current.set(clientId, prevConvRef.current)
+    const owner = fileOwnersRef.current.get(clientId)
+    setFiles((previous) => {
       const index = previous.findIndex((item) => item.upload?.clientId === clientId)
       if (index < 0) return [...previous, uploadingFile]
       return previous.map((item, itemIndex) => itemIndex === index ? uploadingFile : item)
-    })
+    }, owner)
 
-    onUploadFile(file, selectedRoles[0] ?? employees[0]?.employeeId)
+    const deleteRemote = async (attachmentId: string) => {
+      if (!onDeleteUploadedFile) return
+      try {
+        await onDeleteUploadedFile(attachmentId)
+      } catch (error) {
+        console.error('[ChatInputBar] cleanup cancelled attachment failed:', error)
+      }
+    }
+    onUploadFile(plainFile, selectedRoles[0] ?? employees[0]?.employeeId)
       .then(async (attachmentId) => {
         if (!attachmentId) throw new Error('附件服务未返回文件 ID')
         if (cancelledUploadIdsRef.current.delete(clientId)) {
-          if (onDeleteUploadedFile) {
-            try {
-              await onDeleteUploadedFile(attachmentId)
-            } catch (error) {
-              console.error('[ChatInputBar] cleanup cancelled attachment failed:', error)
-            }
-          }
+          fileOwnersRef.current.delete(clientId)
+          await deleteRemote(attachmentId)
           return
         }
-        setPendingFiles((previous) => previous.map((item) =>
-          item.upload?.clientId === clientId ? completeAttachmentUpload(item, attachmentId) : item,
-        ))
+        if (!placeFile(clientId, completeAttachmentUpload(uploadingFile, attachmentId))) await deleteRemote(attachmentId)
       })
       .catch((error: unknown) => {
-        if (cancelledUploadIdsRef.current.delete(clientId)) return
-        setPendingFiles((previous) => previous.map((item) =>
-          item.upload?.clientId === clientId
-            ? failAttachmentUpload(item, attachmentErrorMessage(error))
-            : item,
-        ))
+        if (cancelledUploadIdsRef.current.delete(clientId)) {
+          fileOwnersRef.current.delete(clientId)
+          return
+        }
+        placeFile(clientId, failAttachmentUpload(uploadingFile, attachmentErrorMessage(error)))
       })
-  }, [employees, onDeleteUploadedFile, onUploadFile, selectedRoles])
+  }, [employees, onDeleteUploadedFile, onUploadFile, placeFile, selectedRoles, setFiles])
+
+  // Imports that finished while their conversation was in the background wait as「等待上传」;
+  // upload them as soon as that conversation is back on screen.
+  useEffect(() => {
+    if (!onUploadFile) return
+    for (const file of pendingFiles) {
+      if (file.upload?.status === 'queued') handleUploadFile(file, file.upload.clientId)
+    }
+  }, [handleUploadFile, onUploadFile, pendingFiles])
+
+  /** Copies one already-announced file into the conversation it was added to. */
+  const runImport = useCallback((item: ImportRequest, clientId: string, placeholder: UploadableChatFile) => {
+    const { load, failure } = item
+    return load()
+      .then((cached) => {
+        if (cancelledUploadIdsRef.current.delete(clientId)) {
+          fileOwnersRef.current.delete(clientId)
+          return
+        }
+        if (!cached) {
+          placeFile(clientId, null)
+          return
+        }
+        if (isReferencedByPath(cached)) {
+          placeFile(clientId, referenceAttachmentByPath(cached, clientId))
+          return
+        }
+        const owner = fileOwnersRef.current.get(clientId)
+        const onScreen = mountedRef.current && owner === prevConvRef.current
+        if (!onUploadFile) {
+          placeFile(clientId, cached)
+          return
+        }
+        if (onScreen) handleUploadFile(cached, clientId)
+        else placeFile(clientId, queueAttachmentUpload(cached, clientId))
+      })
+      .catch((error: unknown) => {
+        console.error('[ChatInputBar] import file failed:', error)
+        if (cancelledUploadIdsRef.current.delete(clientId)) {
+          fileOwnersRef.current.delete(clientId)
+          return
+        }
+        const owner = fileOwnersRef.current.get(clientId)
+        if (mountedRef.current && owner === prevConvRef.current) {
+          placeFile(clientId, null)
+          setFileError(failure(error))
+        } else {
+          // The user is elsewhere: keep a failed chip in that draft so the loss is visible on return.
+          placeFile(clientId, { ...placeholder, upload: { clientId, status: 'failed', error: failure(error) } })
+        }
+      })
+  }, [handleUploadFile, onUploadFile, placeFile])
+
+  /**
+   * Adds files: every file gets its「正在导入」chip and is pinned to the conversation it was added
+   * to *before* the first copy starts, so sending waits for all of them and switching conversations
+   * mid-import cannot move the ones still to come to whatever conversation is on screen by then.
+   * The copies then run one after another, each landing in the conversation it was added to.
+   */
+  const startImports = useCallback((items: readonly ImportRequest[]) => {
+    if (items.length === 0) return
+    const owner = prevConvRef.current
+    const planned = planAttachmentImports(items.map((item) => item.meta))
+    for (const { clientId } of planned) fileOwnersRef.current.set(clientId, owner)
+    flushSync(() => setFiles((previous) => [...previous, ...planned.map((entry) => entry.placeholder)], owner))
+    void (async () => {
+      for (const [index, { clientId, placeholder }] of planned.entries()) {
+        await runImport(items[index], clientId, placeholder)
+      }
+    })()
+  }, [runImport, setFiles])
 
   const handlePickFile = async () => {
     if (isPickingFile || isSubmitting) return
     setFileError('')
     setIsPickingFile(true)
+    let path: string | null = null
     try {
-      const cached = await onPickFile()
-      if (!cached) return
-      if (onUploadFile) handleUploadFile(cached)
-      else setPendingFiles(prev => [...prev, cached])
-    } catch { setFileError('选择文件失败，请重试') }
-    finally { setIsPickingFile(false) }
+      path = await onPickFile()
+    } catch {
+      setFileError('选择文件失败，请重试')
+    } finally {
+      setIsPickingFile(false)
+    }
+    // Same route as a dropped file: 「正在导入」 chip at once, result stays with this conversation.
+    if (path) importPathsRef.current([path])
   }
 
+  /** Pasted content without a file on disk (screenshot, RTF picture). Files on disk go through importPathsRef. */
+  const handleImportFiles = useCallback((files: File[]) => {
+    if (!onImportFile || files.length === 0) return
+    setFileError('')
+    startImports(files.map((file) => {
+      const name = file.name || '剪贴板图片'
+      return {
+        meta: { name, mime: file.type || 'application/octet-stream', size: file.size },
+        load: () => onImportFile(file),
+        failure: (error: unknown) => importErrorMessage(name, error),
+      }
+    }))
+  }, [onImportFile, startImports])
+
   const handleRemoveFile = useCallback((file: UploadableChatFile, index: number) => {
-    setPendingFiles((previous) => file.upload
+    setFiles((previous) => file.upload
       ? removeAttachmentUpload(previous, file.upload.clientId)
       : previous.filter((_, itemIndex) => itemIndex !== index))
     if (!file.upload) return
-    if (file.upload.status === 'uploading') {
+    if (file.upload.status === 'uploading' || file.upload.status === 'importing') {
       cancelledUploadIdsRef.current.add(file.upload.clientId)
       return
     }
@@ -341,29 +488,26 @@ export const ChatInputBar = memo(({
         console.error('[ChatInputBar] delete uploaded attachment failed:', error)
       })
     }
-  }, [onDeleteUploadedFile])
+  }, [onDeleteUploadedFile, setFiles])
 
   const clearComposer = () => {
-    if (isMentionMode) {
-      mentionTextRef.current = { text: '', mentions: [] }
-      setMentionText('')
-      mentionInputRef.current?.clear()
-    } else {
-      setInput('')
-    }
-    setPendingFiles([])
+    composer.clear()
+    setFiles(() => [])
   }
 
   /** 读取输入框当前内容；没有文字也没有附件时返回 null。 */
   const readComposer = (files: UploadableChatFile[]): QueuedChatMessage<MentionInputSnapshot> | null => {
-    if (isMentionMode) {
-      const { text, mentions } = mentionTextRef.current
-      if (!text.trim() && files.length === 0) return null
-      return { id: crypto.randomUUID(), text: text.trim(), files, mentions, mentionSnapshot: mentionInputRef.current?.snapshot() }
+    const { text, mentions } = composer.valueRef.current
+    if (!text.trim() && files.length === 0) return null
+    return {
+      id: crypto.randomUUID(),
+      text: text.trim(),
+      files,
+      mentions,
+      mentionSnapshot: composer.snapshot(),
+      // 单聊按所选/默认员工路由；群聊没有 employees，由 mentions 决定。
+      employeeId: selectedRoles[0] ?? employees[0]?.employeeId,
     }
-    const text = inputRef.current.trim()
-    if (!text && files.length === 0) return null
-    return { id: crypto.randomUUID(), text, files, employeeId: selectedRoles[0] ?? employees[0]?.employeeId }
   }
 
   const resumeQueue = useCallback((queueConvId: string) => {
@@ -387,7 +531,7 @@ export const ChatInputBar = memo(({
       if (!composed) return
       if (shouldQueue) {
         flushSync(clearComposer)
-        onDraftChange(queueConvId, '', [])
+        onDraftTextChange(queueConvId, '')
         setQueues((previous) => enqueueMessage(previous, queueConvId, composed))
         resumeQueue(queueConvId)
         return
@@ -395,14 +539,14 @@ export const ChatInputBar = memo(({
       const { text, mentions, employeeId, mentionSnapshot } = composed
 
       // 点击发送立即清空输入框和附件，失败时再放回。
-      const submittedInMentionMode = isMentionMode
-      const rawText = isMentionMode ? mentionTextRef.current.text : input
+      const rawText = composer.valueRef.current.text
       submittingConvRef.current = prevConvRef.current
       flushSync(() => {
         setIsSubmitting(true)
         clearComposer()
       })
-      onDraftChange(prevConvRef.current, '', [])
+      // 只清文字：附件由 clearComposer 当帧清掉，请求期间新加的不归这次发送。
+      onDraftTextChange(prevConvRef.current, '')
 
       let sent = false
       try {
@@ -413,39 +557,32 @@ export const ChatInputBar = memo(({
       }
       const submittedConversationId = submittingConvRef.current ?? ''
       submittingConvRef.current = null
-      const mentionModeNow = prevMentionModeRef.current
       const target = sent ? { kind: 'none' as const } : composerRestoreTarget({
         mounted: mountedRef.current,
         // 请求期间允许用户从侧栏切换会话；失败的内容回到原会话，不覆盖当前会话。
         sameConversation: prevConvRef.current === submittedConversationId,
-        composerEmpty: !(mentionModeNow ? mentionTextRef.current.text : inputRef.current).trim() && filesRef.current.length === 0,
+        composerTextEmpty: !composer.valueRef.current.text.trim(),
         submittedConversationId,
       })
       flushSync(() => {
         setIsSubmitting(false)
-        if (target.kind !== 'composer') return
-        if (!mentionModeNow) setInput(rawText)
-        setPendingFiles(files)
+        // 发送期间新加的附件不能被放回的覆盖。
+        if (target.kind === 'composer') setFiles((current) => mergeDraftFiles(files, current))
       })
-      if (target.kind === 'draft') onDraftChange(target.conversationId, rawText, files)
-      if (target.kind !== 'composer') return
-      if (mentionModeNow) {
-        if (submittedInMentionMode && mentionSnapshot) {
-          mentionInputRef.current?.restore(mentionSnapshot)
-        } else {
-          mentionTextRef.current = { text: rawText, mentions: [] }
-          setMentionText(rawText)
-          mentionInputRef.current?.setText(rawText)
-        }
-      } else if (!document.activeElement || document.activeElement === document.body) {
-        textareaRef.current?.focus()
+      // 带上 @ 成员快照：重发时仍提及原来的成员，不会落到群聊默认的协调员。
+      if (target.kind === 'draft') {
+        onDraftTextChange(target.conversationId, rawText, mentionSnapshot)
+        onDraftFilesChange(target.conversationId, (current) => mergeDraftFiles(files, current))
       }
+      // 原样放回（含 @ 成员 chip）；焦点没被用户移走时 restore 会聚焦到末尾。
+      if (target.kind === 'composer') composer.restore(mentionSnapshot, rawText)
     })
   }
 
   const isHero = variant === 'hero'
-  const hasBlockingUpload = !!onUploadFile && hasBlockingAttachmentUpload(pendingFiles)
-  const hasComposerContent = (isMentionMode ? !!mentionText.trim() : !!input.trim()) || pendingFiles.length > 0
+  const hasBlockingUpload = isImportingAttachment(pendingFiles)
+    || (!!onUploadFile && hasBlockingAttachmentUpload(pendingFiles))
+  const hasComposerContent = !!composer.text.trim() || pendingFiles.length > 0
   // 可排队时提交中也允许继续输入，新消息进入队列。
   const isSubmitBlocking = isSubmitting && !canQueue
   const isSendDisabled = !hasComposerContent
@@ -453,6 +590,50 @@ export const ChatInputBar = memo(({
     || !!disabled
     || isSubmitBlocking
   const isInteractionDisabled = !!disabled || isSubmitBlocking
+  // 从访达/资源管理器拖进来的文件：Tauri 原生拖放给出路径，落在整条输入栏（附件区、工具栏、输入框）上都算拖入对话。
+  // 文字拖入由原生拖放吞掉，不会进输入框；文字请粘贴。
+  const barRef = useRef<HTMLDivElement>(null)
+  const [isFileOver, setIsFileOver] = useState(false)
+  const canDropFiles = Boolean(onImportPath) && !isInteractionDisabled
+  const importPathsRef = useRef<(paths: string[]) => void>(() => {})
+  // 同一个文件再拖入 / 再选一次不重复添加：已在附件区或正在添加的路径跳过。
+  const importingPathsRef = useRef(new Set<string>())
+  importPathsRef.current = (paths: string[]) => {
+    if (!onImportPath) return
+    setFileError('')
+    // 访达给的路径常是分解形式（NFD），输入框里已有的可能是组合形式：按归一化后的路径去重，导入仍用原路径。
+    const key = (path: string) => path.normalize('NFC')
+    const seen = new Set([
+      ...importingPathsRef.current,
+      ...filesRef.current.map((file) => (file.path ? key(file.path) : '')),
+    ])
+    const fresh = [...new Map(paths.map((path) => [key(path), path])).values()]
+      .filter((path) => !seen.has(key(path)))
+    fresh.forEach((path) => importingPathsRef.current.add(key(path)))
+    startImports(fresh.map((path) => {
+      const name = path.split(/[\\/]/).filter(Boolean).pop() || path
+      return {
+        meta: { name, mime: 'application/octet-stream', size: 0 },
+        load: () => onImportPath(path).finally(() => importingPathsRef.current.delete(key(path))),
+        failure: (error: unknown) => importErrorMessage(name, error),
+      }
+    }))
+  }
+  // 访达/资源管理器复制的文件粘贴进来：和拖入同一条路，按路径导入。
+  const handlePastePaths = useCallback((paths: string[]) => importPathsRef.current(paths), [])
+  useEffect(() => {
+    if (!canDropFiles) return
+    const unregister = registerFileDropZone({
+      element: () => barRef.current,
+      onHover: setIsFileOver,
+      onDrop: (paths) => importPathsRef.current(paths),
+    })
+    return () => {
+      unregister()
+      setIsFileOver(false)
+    }
+  }, [canDropFiles])
+
 
   // ── 待发送队列 ───────────────────────────────────────────────────────────────
   const activeQueue = canQueue ? queues[convId] ?? [] : []
@@ -531,22 +712,9 @@ export const ChatInputBar = memo(({
     setFileError('')
     const current = readComposer(filesRef.current)
     setQueues((previous) => replaceQueuedMessage(previous, convId, id, current))
-    flushSync(() => {
-      if (!isMentionMode) setInput(target.text)
-      setPendingFiles(target.files)
-    })
-    if (isMentionMode) {
-      if (target.mentionSnapshot) {
-        mentionInputRef.current?.restore(target.mentionSnapshot)
-      } else {
-        mentionTextRef.current = { text: target.text, mentions: [] }
-        setMentionText(target.text)
-        mentionInputRef.current?.setText(target.text)
-      }
-      mentionInputRef.current?.focus()
-    } else {
-      textareaRef.current?.focus()
-    }
+    flushSync(() => setFiles(() => target.files))
+    composer.restore(target.mentionSnapshot, target.text)
+    composer.focus()
   }
 
   // ── 语音输入（按住说话） ─────────────────────────────────────────────────────
@@ -564,14 +732,7 @@ export const ChatInputBar = memo(({
     voiceErrorTimerRef.current = window.setTimeout(() => setVoiceError(null), 2500)
   }, [])
 
-  const insertTranscript = useCallback((transcript: string) => {
-    if (isMentionMode) {
-      mentionInputRef.current?.insertText(transcript)
-    } else {
-      setInput(prev => prev ? prev + transcript : transcript)
-    }
-  }, [isMentionMode])
-  insertTranscriptRef.current = insertTranscript
+  insertTranscriptRef.current = composer.insertText
 
   const transcribe = useCallback(async (recording: VoiceRecording) => {
     const recordingConversationId = voiceConversationRef.current
@@ -676,7 +837,10 @@ export const ChatInputBar = memo(({
   const isVoiceActive = enableVoiceInput && !isHero
 
   return (
-    <div className={`chat-input-bar${isHero ? ' chat-input-bar-hero' : ''}${disabled ? ' chat-input-bar-disabled' : ''}`}>
+    <div
+      ref={barRef}
+      className={`chat-input-bar${isHero ? ' chat-input-bar-hero' : ''}${disabled ? ' chat-input-bar-disabled' : ''}${isFileOver ? ' chat-input-bar-file-over' : ''}`}
+    >
       {!isHero && (
         <div
           className="chat-resize-handle"
@@ -729,7 +893,7 @@ export const ChatInputBar = memo(({
                   file={f}
                   uploadStatus={f.upload?.status}
                   uploadError={f.upload?.error}
-                  onRetry={f.upload?.status === 'failed'
+                  onRetry={f.upload?.status === 'failed' && f.rel_path
                     ? () => handleUploadFile(f, f.upload!.clientId)
                     : undefined}
                   onRemove={() => handleRemoveFile(f, i)}
@@ -738,49 +902,19 @@ export const ChatInputBar = memo(({
               ))}
             </div>
           )}
-          {isMentionMode ? (
-            <MentionInput
-              ref={mentionInputRef}
-              members={members!}
-              placeholder={placeholder}
-              disabled={isInteractionDisabled}
-              className="chat-textarea"
-              style={{ height: textareaHeight }}
-              autoFocus={autoFocus}
-              onEnter={handleSend}
-              onChange={(text, mentions) => {
-                mentionTextRef.current = { text, mentions }
-                setMentionText(text)
-                const scrollH = mentionInputRef.current?.getScrollHeight() ?? CHAT_TEXTAREA_MIN_HEIGHT
-                setTextareaHeight(Math.max(CHAT_TEXTAREA_MIN_HEIGHT, Math.min(CHAT_TEXTAREA_MAX_HEIGHT, scrollH)))
-              }}
-            />
-          ) : (
-            <textarea
-              ref={textareaRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onCompositionStart={() => { isComposingRef.current = true }}
-              onCompositionEnd={() => { isComposingRef.current = false }}
-              onKeyDown={(e) => {
-                if (isImeKeyboardEvent(e.nativeEvent, isComposingRef.current)) return
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault()
-                  handleSend()
-                }
-              }}
-              placeholder={placeholder}
-              style={{ height: textareaHeight }}
-              className="chat-textarea"
-              disabled={isInteractionDisabled}
-              autoFocus={autoFocus}
-              autoCorrect="off"
-              autoComplete="off"
-              autoCapitalize="off"
-              spellCheck={false}
-              aria-label={placeholder}
-            />
-          )}
+          <MentionInput
+            ref={composer.inputRef}
+            members={mentionMembers}
+            placeholder={placeholder}
+            disabled={isInteractionDisabled}
+            className="chat-textarea"
+            style={{ height: textareaHeight }}
+            autoFocus={autoFocus}
+            onEnter={handleSend}
+            onChange={composer.handleChange}
+            onFiles={onImportFile && !isInteractionDisabled ? handleImportFiles : undefined}
+            onPaths={canDropFiles ? handlePastePaths : undefined}
+          />
           <div className="chat-input-actions">
             <div className="chat-input-tools">
               <button type="button" onClick={handlePickFile} disabled={isPickingFile || isInteractionDisabled} title={isHero ? '添加上下文' : '发送文件'} aria-label={isPickingFile ? '正在选择文件' : isHero ? '添加上下文文件' : '添加消息附件'} className="chat-tool-btn">
@@ -871,7 +1005,7 @@ export const ChatInputBar = memo(({
           </div>
         )}
         {fileError && <p className="chat-input-error" role="alert">{fileError}</p>}
-        {knowledgeOpen && <KnowledgeFilePicker key={convId} convId={convId} onClose={() => setKnowledgeOpen(false)} onSelect={file => { if (onUploadFile) handleUploadFile(file); else setPendingFiles(previous => [...previous, file]) }} />}
+        {knowledgeOpen && <KnowledgeFilePicker key={convId} convId={convId} onClose={() => setKnowledgeOpen(false)} onSelect={file => { if (onUploadFile) handleUploadFile(file); else setFiles(previous => [...previous, file]) }} />}
         {helper}
       </div>
     </div>

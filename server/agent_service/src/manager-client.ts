@@ -100,14 +100,20 @@ export interface MarketplaceTemplate extends MarketplaceTemplateProfile {
   avatar_url: string | null;
 }
 
+/**
+ * 公开认证请求的企业参数：tenant_id（候选中选定 / 改密响应 meta.tenant_id）或企业标识，都可省略；
+ * 都省略时由 Manager 按账号和密码匹配企业。
+ */
 export interface ManagerAuthInput {
-  tenant_id: string;
+  tenant_id?: string;
+  enterprise?: string;
   account: string;
   password: string;
 }
 
 export interface ManagerOwnerResetInput {
-  tenant_id: string;
+  tenant_id?: string;
+  enterprise?: string;
   account: string;
   old_password: string;
   new_password: string;
@@ -191,7 +197,6 @@ export interface InstallableMcpServer {
 export interface ManagerClient {
   /** Stable Manager origin used to partition process-memory runtime material. */
   managerOrigin?: string;
-  resolveTenantByAccount?(account: string, enterprise?: string | null): Promise<unknown>;
   login?(input: ManagerAuthInput): Promise<unknown>;
   ownerReset?(input: ManagerOwnerResetInput): Promise<unknown>;
   logout?(caller: AuthenticatedCaller): Promise<void>;
@@ -212,6 +217,10 @@ export interface ManagerClient {
   getMcpOAuthClient?(caller: AuthenticatedCaller, serverId: string): Promise<{ client_id: string; client_secret?: string }>;
   /** The package signed for this member plus public verification keys. */
   getInstallableSkillPackage?(caller: AuthenticatedCaller, skillId: string): Promise<{ package: SignedSkillPackage; signing_keys: SkillSigningKeyMetadata[] }>;
+  /** 用成员自己的 Manager 会话读取员工头像（静态 WebP）；version 取自 X-Avatar-Version。 */
+  getEmployeeAvatar?(caller: AuthenticatedCaller, employeeId: string): Promise<ManagerAvatar>;
+  /** 人才市场模板头像（Manager 转拉 Operator），同样是静态 WebP。 */
+  getMarketplaceTemplateAvatar?(caller: AuthenticatedCaller, templateId: string): Promise<ManagerAvatar>;
   getOrgTree(caller: AuthenticatedCaller): Promise<unknown>;
   /** Manager enforces owner/enterprise_admin; the gateway only forwards. */
   createDepartment?(caller: AuthenticatedCaller, input: { department_slug: string; display_name: string; parent_id?: string }): Promise<unknown>;
@@ -234,6 +243,51 @@ export interface ManagerClient {
   uploadSegmentOutcomes?(caller: AuthenticatedCaller, summary: SegmentOutcomeSummary): Promise<unknown>;
 }
 
+export interface ManagerAvatar {
+  data: Buffer;
+  /** Manager 返回的头像版本；缺失时为 undefined（调用方沿用投影里的版本）。 */
+  version?: number;
+}
+
+/** 头像最大 5 MB（与 Manager / Operator 一致）；流式读取，超限立即中止，不把整个响应读进内存。 */
+export const MAX_MANAGER_AVATAR_BYTES = 5 * 1024 * 1024;
+
+export function marketplaceAvatarUrl(templateId: string, version: unknown): string | null {
+  return typeof version === "number" && Number.isInteger(version) && version > 0
+    ? `/api/agent/marketplace/templates/${encodeURIComponent(templateId)}/avatar/content?v=${version}`
+    : null;
+}
+
+async function readAvatarResponse(response: Response): Promise<ManagerAvatar> {
+  const mimeType = (response.headers.get("content-type") ?? "").split(";")[0]?.trim().toLowerCase();
+  if (mimeType !== "image/webp") {
+    await response.body?.cancel().catch(() => undefined);
+    throw new ManagerUnavailableError(`Manager returned unexpected avatar type ${mimeType || "<none>"}`);
+  }
+  const declared = Number(response.headers.get("content-length") ?? "");
+  if (Number.isFinite(declared) && declared > MAX_MANAGER_AVATAR_BYTES) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new ManagerUnavailableError("Manager avatar exceeds 5 MB");
+  }
+  const chunks: Buffer[] = [];
+  let size = 0;
+  const reader = response.body?.getReader();
+  if (reader) {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > MAX_MANAGER_AVATAR_BYTES) {
+        await reader.cancel().catch(() => undefined);
+        throw new ManagerUnavailableError("Manager avatar exceeds 5 MB");
+      }
+      chunks.push(Buffer.from(value));
+    }
+  }
+  const header = Number(response.headers.get("x-avatar-version") ?? "");
+  return { data: Buffer.concat(chunks), ...(Number.isInteger(header) && header > 0 ? { version: header } : {}) };
+}
+
 export class ManagerAuthError extends Error {
   constructor(readonly status: number, readonly body: unknown) {
     super(`Manager authentication returned HTTP ${status}`);
@@ -249,10 +303,6 @@ export class HttpManagerClient implements ManagerClient {
   constructor(private readonly baseUrl: string, fetchImpl: typeof fetch = fetch) {
     this.managerOrigin = new URL(baseUrl).origin;
     this.fetchImpl = managerClock.observingFetch(observedFetch(fetchImpl));
-  }
-
-  async resolveTenantByAccount(account: string, enterprise?: string | null): Promise<unknown> {
-    return this.authRequest("/api/auth/resolve-tenant-by-account", { account, ...(enterprise ? { enterprise } : {}) });
   }
 
   async login(input: ManagerAuthInput): Promise<unknown> {
@@ -404,8 +454,15 @@ export class HttpManagerClient implements ManagerClient {
     return { package: normalizeSignedSkillPackage(value.package), signing_keys: value.signing_keys.map(normalizeSkillSigningKey) };
   }
 
-  async getOrgTree(caller: AuthenticatedCaller): Promise<unknown> {
-    const response = await this.request("/api/manager/org/tree", caller);
+  async getEmployeeAvatar(caller: AuthenticatedCaller, employeeId: string): Promise<ManagerAvatar> {
+    return readAvatarResponse(await this.requestResponse(`/api/manager/employees/${encodeURIComponent(employeeId)}/avatar/content`, caller));
+  }
+
+  async getMarketplaceTemplateAvatar(caller: AuthenticatedCaller, templateId: string): Promise<ManagerAvatar> {
+    return readAvatarResponse(await this.requestResponse(`/api/manager/recruit/catalog/experts/${encodeURIComponent(templateId)}/avatar/content`, caller));
+  }
+
+  async getOrgTree(caller: AuthenticatedCaller): Promise<unknown> {    const response = await this.request("/api/manager/org/tree", caller);
     return this.unwrap(response);
   }
 
@@ -819,7 +876,8 @@ function normalizeMarketplaceTemplate(value: unknown, skillMarket: ReadonlyMap<s
     recruit_count: typeof raw.recruit_count === "number" && Number.isInteger(raw.recruit_count) && raw.recruit_count >= 0 ? raw.recruit_count : null,
     is_recruited: raw.is_recruited === true,
     tags,
-    avatar_url: typeof raw.avatar_url === "string" && raw.avatar_url.length > 0 ? raw.avatar_url : null,
+    // 头像只走本机同源路径（前端带 Agent Bearer）；版本变了 ?v= 跟着变，本机缓存据此失效。
+    avatar_url: marketplaceAvatarUrl(raw.template_id, raw.avatar_version),
     ...normalizeMarketplaceProfile(raw),
   };
 }

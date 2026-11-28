@@ -68,7 +68,6 @@ test("Agent success identity never returns an absent, empty or foreign tenant", 
   let identity: AuthenticatedCaller = caller;
   const { http, request } = await serve(fixture, { authenticate: () => identity, managerClient: {
     pullAuthorizedConfig: async () => ({ experts: [], solutions: [] }), getOrgTree: async () => ({}),
-    resolveTenantByAccount: async () => ({ data: { tenant_id: claims.tenant_id } }),
     login: async () => ({ data: { token: "test-token", claims } }),
     ownerReset: async () => ({ data: { token: "test-token", claims } }),
   } });
@@ -80,11 +79,13 @@ test("Agent success identity never returns an absent, empty or foreign tenant", 
         assert.equal(result.code, "manager_unavailable");
         assert.doesNotMatch(JSON.stringify(result), /test-token/);
       }
-      if (tenant !== "other-tenant") await request("/api/auth/resolve-tenant-by-account", 503, { account: "member" });
+      // 已停用的旧接口不访问 Manager：与账号、Manager 返回值无关，固定 410。
+      assert.equal((await request("/api/auth/resolve-tenant-by-account", 410, { account: "member" })).code, "client_upgrade_required");
     }
     claims = { ...claims, tenant_id: "tenant-1" };
     for (const route of ["login", "reset-password"]) assert.equal((await request(`/api/agent/${route}`, 200, { tenant_id: "tenant-1", account: "member", password: "test", old_password: "test", new_password: "test-new" })).data.claims.tenant_id, "tenant-1");
-    assert.equal((await request("/api/auth/resolve-tenant-by-account", 200, { account: "member" })).data.tenant_id, "tenant-1");
+    // 未指定企业时以 Manager 返回的企业为准（由 Manager 按账号和密码匹配）。
+    assert.equal((await request("/api/agent/login", 200, { account: "member", password: "test" })).data.claims.tenant_id, "tenant-1");
     assert.equal((await request("/api/agent/whoami")).data.tenant_id, "tenant-1");
     for (const tenantId of [undefined, "", " "]) { identity = { ...caller, tenantId }; await request("/api/agent/whoami", 401); }
     identity = { ...caller, claims: { tenant_id: "different" } };

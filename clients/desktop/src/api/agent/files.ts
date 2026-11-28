@@ -38,6 +38,32 @@ export async function listFiles(
   }
 }
 
+export interface AttachmentRef {
+  id: string
+  name: string
+  mime_type: string
+  byte_size: number
+  path: string
+  created_at: string
+}
+
+/**
+ * 按路径引用的附件清单（GET /api/agent/conversations/:id/attachment-refs）。
+ * 历史消息里的附件只有 ref ID 和文件名，本机位置由 Agent 保存，按 ID 取回——
+ * 同一会话发过同名的不同文件也不会串。
+ */
+export async function listAttachmentRefs(
+  client: AgentApiClient,
+  conversationId: string,
+): Promise<AttachmentRef[]> {
+  const payload = await client.request<{ data: AttachmentRef[] }>({
+    method: 'GET',
+    path: `/api/agent/conversations/${encodeURIComponent(conversationId)}/attachment-refs`,
+    raw: true,
+  })
+  return payload.data ?? []
+}
+
 export function uploadFile(
   client: AgentApiClient,
   conversationId: string,

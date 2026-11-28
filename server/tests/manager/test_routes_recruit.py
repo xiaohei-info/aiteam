@@ -265,3 +265,31 @@ def test_browse_catalog_empty():
         r = c.get("/api/manager/recruit/catalog/experts", headers=_hdr())
     assert r.status_code == 200
     assert r.json()["data"] == []
+
+
+def test_market_avatar_paths_are_manager_same_origin_and_content_is_proxied():
+    """人才市场：列表里的头像改写成 Manager 同源路径（?v=模板头像版本），内容由 Manager 转拉 Operator。"""
+    from shared.contracts.crosstier import ExpertTemplateDetail, SolutionPackage
+    c = _client(None)
+    catalog = c.app.state._operator_catalog
+    ref = {"provider_id": "p1", "model_id": "m1"}
+    with_avatar = ExpertTemplateDetail(
+        template_id="tpl-av", version="1", display_name="A", platform_model_ref=ref, avatar_version=3,
+        avatar_url="/api/operation/catalog/pull/expert-templates/tpl-av/avatar/content?v=3",
+    )
+    without = ExpertTemplateDetail(template_id="tpl-none", version="1", display_name="B", platform_model_ref=ref)
+    catalog.seed_expert(with_avatar)
+    catalog.seed_expert(without)
+    catalog.seed_expert_avatar("tpl-av", b"RIFF\x00\x00\x00\x00WEBP", version=3)
+    catalog.seed_solution(SolutionPackage(solution_id="sol-1", version="1", display_name="S", experts=[with_avatar, without]))
+
+    experts = c.get("/api/manager/recruit/catalog/solutions", headers=_hdr()).json()["data"][0]["experts"]
+    assert [e["avatar_url"] for e in experts] == [
+        "/api/manager/recruit/catalog/experts/tpl-av/avatar/content?v=3", "",
+    ]
+    r = c.get("/api/manager/recruit/catalog/experts/tpl-av/avatar/content?v=3", headers=_hdr())
+    assert r.status_code == 200 and r.content == b"RIFF\x00\x00\x00\x00WEBP"
+    assert r.headers["content-type"] == "image/webp" and r.headers["x-avatar-version"] == "3"
+    assert c.get("/api/manager/recruit/catalog/experts/tpl-none/avatar/content", headers=_hdr()).status_code == 404
+    assert c.get("/api/manager/recruit/catalog/experts/tpl-missing/avatar/content", headers=_hdr()).status_code == 404
+    assert c.get("/api/manager/recruit/catalog/experts/tpl-av/avatar/content").status_code == 401

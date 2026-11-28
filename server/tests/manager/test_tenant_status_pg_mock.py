@@ -93,8 +93,35 @@ def test_store_set_status_writes_and_drops_the_cached_value():
         assert store.set_status(T, "banned", "违规") is True
     assert conn.calls[0][1] == ("banned", "违规", T)
     assert T not in store._cache  # 下次读取直接看到新状态，不等 5 秒
+    assert not any("auth_identity SET archived_at = now()" in text for text, _ in conn.calls)
     with _connect(_Conn(lambda text, params: _Cur(rowcount=0))):
         assert store.set_status(T, "banned", None) is False
+
+
+@pytest.mark.parametrize("status", ["closed", "deleted"])
+def test_store_set_status_archives_identities_when_closed_or_deleted(status):
+    store = TenantStatusStore("dsn", fetch=lambda dsn, tenant: "active")
+    conn = _Conn(lambda text, params: _Cur(rowcount=1))
+    with _connect(conn):
+        store.set_status(T, status, None)
+    archive = [c for c in conn.calls if "auth_identity SET archived_at = now()" in c[0]]
+    assert archive and archive[0][1] == (T,)
+
+
+def test_store_set_status_restores_identities_when_reactivated():
+    store = TenantStatusStore("dsn", fetch=lambda dsn, tenant: "deleted")
+    conn = _Conn(lambda text, params: _Cur(rowcount=1))
+    with _connect(conn):
+        store.set_status(T, "active", None)
+    assert any("auth_identity SET archived_at = NULL" in text for text, _ in conn.calls)
+
+
+def test_store_set_status_unknown_tenant_touches_no_identities():
+    store = TenantStatusStore("dsn", fetch=lambda dsn, tenant: "active")
+    conn = _Conn(lambda text, params: _Cur(rowcount=0))
+    with _connect(conn):
+        assert store.set_status(T, "deleted", None) is False
+    assert not any("auth_identity" in text for text, _ in conn.calls)
 
 
 # ---- 入口拦截的边界 ----

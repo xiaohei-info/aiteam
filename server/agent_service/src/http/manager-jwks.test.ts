@@ -52,8 +52,8 @@ async function mockManager() {
     for await (const chunk of req) raw += chunk;
     const body = JSON.parse(raw);
     if (state.failAuth) { res.writeHead(401); res.end(JSON.stringify({ code: "unauthorized" })); return; }
-    if (req.url?.includes("resolve-tenant")) { res.end(JSON.stringify({ data: { tenant_id: body.account === "b" ? B : A } })); return; }
-    const tenant = body.tenant_id;
+    // Manager matches the enterprise from account + password when the client names none.
+    const tenant = body.tenant_id ?? (body.account === "b" ? B : A);
     res.end(JSON.stringify({ data: { token: state.token || jwt(tenant === B ? b1 : a1, tenant), claims: { tenant_id: tenant, roles: ["untrusted-response-role"] } } }));
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));

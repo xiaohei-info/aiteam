@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
-import { DigitalEmployeeAvatar } from "@aiteam/shared";
+import { EmployeeAvatar } from "../../lib/employee-avatar";
 import { ApiError } from "@aiteam/shared/api-client";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
@@ -213,7 +213,7 @@ function Workstation({ employee, position, selected, onSelect }: WorkstationProp
             <span className={"office-desk"} />
             <span className={"office-chair"} />
             <span className={"office-agent-avatar"}>
-              <DigitalEmployeeAvatar name={employee.display_name} seed={employee.employee_id} src={employee.avatar_url} size={48} />
+              <EmployeeAvatar name={employee.display_name} seed={employee.employee_id} src={employee.avatar_url} size={48} />
             </span>
             <span className={"office-status-light"}><StatusMark tone={meta.tone} /></span>
           </span>
@@ -353,7 +353,7 @@ function ActivityPanel({ employees, selectedEmployeeId, onSelectEmployee, onClea
           <Button label="返回最近状态" variant="ghost" size="sm" onClick={onClearSelection} />
         </header>
         <div className={"office-detail-identity"}>
-          <DigitalEmployeeAvatar name={selected.display_name} seed={selected.employee_id} src={selected.avatar_url} size={56} />
+          <EmployeeAvatar name={selected.display_name} seed={selected.employee_id} src={selected.avatar_url} size={56} />
           <div>
             <Heading level={3}>{selected.display_name}</Heading>
             <div className={"office-detail-status"}><StatusMark tone={meta.tone} /> <span>{meta.label}</span><span className={"office-status-code"} aria-hidden="true">{meta.raw}</span></div>
@@ -400,7 +400,7 @@ function ActivityPanel({ employees, selectedEmployeeId, onSelectEmployee, onClea
                   onClick={() => onSelectEmployee(employee.employee_id)}
                 >
                   <span className={"office-activity-button__inner"}>
-                    <DigitalEmployeeAvatar name={employee.display_name} seed={employee.employee_id} src={employee.avatar_url} size={36} />
+                    <EmployeeAvatar name={employee.display_name} seed={employee.employee_id} src={employee.avatar_url} size={36} />
                     <span className={"office-activity-copy"}>
                       <span className={"office-activity-name"}><StatusMark tone={meta.tone} /> {employee.display_name} · {meta.label}</span>
                       <span className={"office-activity-task"}>{employee.task?.trim() ? `当前任务：${employee.task.trim()}` : employee.last_task?.trim() ? `最近任务：${employee.last_task.trim()}` : "当前无任务"}{employee.last_activity_at ? ` · ${formatActivityTime(employee.last_activity_at)}` : ""}</span>
