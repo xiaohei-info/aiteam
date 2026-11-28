@@ -18,7 +18,7 @@ import { Button } from "@astryxdesign/core/Button";
 import { HStack } from "@astryxdesign/core/HStack";
 import { Text } from "@astryxdesign/core/Text";
 import { VStack } from "@astryxdesign/core/VStack";
-import { createManagerApiClient } from "../../api";
+import { createManagerApiClient, type ApiClient } from "../../api";
 import { useSession } from "../../auth/session";
 import type { EmployeeAvatarOut, EmployeeConfig } from "./types";
 
@@ -39,6 +39,24 @@ export const AVATAR_ACCEPT = [
 ] as const;
 export const AVATAR_MAX_BYTES = 5 * 1024 * 1024;
 
+/**
+ * `ProtectedAvatar` 的取图缓存按 client 实例分表：每个头像组件自建 client 的话，
+ * 一页里同一张头像还是各取各的。这里按 (token, onUnauthorized) 复用同一个 client，
+ * 让整页的头像共享缓存。
+ */
+type OnUnauthorized = ReturnType<typeof useSession>["onUnauthorized"];
+
+let sharedAvatarClient: { token: string | null; onUnauthorized: OnUnauthorized; client: ApiClient } | null = null;
+
+function avatarClient(token: string | null, onUnauthorized: OnUnauthorized): ApiClient {
+  if (sharedAvatarClient?.token === token && sharedAvatarClient.onUnauthorized === onUnauthorized) {
+    return sharedAvatarClient.client;
+  }
+  const client = createManagerApiClient({ getToken: () => token, onUnauthorized });
+  sharedAvatarClient = { token, onUnauthorized, client };
+  return client;
+}
+
 /** 非自建员工的头像说明：只在招募/复制时取一次模板头像快照，之后不跟随模板。 */
 export const AVATAR_FROM_TEMPLATE_HINT =
   "头像在招募或复制时从人才市场模板复制一次，之后不随模板更新，也不能在这里更换。";
@@ -53,10 +71,7 @@ export function EmployeeAvatar({
   size: number;
 }): ReactNode {
   const { token, onUnauthorized } = useSession();
-  const client = useMemo(
-    () => createManagerApiClient({ getToken: () => token, onUnauthorized }),
-    [token, onUnauthorized],
-  );
+  const client = useMemo(() => avatarClient(token, onUnauthorized), [token, onUnauthorized]);
   return (
     <ProtectedAvatar
       client={client}
