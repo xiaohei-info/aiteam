@@ -1004,15 +1004,21 @@ mod tests {
                 401,
                 "requests without bearer must still be rejected"
             );
-            // A unique nonexistent account is a read-only connectivity check.
-            // A real Manager 404 proves forwarding worked; 503 would mean failure.
-            let response = client.post(format!("{url}/api/auth/resolve-tenant-by-account"))
-                .json(&serde_json::json!({"account": format!("desktop-probe-{}", uuid::Uuid::new_v4())}))
+            // A unique nonexistent account is a read-only connectivity check: login
+            // without an enterprise makes Manager match the account and password.
+            // A real Manager 401 proves forwarding worked; 503 would mean failure.
+            // (resolve-tenant-by-account is retired and always answers 410 locally,
+            // so it can no longer prove that Manager is reachable.)
+            let response = client.post(format!("{url}/api/agent/login"))
+                .json(&serde_json::json!({
+                    "account": format!("desktop-probe-{}", uuid::Uuid::new_v4()),
+                    "password": format!("probe-{}", uuid::Uuid::new_v4()),
+                }))
                 .send().await.unwrap();
-            assert_eq!(response.status(), 404);
+            assert_eq!(response.status(), 401);
             let body: serde_json::Value = response.json().await.unwrap();
             println!(
-                "Manager account resolver reached: HTTP 404, code={}",
+                "Manager login reached: HTTP 401, code={}",
                 body["code"]
             );
         });

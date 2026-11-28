@@ -1,0 +1,117 @@
+.tpd-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: var(--overlay-bg-heavy);
+  -webkit-backdrop-filter: blur(8px) saturate(135%);
+  backdrop-filter: blur(8px) saturate(135%);
+}
+
+/* 固定三段：头部 / 可滚动列表 / 底部，候选很多或窗口很矮时取消按钮仍在可视区内。 */
+.tpd {
+  width: 380px;
+  max-width: 100%;
+  max-height: calc(100dvh - 40px);
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius-xl);
+  background: var(--surface-card-sheen), var(--surface-1-glass);
+  border: 1px solid var(--glass-card-border);
+  box-shadow: var(--glass-card-shadow);
+  -webkit-backdrop-filter: var(--glass-card-filter);
+  backdrop-filter: var(--glass-card-filter);
+  overflow: hidden;
+}
+
+.tpd-header {
+  flex: none;
+  padding: 22px 22px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tpd-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.tpd-desc {
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.tpd-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 0;
+  padding: 4px 14px 12px;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tpd-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface-0);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.tpd-item:hover,
+.tpd-item:focus-visible {
+  border-color: var(--border-active);
+  color: var(--text-primary);
+}
+
+.tpd-item svg {
+  flex: none;
+}
+
+.tpd-item-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.tpd-footer {
+  flex: none;
+  display: flex;
+  justify-content: flex-end;
+  padding: 12px 22px 18px;
+  border-top: 1px solid var(--border);
+}
+
+.tpd-btn {
+  padding: 8px 16px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  border: 1px solid var(--border-hover);
+  background: var(--surface-3);
+  color: var(--text-secondary);
+}
+
+.tpd-btn:hover {
+  border-color: var(--border-active);
+  color: var(--text-primary);
+}

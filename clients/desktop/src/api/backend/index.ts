@@ -1,5 +1,5 @@
 import { BackendApiClient } from './client'
-import { login, resetPassword, resolveTenantByAccount } from '../agent/auth'
+import { login, resetPassword } from '../agent/auth'
 import { listExperts } from '../agent/experts'
 import { fetchEmployeeAvatarContent, fetchMarketplaceTemplateAvatarContent } from '../agent/avatar'
 import type { AudioTranscriptionRequest, AudioTranscriptionResult, MarketplaceTemplate, OrgTreeNode, Page } from '../agent/types'
@@ -10,7 +10,6 @@ const client = new BackendApiClient({
 })
 
 export const backendApi = {
-  resolveTenantByAccount: (params: Parameters<typeof resolveTenantByAccount>[1]) => resolveTenantByAccount(client, params),
   login: (params: Parameters<typeof login>[1]) => login(client, params),
   resetPassword: (params: Parameters<typeof resetPassword>[1]) => resetPassword(client, params),
   transcribeAudio: (body: AudioTranscriptionRequest) => client.request<AudioTranscriptionResult>({ method: 'POST', path: '/api/agent/audio/transcriptions', body }),

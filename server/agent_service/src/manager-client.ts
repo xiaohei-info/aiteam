@@ -100,14 +100,20 @@ export interface MarketplaceTemplate extends MarketplaceTemplateProfile {
   avatar_url: string | null;
 }
 
+/**
+ * 公开认证请求的企业参数：tenant_id（候选中选定 / 改密响应 meta.tenant_id）或企业标识，都可省略；
+ * 都省略时由 Manager 按账号和密码匹配企业。
+ */
 export interface ManagerAuthInput {
-  tenant_id: string;
+  tenant_id?: string;
+  enterprise?: string;
   account: string;
   password: string;
 }
 
 export interface ManagerOwnerResetInput {
-  tenant_id: string;
+  tenant_id?: string;
+  enterprise?: string;
   account: string;
   old_password: string;
   new_password: string;
@@ -191,7 +197,6 @@ export interface InstallableMcpServer {
 export interface ManagerClient {
   /** Stable Manager origin used to partition process-memory runtime material. */
   managerOrigin?: string;
-  resolveTenantByAccount?(account: string, enterprise?: string | null): Promise<unknown>;
   login?(input: ManagerAuthInput): Promise<unknown>;
   ownerReset?(input: ManagerOwnerResetInput): Promise<unknown>;
   logout?(caller: AuthenticatedCaller): Promise<void>;
@@ -298,10 +303,6 @@ export class HttpManagerClient implements ManagerClient {
   constructor(private readonly baseUrl: string, fetchImpl: typeof fetch = fetch) {
     this.managerOrigin = new URL(baseUrl).origin;
     this.fetchImpl = managerClock.observingFetch(observedFetch(fetchImpl));
-  }
-
-  async resolveTenantByAccount(account: string, enterprise?: string | null): Promise<unknown> {
-    return this.authRequest("/api/auth/resolve-tenant-by-account", { account, ...(enterprise ? { enterprise } : {}) });
   }
 
   async login(input: ManagerAuthInput): Promise<unknown> {

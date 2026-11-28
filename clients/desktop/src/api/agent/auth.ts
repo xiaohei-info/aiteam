@@ -1,33 +1,24 @@
 /**
  * 登录相关 API。
  *
- * 登录页通过 enterprise 提交企业代码或名称；留空时先调用 resolve-tenant-by-account：
- *   POST /api/agent/login { enterprise, account, password } → { token, claims }
+ *   POST /api/agent/login { enterprise?, tenant_id?, account, password } → { token, claims }
  *   之后所有请求携带 Authorization: Bearer <token>。
- * 保留 resolve-tenant-by-account 与 loginByAccount 供账号解析场景使用。
+ *
+ * 企业标识可省略：省略时由企业服务按账号和密码匹配企业——只有一个企业密码通过则直接登录；
+ * 多个则返回 409 tenant_selection_required（meta.candidates 只含密码通过的企业），
+ * 选定后带 tenant_id 重试。旧的 resolve-tenant-by-account 已停用（固定 410），不再调用。
  *
  * 两个接口都 `security: []`,不需要预先登录;但都会经过 Manager 转发,
  * Manager 不可达时会返回 503 ManagerUnavailable。
  */
 import type { ServiceApiClient } from './client'
-import type { AuthResult, TenantResolution } from './types'
+import type { AuthResult } from './types'
 
-export interface ResolveTenantParams {
-  account: string
-}
-
-export function resolveTenantByAccount(
-  client: ServiceApiClient,
-  params: ResolveTenantParams,
-): Promise<TenantResolution> {
-  return client.request<TenantResolution>({
-    method: 'POST',
-    path: '/api/auth/resolve-tenant-by-account',
-    body: { account: params.account },
-  })
-}
-
-export type EnterpriseIdentity = { enterprise: string; tenant_id?: never } | { tenant_id: string; enterprise?: never }
+// 三选一：企业标识、409 候选/403 改密响应给出的 tenant_id，或都不带（按账号和密码匹配企业）。
+export type EnterpriseIdentity =
+  | { enterprise: string; tenant_id?: never }
+  | { tenant_id: string; enterprise?: never }
+  | { enterprise?: never; tenant_id?: never }
 
 export type LoginParams = EnterpriseIdentity & {
   account: string
@@ -88,13 +79,4 @@ export function resetPassword(
     path: '/api/agent/reset-password',
     body: params,
   })
-}
-
-// 便捷组合:一次调用完成 resolve + login,业务层不用维护中间状态。
-export async function loginByAccount(
-  client: ServiceApiClient,
-  params: { account: string; password: string },
-): Promise<AuthResult> {
-  const { tenant_id } = await resolveTenantByAccount(client, { account: params.account })
-  return login(client, { tenant_id, account: params.account, password: params.password })
 }

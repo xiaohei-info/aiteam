@@ -1133,6 +1133,7 @@ _PHASE_GATED_OPERATION_IDS = frozenset({
 
 
 _NO_CONFLICT_OPERATION_IDS = frozenset({
+    "manager_resolve_tenant_by_account",
     "operation_system_login",
     "operation_reset_owner_bootstrap",
     "operation_ingest_rollup",
@@ -1230,9 +1231,9 @@ _OPERATION_DESCRIPTION_OVERRIDES = {
     "operation_admin_finance_reports": "读取财务充值、消耗和利润明细报表。",
     "operation_admin_audit_events": "分页查询平台运营审计事件，可按企业、严重级别和动作筛选；响应为 data 内含 total/items/next_cursor 的兼容结构。",
     "operation_admin_health": "读取 Operator 依赖服务健康状态。",
-    "manager_resolve_tenant_by_account": "根据成员账号解析所属 tenant；账号跨企业返回 tenant_selection_required 409，带 enterprise 后继续。不返回密码或 token。",
-    "manager_login": "成员或负责人使用企业代码/名称、账号和密码登录，返回短期 RS256 access token。tenant_id 仅为内部解析结果，非用户必填。企业标识歧义返回 enterprise_ambiguous 409。",
-    "manager_owner_reset": "负责人首次登录时使用企业代码/名称或已解析 tenant 重置 bootstrap 密码并获取新的短期 access token。企业标识歧义返回 enterprise_ambiguous 409。",
+    "manager_resolve_tenant_by_account": "已停用：不再查询账号，不论账号是否存在都固定返回 410 client_upgrade_required，提示升级客户端。新版客户端直接调用 login。",
+    "manager_login": "成员或负责人使用企业代码/名称（可省略）、账号和密码登录，返回短期 RS256 access token。省略企业时按账号和密码匹配企业：只有一个企业密码通过则直接登录；多个则返回 tenant_selection_required 409，meta.candidates 只列密码通过的企业，客户端带候选 tenant_id 重试。账号不存在与密码错误返回相同的 401。企业标识歧义返回 enterprise_ambiguous 409。",
+    "manager_owner_reset": "负责人首次登录时使用企业代码/名称或已解析 tenant 重置 bootstrap 密码并获取新的短期 access token。通常携带登录 403 password_reset_required 响应 meta.tenant_id；都不带时与登录同口径，旧密码通过后才匹配企业。企业标识歧义返回 enterprise_ambiguous 409。",
     "manager_jwks": "返回指定 tenant 当前有效的公开 JWKS；不包含私钥或对称签名密钥。",
     "manager_resolve_tenant": "根据企业代码或名称解析 tenant_id；代码精确匹配优先，slug 歧义返回 enterprise_ambiguous 409。不使用 Host 或第一行 registry。",
     "manager_employee_config_create": "创建 runtime 中立的 employee 配置；不会写入任何 runtime 原生文件。",
@@ -1454,8 +1455,8 @@ def _apply_known_documentation_examples(operation_id: str, operation: dict[str, 
         media["examples"] = {"audience": {"summary": "当前企业 UUID audience", "value": value}}
     elif operation_id == "manager_login":
         request_body["description"] = (
-            "企业成员或负责人登录；用户填写企业代码/名称、账号和密码。"
-            "tenant_id 仅为内部解析结果，不必由浏览器提交。"
+            "企业成员或负责人登录；用户填写企业代码/名称（可省略）、账号和密码。"
+            "省略企业时按账号和密码匹配企业；tenant_id 仅在 409 候选中选定企业后由客户端提交。"
         )
         media["examples"] = {
             "enterpriseLogin": {
@@ -1490,20 +1491,6 @@ def _apply_known_documentation_examples(operation_id: str, operation: dict[str, 
                 "summary": "按企业代码解析",
                 "value": {"enterprise": "example-co"},
             }
-        }
-    elif operation_id == "manager_resolve_tenant_by_account":
-        request_body["description"] = (
-            "用成员账号解析 tenant_id；跨企业时返回 tenant_selection_required 409，需同时提供 enterprise。"
-        )
-        media["examples"] = {
-            "uniqueAccount": {
-                "summary": "账号仅属于一个企业",
-                "value": {"account": "13800000000"},
-            },
-            "disambiguated": {
-                "summary": "跨企业账号需带企业标识",
-                "value": {"account": "13800000000", "enterprise": "example-co"},
-            },
         }
     elif operation_id == "operation_register_solution_template":
         request_body["description"] = "行业方案模板请求；至少一个启用专家，coordinator_template_id 必须属于启用专家。"
@@ -1732,6 +1719,7 @@ def enrich_openapi(schema: dict[str, Any], tier: str) -> dict[str, Any]:
                             "passwordResetRequired": {"summary": "首次登录需要重置密码", "value": _problem_example(403, "password_reset_required", "Password reset is required before login.")},
                             "passwordExpired": {"summary": "密码已过期", "value": _problem_example(403, "password_expired", "Password reset is required because the password expired.")},
                             "principalInactive": {"summary": "账号已停用", "value": _problem_example(403, "principal_inactive", "The account is not active.")},
+                            "noActiveEnterprise": {"summary": "匹配到的企业不止一家且全部不可用，没有可登录的企业", "value": _problem_example(403, "no_active_enterprise", "没有可登录的企业：该账号所在的企业都已暂停或封禁。如有疑问，请联系平台运营。")},
                         },
                     }
                 },
@@ -1761,11 +1749,11 @@ def enrich_openapi(schema: dict[str, Any], tier: str) -> dict[str, Any]:
                                 ),
                             },
                             "tenantSelectionRequired": {
-                                "summary": "账号属于多个企业，需要提供 enterprise",
+                                "summary": "账号和密码匹配多个企业，需要按 meta.candidates 的 tenant_id 选择",
                                 "value": _problem_example(
                                     409,
                                     "tenant_selection_required",
-                                    "The account belongs to multiple enterprises; specify enterprise.",
+                                    "The account and password match multiple enterprises; select one by tenant_id.",
                                 ),
                             },
                         },
@@ -1776,6 +1764,11 @@ def enrich_openapi(schema: dict[str, Any], tier: str) -> dict[str, Any]:
                     "X-Trace-ID": {"$ref": "#/components/headers/TraceId"},
                 },
             },
+            "ClientUpgradeRequired": _problem_response(
+                "旧版「凭账号查企业」接口已停用，客户端需要升级。", status=410,
+                code="client_upgrade_required",
+                detail="客户端版本过旧，请升级后登录",
+            ),
             "HindsightClientUpgradeRequired": _problem_response(
                 "当前记忆策略要求升级受控 Agent 协议。", status=409,
                 code="hindsight_client_upgrade_required",
@@ -1912,7 +1905,7 @@ def enrich_openapi(schema: dict[str, Any], tier: str) -> dict[str, Any]:
                 # This route deliberately translates URL parser failures to HTTP 400;
                 # ordinary FastAPI body validation remains the documented 422 contract.
                 responses.setdefault("400", {"$ref": "#/components/responses/BadRequest"})
-            if is_api and not is_mcp and operation_id not in _NO_NOT_FOUND_OPERATION_IDS and (path.count("{") or operation_id in _BODY_NOT_FOUND_OPERATION_IDS or operation_id in {"manager_resolve_tenant", "manager_resolve_tenant_by_account"}):
+            if is_api and not is_mcp and operation_id not in _NO_NOT_FOUND_OPERATION_IDS and (path.count("{") or operation_id in _BODY_NOT_FOUND_OPERATION_IDS or operation_id == "manager_resolve_tenant"):
                 responses.setdefault("404", {"$ref": "#/components/responses/NotFound"})
             if is_api and not is_mcp and method in {"post", "put", "patch", "delete"} and operation_id not in _NO_CONFLICT_OPERATION_IDS:
                 responses.setdefault("409", {"$ref": "#/components/responses/Conflict"})
@@ -1920,9 +1913,13 @@ def enrich_openapi(schema: dict[str, Any], tier: str) -> dict[str, Any]:
                 "manager_login",
                 "manager_owner_reset",
                 "manager_resolve_tenant",
-                "manager_resolve_tenant_by_account",
             }:
                 responses["409"] = {"$ref": "#/components/responses/AuthConflict"}
+            if operation_id == "manager_resolve_tenant_by_account":
+                # 已停用的旧接口：只会返回 410，不再有成功、404、409 或 503。
+                for status in ("200", "404", "409", "503"):
+                    responses.pop(status, None)
+                responses["410"] = {"$ref": "#/components/responses/ClientUpgradeRequired"}
             if operation_id == "manager_hindsight_runtime_config":
                 responses["409"] = {"$ref": "#/components/responses/HindsightClientUpgradeRequired"}
             if operation_id in _OPERATION_429_OPERATION_IDS:

@@ -6,10 +6,6 @@
 
 // -------------------- 认证 --------------------
 
-export interface TenantResolution {
-  tenant_id: string
-}
-
 export interface AuthClaims {
   user_id: string
   // Agent 成功身份必须具有明确的企业。

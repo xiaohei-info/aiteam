@@ -117,6 +117,58 @@ test('auto login: a failure lands on the login page and hands over the reason', 
   } finally { f.close() }
 })
 
+test('auto login: the enterprise picked last time is used directly, so a multi-enterprise account is not asked again', async () => {
+  const f = await launch({ saved: JSON.stringify({ enterprise: '', account: 'saved', password: 'pw', tenantId: 'tenant' }) })
+  try {
+    await f.store.getState().restoreSession()
+    await f.store.getState().runPendingAutoLogin()
+    assert.deepEqual(f.screens, ['connecting', 'app'])
+    assert.deepEqual(f.logins, [{ tenant_id: 'tenant', account: 'saved', password: 'pw' }])
+    assert.equal(f.store.getState().autoLoginTenantRejected, false)
+  } finally { f.close() }
+})
+
+test('auto login: when the saved enterprise is unavailable the login page asks to pick again', async () => {
+  const f = await launch({ saved: JSON.stringify({ enterprise: '', account: 'saved', password: 'pw', tenantId: 'gone-tenant' }) })
+  try {
+    const failure = Object.assign(new Error('tenant closed'), { status: 403, code: 'tenant_closed' })
+    f.adapter.login = async (body: any) => { f.logins.push(body); throw failure }
+    await f.store.getState().restoreSession()
+    await f.store.getState().runPendingAutoLogin()
+    assert.deepEqual(f.screens, ['connecting', 'login'])
+    assert.equal(f.store.getState().autoLoginFailure, failure)
+    assert.equal(f.store.getState().autoLoginTenantRejected, true)
+
+    // A manual login from the form carries no saved tenant, so the server can offer the choice again.
+    f.adapter.login = async (body: any) => { f.logins.push(body); return { token: body.account, claims: claims(body.account) } }
+    await f.store.getState().login('', 'saved', 'pw')
+    assert.deepEqual(f.logins.at(-1), { account: 'saved', password: 'pw' })
+    assert.equal(f.store.getState().autoLoginTenantRejected, false)
+  } finally { f.close() }
+})
+
+test('auto login: a network or server failure with a saved enterprise keeps the original reason', async () => {
+  const f = await launch({ saved: JSON.stringify({ enterprise: '', account: 'saved', password: 'pw', tenantId: 'tenant' }) })
+  try {
+    const failure = Object.assign(new Error('unavailable'), { status: 503, code: 'service_unavailable' })
+    f.adapter.login = async () => { throw failure }
+    await f.store.getState().restoreSession()
+    await f.store.getState().runPendingAutoLogin()
+    assert.equal(f.store.getState().autoLoginFailure, failure)
+    assert.equal(f.store.getState().autoLoginTenantRejected, false)
+  } finally { f.close() }
+})
+
+test('auto login: an old saved record without an enterprise choice still logs in by enterprise', async () => {
+  const f = await launch()
+  try {
+    await f.store.getState().restoreSession()
+    await f.store.getState().runPendingAutoLogin()
+    assert.deepEqual(f.logins, [{ enterprise: 'acme', account: 'saved', password: 'pw' }])
+    assert.equal(f.store.getState().isAuthenticated, true)
+  } finally { f.close() }
+})
+
 test('auto login: a required password change lands on the login page without an error', async () => {
   const f = await launch()
   try {

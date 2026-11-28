@@ -160,7 +160,7 @@ POST /api/agent/grants/sync
 GET  /api/agent/grants/readiness
 ```
 
-`/api/agent/login` 自行解析企业：传 `tenant_id` 则直接使用；否则由同源 Agent 按 `account`、`enterprise` 访问 Manager 解析。客户端**不必**先调 `POST /api/auth/resolve-tenant-by-account`（该端点仍保留给需要提前展示企业选择/消歧的 UI）；同账号跨多企业时传 `enterprise` 消歧，缺省企业则不传。密码重置 `/api/agent/reset-password` 采用同一入参解析规则。
+`/api/agent/login` 由 Manager 定位企业：传 `tenant_id` 则直接使用；传 `enterprise` 则只在该企业内校验；都不传时 Manager 按账号和密码匹配企业——只有一个企业密码通过则直接登录，多个则返回 409 `tenant_selection_required`，`meta.candidates`（`tenant_id` + `enterprise_name`，只含密码通过的企业）供客户端选择后带 `tenant_id` 重试。账号不存在与密码错误返回相同的 401。`POST /api/auth/resolve-tenant-by-account` **已停用**，固定返回 410 `client_upgrade_required`（客户端版本过旧，请升级后登录），客户端不得再调用。密码重置 `/api/agent/reset-password` 采用同一入参规则；首次登录需改密时 403 响应的 `meta.tenant_id` 指明企业，改密请求带上它即可（不带时 Manager 在旧密码通过后匹配企业）。
 
 登录或同步返回 `503` 表示 Manager 不可达，客户端展示离线状态；不要把它当成本地 Agent 启动失败。
 

@@ -12,6 +12,7 @@ interface AuthenticationProblemLike {
   problem?: {
     code?: unknown
     detail?: unknown
+    meta?: unknown
   }
 }
 
@@ -79,6 +80,18 @@ export function isPasswordResetRequired(error: unknown): boolean {
   // 只有通用 forbidden 才允许靠 detail 文案判断，避免把无关的 403 当成密码重置。
   if (code !== 'forbidden' || typeof detail !== 'string') return false
   return /password(?:\s+expired[^;]*)?;?\s*reset required/i.test(detail)
+}
+
+/**
+ * 「需要改密」(403 password_reset_required / password_expired) 响应 meta.tenant_id 指明的企业。
+ * 未填企业标识登录时由企业服务按账号和密码匹配企业，后续改密带这个 tenant_id 定位企业；
+ * 旧版服务不回传时返回 null，改密再由企业服务凭旧密码匹配。
+ */
+export function passwordResetTenantId(error: unknown): string | null {
+  if (!error || typeof error !== 'object') return null
+  const meta = (error as AuthenticationProblemLike).problem?.meta
+  const value = meta && typeof meta === 'object' ? (meta as { tenant_id?: unknown }).tenant_id : undefined
+  return typeof value === 'string' && value.trim() ? value.trim() : null
 }
 
 export function shouldInvalidateSessionOnUnauthorized(

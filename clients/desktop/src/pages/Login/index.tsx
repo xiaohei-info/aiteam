@@ -12,7 +12,8 @@ import { useAgentAuthStore } from '../../stores/agentAuth'
 import { AgentApiError } from '../../api/agent'
 import { readAuthDiagnostics } from '../../lib/authDiagnostics'
 import { SessionPersistenceError } from '../../lib/authSession'
-import { loginUnavailableMessage } from '../../lib/loginServiceError'
+import { describeLoginApiFailure, tenantSelectionCandidates, type TenantCandidate } from '../../lib/loginFailure'
+import TenantPickerDialog from './TenantPickerDialog'
 import {
   deleteSavedLoginCredentials,
   listSavedLoginCredentialProfiles,
@@ -27,24 +28,15 @@ interface LoginInput {
   enterprise: string
   account: string
   password: string
+  // 409 候选中选定的企业：直接按 tenant_id 登录，不再按企业标识解析。
+  tenantId?: string
 }
 
 function describeLoginFailure(err: unknown, resettingPassword: boolean): string {
   if (err instanceof SessionPersistenceError) return err.message
   // 非 AgentApiError:通常是 fetch 层异常(相对路径 + tauri http、CORS、DNS、断网)。
   if (!(err instanceof AgentApiError)) return '网络异常,请检查连接或稍后重试'
-  const problemCode = err.problem?.code ?? err.code
-  const problemDetail = err.problem?.detail ?? ''
-  if (err.status === 401) return resettingPassword ? '当前密码不正确，请重新输入' : '企业标识、账号或密码错误，请重试'
-  if (err.status === 403) return '当前账号无法完成此操作，请联系管理员'
-  if (err.status === 404) return '账号不存在或所属企业未开通,请联系管理员'
-  if (err.status === 422 && problemCode === 'validation_error' && /password policy violation/i.test(problemDetail)) {
-    return '新密码不符合企业密码策略（长度、大小写字母、数字和符号）'
-  }
-  if (err.status === 422) return '提交的信息不符合要求，请检查后重试'
-  if (err.status === 503) return loginUnavailableMessage(problemDetail, problemCode, err.problem?.meta)
-  if (err.status >= 500) return '后端服务异常,请稍后重试'
-  return err.problem?.detail ?? err.message ?? '登录失败'
+  return describeLoginApiFailure(err, resettingPassword)
 }
 
 export default function Login() {
@@ -60,10 +52,16 @@ export default function Login() {
   const [showNewPassword, setShowNewPassword] = useState(false)
   const [showConfirmPassword, setShowConfirmPassword] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
+  // 账号密码匹配多个企业时由用户选择；选中后按候选的 tenant_id 重新登录（企业标识输入框保持用户原样）。
+  const [tenantChoice, setTenantChoice] = useState<{ input: LoginInput; candidates: TenantCandidate[] } | null>(null)
   // 自动登录在内部页进行，失败后才来到这里，第一屏就要说明原因。
   const [error, setError] = useState<string | null>(() => {
-    const failure = useAgentAuthStore.getState().autoLoginFailure
-    return failure ? describeLoginFailure(failure, false) : null
+    const { autoLoginFailure: failure, autoLoginTenantRejected } = useAgentAuthStore.getState()
+    if (!failure) return null
+    // 上次选择的企业登不上（停用、删除、密码已改等）：表单不带该企业，再点登录会重新弹出选择。
+    return autoLoginTenantRejected
+      ? `上次登录的企业无法自动登录：${describeLoginFailure(failure, false)}。请重新登录并选择企业。`
+      : describeLoginFailure(failure, false)
   })
   const login = useAgentAuthStore((s) => s.login)
   const resetPassword = useAgentAuthStore((s) => s.resetPassword)
@@ -150,14 +148,15 @@ export default function Login() {
     setIsLoading(true)
     setError(null)
     try {
-      const loginEnterprise = (pendingPasswordReset?.enterprise ?? pendingPasswordReset?.tenant_id ?? input.enterprise).trim()
+      // 保存的登录信息只记用户填写的企业标识；tenant_id 是内部值，不能当企业标识再解析。
+      const loginEnterprise = (pendingPasswordReset?.enterprise ?? input.enterprise).trim()
       const loginAccount = (pendingPasswordReset?.account ?? input.account).trim()
       let loginPassword = input.password
       if (pendingPasswordReset) {
         await resetPassword(input.password, newPassword)
         loginPassword = newPassword
       } else {
-        const outcome = await login(input.enterprise.trim(), input.account.trim(), input.password)
+        const outcome = await login(input.enterprise.trim(), input.account.trim(), input.password, input.tenantId)
         if (outcome === 'password_reset_required') {
           setIsLoading(false)
           setNewPassword('')
@@ -171,7 +170,9 @@ export default function Login() {
       writeAutoLoginPreference(rememberCredentials && autoLogin)
       try {
         if (rememberCredentials) {
-          await saveLoginCredentials({ enterprise: loginEnterprise, account: loginAccount, password: loginPassword })
+          // 记下本次实际登录的企业，供自动登录直接使用（弹窗选择或企业服务匹配的结果）。
+          const tenantId = useAgentAuthStore.getState().tenantId ?? undefined
+          await saveLoginCredentials({ enterprise: loginEnterprise, account: loginAccount, password: loginPassword, tenantId })
         } else {
           await deleteSavedLoginCredentials({ enterprise: loginEnterprise, account: loginAccount })
         }
@@ -183,8 +184,25 @@ export default function Login() {
       navigate('/chat')
     } catch (err) {
       setIsLoading(false)
+      const candidates = !pendingPasswordReset && err instanceof AgentApiError ? tenantSelectionCandidates(err) : []
+      if (candidates.length > 0) {
+        setTenantChoice({ input, candidates })
+        return
+      }
       setError(describeLoginFailure(err, Boolean(pendingPasswordReset)))
     }
+  }
+
+  const handlePickTenant = (candidate: TenantCandidate) => {
+    const pending = tenantChoice
+    setTenantChoice(null)
+    if (!pending) return
+    void runLogin({ ...pending.input, tenantId: candidate.tenant_id })
+  }
+
+  const handleCancelTenantPick = () => {
+    setTenantChoice(null)
+    setError('该账号属于多个企业，请在「企业标识」中填写要登录的企业')
   }
 
   const handleCancelPasswordReset = () => {
@@ -284,7 +302,7 @@ export default function Login() {
                 autoCapitalize="none"
                 spellCheck={false}
                 placeholder="企业标识（选填）"
-                value={pendingPasswordReset?.enterprise ?? pendingPasswordReset?.tenant_id ?? enterprise}
+                value={pendingPasswordReset?.enterprise ?? enterprise}
                 onChange={(e) => {
                   const nextEnterprise = e.target.value
                   setEnterprise(nextEnterprise)
@@ -463,6 +481,14 @@ export default function Login() {
           </button>
         )}
       </form>
+      {tenantChoice && (
+        <TenantPickerDialog
+          account={tenantChoice.input.account.trim()}
+          candidates={tenantChoice.candidates}
+          onPick={handlePickTenant}
+          onCancel={handleCancelTenantPick}
+        />
+      )}
     </div>
   )
 }
