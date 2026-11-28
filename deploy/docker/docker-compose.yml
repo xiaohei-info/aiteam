@@ -221,6 +221,9 @@ services:
         PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
     image: ${AITEAM_OPERATION_IMAGE:-aiteam-operation:0.1.0}
     container_name: aiteam-operation
+    volumes:
+      # 专家模板头像文件（template-avatars/{template_id}.webp）；数据库只存版本与摘要。
+      - operationdata:/app/data
     depends_on:
       aiteam-compose-guard:
         condition: service_completed_successfully
@@ -232,6 +235,7 @@ services:
       - "127.0.0.1:8001:8000"
     environment:
       APP_TIER: operation
+      AITEAM_OPERATION_DATA_ROOT: /app/data
       AITEAM_ENV: ${AITEAM_ENV:?AITEAM_ENV must be explicitly set}
       MANAGER_DB_NAME: ${MANAGER_DB_NAME:-${POSTGRES_DB:-manager_control_db}}
       OPERATION_DB_NAME: ${OPERATION_DB_NAME:-oper}
@@ -425,6 +429,9 @@ volumes:
   # 使 dev/test/prod 各用各卷）；未注入时回退共用卷 managerdata。
   managerdata:
     name: ${MANAGER_DATA_VOLUME:-managerdata_${AITEAM_ENV:?AITEAM_ENV must be explicitly set}}
+  # Operator 文件数据（模板头像），按 ENV 分卷，规则同 managerdata。
+  operationdata:
+    name: ${OPERATION_DATA_VOLUME:-operationdata_${AITEAM_ENV:?AITEAM_ENV must be explicitly set}}
   # 实际卷名由 ENV 的 POSTGRES_VOLUME 决定（ctl.sh 缺省注入 aiteam_pg_data_<env>，
   # 使 dev/test/prod 各用各卷）；未注入时回退共用卷 aiteam_pg_data。
   pgdata:

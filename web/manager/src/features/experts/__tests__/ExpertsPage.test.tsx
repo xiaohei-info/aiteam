@@ -376,6 +376,48 @@ describe("ExpertsPage", () => {
     );
   });
 
+  it("上传头像后重开详情仍是新头像，且不弄丢未保存的表单内容", async () => {
+    // 上传结果不写回 items（否则抽屉按新实例重置草稿），所以必须由列表页把 override 传给抽屉；
+    // 否则重开详情读到的还是旧的 avatar_url（null），按钮回到「上传头像」、头像不显示。
+    const avatarUrl = "/api/manager/employees/emp-9/avatar/content?v=1";
+    const custom: EmployeeConfig = {
+      ...employeeConfigured,
+      employee_id: "emp-9",
+      employee_slug: "custom-1",
+      display_name: "自建专家",
+      origin: "custom",
+      avatar_url: null,
+    };
+    const { api, updateEmployee } = mockApis([custom]);
+    api.uploadEmployeeAvatar = vi.fn().mockResolvedValue({
+      employee_id: "emp-9", avatar_url: avatarUrl, version: 1, updated_at: "",
+    });
+    renderPage();
+    await waitFor(() => expect(screen.getAllByTestId("employee-row")).toHaveLength(1));
+
+    fireEvent.click(screen.getAllByTestId("edit-config")[0]!);
+    await screen.findByTestId("model-select");
+    expect(screen.getByRole("button", { name: "上传头像" })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("名称"), { target: { value: "改了名字还没保存" } });
+    const file = new File([new Uint8Array([1, 2, 3])], "a.png", { type: "image/png" });
+    fireEvent.change(screen.getByTestId("employee-avatar-input"), { target: { files: [file] } });
+
+    await waitFor(() => expect(api.uploadEmployeeAvatar).toHaveBeenCalledTimes(1));
+    // 上传不走表单保存，未保存的修改要还在。
+    await waitFor(() => expect(screen.getByRole("button", { name: "更换头像" })).toBeInTheDocument());
+    expect(screen.getByLabelText("名称")).toHaveValue("改了名字还没保存");
+    expect(updateEmployee).not.toHaveBeenCalled();
+
+    const dialog = screen.getByRole("dialog", { name: "专家实例详情" });
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByTestId("model-select")).not.toBeInTheDocument());
+
+    fireEvent.click(screen.getAllByTestId("edit-config")[0]!);
+    await screen.findByTestId("model-select");
+    expect(screen.getByRole("button", { name: "更换头像" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "上传头像" })).not.toBeInTheDocument();
+  });
+
   it("取消配置：关闭 Dialog 且不提交修改", async () => {
     const { updateEmployee } = mockApis([employeeConfigured]);
     renderPage();

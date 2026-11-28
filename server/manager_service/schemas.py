@@ -100,6 +100,11 @@ class EmployeeConfigOut(EmployeeConfig):
     copied_from_employee_id: str | None = Field(default=None, description="复制品的源专家 id；仅作溯源")
     skill_status: list[CapabilityRefStatusOut] = Field(default_factory=list, description="skills 里每一项在企业目录里的状态；只读，写入请求不带")
     connector_status: list[CapabilityRefStatusOut] = Field(default_factory=list, description="connector_refs 里每一项的状态；只读")
+    avatar_url: str | None = Field(
+        default=None,
+        description="员工头像的同源内容路径（带 ?v=版本，需 Bearer）；无头像为 null。只读，仅列表/详情接口填充。",
+        examples=["/api/manager/employees/7d0c…/avatar/content?v=2", None],
+    )
 
 
 # ---- 成员/部门/角色 + member_grant 授权（issue #35；03 §9.7；04 §6.1，D12）----

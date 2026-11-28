@@ -77,17 +77,34 @@ def test_create_no_db_503():
 
 
 def test_avatar_content_returns_binary_response():
+    from manager_service.employee_avatar_service import AvatarContent
     employee_id = "11111111-1111-1111-1111-111111111111"
     client = _client("postgresql://fake/fake")
     fake = MagicMock()
-    fake.content.return_value = (b"\\x89PNG\\r\\n\\x1a\\n", "image/png")
+    fake.content.return_value = AvatarContent(data=b"RIFF\x00\x00\x00\x00WEBP", version=3, sha256="abc")
     with patch("manager_service.routes_employee._avatar_service", return_value=fake):
-        response = client.get(f"/api/manager/employees/{employee_id}/avatar/content", headers=_auth_header())
+        response = client.get(f"/api/manager/employees/{employee_id}/avatar/content?v=3", headers=_auth_header())
     assert response.status_code == 200, response.text
-    assert response.content == b"\\x89PNG\\r\\n\\x1a\\n"
-    assert response.headers["content-type"] == "image/png"
-    assert response.headers["cache-control"] == "private, max-age=300"
+    assert response.content == b"RIFF\x00\x00\x00\x00WEBP"
+    assert response.headers["content-type"] == "image/webp"
+    assert response.headers["x-avatar-version"] == "3"
+    assert response.headers["etag"] == '"abc"'
+    assert response.headers["x-content-type-options"] == "nosniff"
     fake.content.assert_called_once()
+
+
+def test_avatar_upload_for_template_employee_is_409():
+    from manager_service.employee_avatar_service import TemplateAvatarLocked
+    client = _client("postgresql://fake/fake")
+    fake = MagicMock()
+    fake.update.side_effect = TemplateAvatarLocked("locked")
+    with patch("manager_service.routes_employee._avatar_service", return_value=fake):
+        response = client.post(
+            "/api/manager/employees/11111111-1111-1111-1111-111111111111/avatar",
+            json={"mime_type": "image/png", "data": "AAAA"}, headers=_auth_header(),
+        )
+    assert response.status_code == 409, response.text
+    assert response.json()["code"] == "employee_avatar_locked"
 
 
 def test_create_extra_field_422():
@@ -239,3 +256,36 @@ def test_list_returns_before_scope_reconcile_runs():
         client = _client("postgresql://fake/fake")
         assert client.get("/api/manager/employees", headers=_auth_header()).status_code == 200
     assert order == ["list", "reconcile"]
+
+
+def test_list_and_get_carry_avatar_url():
+    """企业端专家列表/详情带头像路径（PR #231 复核：企业端要能展示员工头像）。"""
+    svc = _fake_service()
+    avatars = MagicMock()
+    avatars.avatar_urls.return_value = {"emp-1": "/api/manager/employees/emp-1/avatar/content?v=2"}
+    with patch("manager_service.routes_employee._service", return_value=svc), \
+         patch("manager_service.routes_employee._avatar_service", return_value=avatars), \
+         patch("manager_service.routes_employee.reconcile_for_admin"):
+        client = _client("postgresql://fake/fake")
+        listed = client.get("/api/manager/employees", headers=_auth_header())
+        one = client.get("/api/manager/employees/emp-1", headers=_auth_header())
+        # 保存后返回的配置也要带头像，否则企业端卡片在保存后头像消失。
+        saved = client.put("/api/manager/employees/emp-1", json={"display_name": "专家A"}, headers=_auth_header())
+    assert listed.status_code == 200, listed.text
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["data"]["avatar_url"] == "/api/manager/employees/emp-1/avatar/content?v=2"
+    assert listed.json()["data"][0]["avatar_url"] == "/api/manager/employees/emp-1/avatar/content?v=2"
+    assert one.json()["data"]["avatar_url"] == "/api/manager/employees/emp-1/avatar/content?v=2"
+
+
+def test_list_without_avatar_is_null_and_avatar_failure_does_not_break_list():
+    svc = _fake_service()
+    broken = MagicMock()
+    broken.avatar_urls.side_effect = RuntimeError("db down")
+    with patch("manager_service.routes_employee._service", return_value=svc), \
+         patch("manager_service.routes_employee._avatar_service", return_value=broken), \
+         patch("manager_service.routes_employee.reconcile_for_admin"):
+        client = _client("postgresql://fake/fake")
+        listed = client.get("/api/manager/employees", headers=_auth_header())
+    assert listed.status_code == 200, listed.text
+    assert listed.json()["data"][0]["avatar_url"] is None

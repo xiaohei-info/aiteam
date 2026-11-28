@@ -1,7 +1,7 @@
 /** Local workspace dashboard: local conversation overview and entry points. */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
-import { DigitalEmployeeAvatar } from "@aiteam/shared";
+import { EmployeeAvatar } from "../../lib/employee-avatar";
 import { ApiError } from "@aiteam/shared/api-client";
 import { Badge } from "@astryxdesign/core/Badge";
 import { Banner } from "@astryxdesign/core/Banner";
@@ -168,7 +168,7 @@ export function WorkspacePage() {
                   <VStack as="li" key={conversation.id} gap={1} data-testid="ws-conversation">
                     <Link to={conversationRoute(conversation)}>
                       <HStack gap={2} align="center">
-                        <DigitalEmployeeAvatar name={employee?.display_name ?? title} seed={employee?.employee_id ?? conversation.id} src={employee?.avatar_url} size={42} />
+                        <EmployeeAvatar name={employee?.display_name ?? title} seed={employee?.employee_id ?? conversation.id} src={employee?.avatar_url} size={42} />
                         <VStack gap={0}>
                           <Text weight="semibold">{title}</Text>
                           <Text type="supporting">{conversationType(conversation)} · {formatConversationTime(conversation.updated_at)}{conversation.last_preview ? ` · ${conversation.last_preview}` : ""}</Text>

@@ -31,6 +31,7 @@ from .member_service import GrantService, MemberDeptService
 from .recruit_repository import RecruitRepository
 from .skill_signing import SkillPackageSigner
 from .employee_avatar_repository import EmployeeAvatarRepository
+from .employee_avatar_service import avatar_projection
 
 _GRANT_EXEMPT_ROLES = frozenset({
     EnterpriseRole.OWNER.value,
@@ -124,7 +125,7 @@ class AuthorizedConfigService:
         experts: list[dict] = []
         for cfg in authorized_configs:
             avatar = self._avatars.get(ctx, cfg.employee_id) if self._avatars is not None else None
-            avatar_version = avatar.version if avatar else 0
+            avatar_url, avatar_version = avatar_projection(avatar)
             avatar_sync_version = f"{cfg.version}:avatar-{avatar_version}"
             known_ver = req.known_versions.get(cfg.employee_id)
             # The config revision also covers one-time projection backfills. Do
@@ -140,7 +141,7 @@ class AuthorizedConfigService:
                 experts.append({**cfg.model_dump(mode="json", exclude=_ADMIN_ONLY_FIELDS), "tools": list(policy.tools),
                                 "knowledge_refs": list(policy.refs),
                                 "knowledge_policy": policy.projection.model_dump(mode="json"),
-                                "avatar_url": avatar.avatar_url if avatar else None,
+                                "avatar_url": avatar_url,
                                 "avatar_version": avatar_version,
                                 "avatar_sync_version": avatar_sync_version})
 

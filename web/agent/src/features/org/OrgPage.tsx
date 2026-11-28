@@ -6,7 +6,7 @@
  * 红线：只读本地投影，不写后端；展示态为组件局部运行态。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { DigitalEmployeeAvatar } from "@aiteam/shared";
+import { EmployeeAvatar } from "../../lib/employee-avatar";
 import { ApiError } from "@aiteam/shared/api-client";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
@@ -160,7 +160,7 @@ function OrgNode({ node, experts }: { node: OrgTreeNode; experts: Map<string, Lo
     >
       <Card padding={2} variant={isDepartment ? "yellow" : "muted"} minHeight={64} width={170}>
         <HStack gap={2} align="center">
-          {!isDepartment ? <DigitalEmployeeAvatar name={expert?.display_name ?? node.name} seed={node.id} src={expert?.avatar_url ?? node.avatar_url} size={42} /> : null}
+          {!isDepartment ? <EmployeeAvatar name={expert?.display_name ?? node.name} seed={node.id} src={expert?.avatar_url ?? node.avatar_url} size={42} /> : null}
           <VStack align={isDepartment ? "center" : "start"} gap={1}>
             <Text weight="semibold" data-testid="org-node-name">{node.name}</Text>
             <Text type="supporting">{isDepartment ? "部门" : "员工"}</Text>

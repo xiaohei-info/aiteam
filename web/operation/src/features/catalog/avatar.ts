@@ -41,6 +41,13 @@ function dataUrlParts(value: string): { mimeType: string; encoded: string } | nu
   return { mimeType: match[1]!, encoded: match[2] };
 }
 
+const STORED_TEMPLATE_AVATAR = /^\/api\/operation\/catalog\/expert-templates\/[^/?#]+\/avatar\/content(?:\?v=[0-9]+)?$/u;
+
+/** 已保存的模板头像：服务端返回的本端文件路径（需 Bearer，经 ApiClient 取图）。 */
+export function isStoredTemplateAvatar(value: string): boolean {
+  return STORED_TEMPLATE_AVATAR.test(value);
+}
+
 /** Validate a server-provided inline avatar before allowing it into an <img>. */
 export function isSafeAvatarDataUrl(value: string | null | undefined): boolean {
   if (!value) return false;

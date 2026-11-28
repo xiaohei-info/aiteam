@@ -135,12 +135,13 @@ export class ApiClient {
     return env.data;
   }
 
-  /** Open a same-origin streaming response (used by Agent SSE). */
+  /** Open a same-origin streaming response (Agent SSE；也可用于受保护的头像等二进制 GET)。 */
   async stream(path: string, options: RequestOptions = {}): Promise<Response> {
     assertOwnTierPath(this.tier, path);
     const url = `${this.baseUrl}${path}${buildQuery(options.query)}`;
     const headers = await this.buildHeaders(options);
-    headers.set("Accept", "text/event-stream");
+    // buildHeaders 统一写死 Accept: application/json；流式默认 SSE，调用方显式传入的 Accept（如头像 image/webp）优先。
+    headers.set("Accept", options.headers?.Accept ?? "text/event-stream");
     let response: Response;
     try {
       response = await this.fetchImpl(url, { method: "GET", headers, signal: options.signal });

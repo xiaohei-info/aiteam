@@ -5,6 +5,7 @@ import { useAnchoredPopover } from '../Popover/useAnchoredPopover'
 import { useGlobalShortcutClose } from '../../hooks/useGlobalShortcut'
 import type { GroupMember } from '../../stores/chat'
 import { isImeKeyboardEvent } from '../../lib/imeKeyboard'
+import { extractMentionText, type RichTextNodeLike } from './mentionRichText'
 
 export interface MentionInputHandle {
   clear: () => void
@@ -30,19 +31,21 @@ interface Props {
   onChange: (text: string, mentions: string[]) => void
 }
 
-function extract(el: HTMLDivElement): { text: string; mentions: string[] } {
-  const mentions: string[] = []
-  let text = ''
-  for (const node of Array.from(el.childNodes)) {
-    if (node.nodeType === Node.TEXT_NODE) {
-      text += node.textContent ?? ''
-    } else if (node instanceof HTMLElement && node.dataset.mentionId) {
-      text += `@${node.dataset.mentionName ?? ''}`
-      mentions.push(node.dataset.mentionId)
-    }
+/** 粘贴/换行会插入 <div>、<p>、<br> 等结构，展开逻辑见 mentionRichText（递归遍历子树）。 */
+function toRichTextNode(node: Node): RichTextNodeLike {
+  const element = node instanceof HTMLElement ? node : null
+  return {
+    nodeType: node.nodeType,
+    childNodes: Array.from(node.childNodes, toRichTextNode),
+    textContent: node.textContent,
+    tagName: element?.tagName,
+    dataset: element
+      ? { mentionId: element.dataset.mentionId, mentionName: element.dataset.mentionName }
+      : undefined,
   }
-  return { text, mentions }
 }
+
+const extract = (el: HTMLDivElement) => extractMentionText(toRichTextNode(el))
 
 const MentionInput = forwardRef<MentionInputHandle, Props>(({
   members, placeholder, disabled, style, className, autoFocus, onEnter, onChange,
@@ -151,6 +154,43 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
     const { text, mentions } = extract(el)
     onChange(text, mentions)
   }, [closeMenu, onChange])
+
+  // 只接收纯文本：浏览器默认粘贴会把富文本结构（<div>/<p>/<span>/style）塞进 contenteditable，
+  // 既污染输入内容，也让 extract 拿到与用户所见不一致的文本。
+  const handlePaste = useCallback((e: React.ClipboardEvent<HTMLDivElement>) => {
+    const el = editRef.current
+    if (!el || disabled) return
+    const pasted = e.clipboardData?.getData('text/plain') ?? ''
+    if (!pasted) return
+    e.preventDefault()
+    closeMenu()
+    el.focus()
+    const sel = window.getSelection()
+    // 焦点不在输入框内时插到末尾，避免文本落到不可见位置。
+    if (!sel || !sel.rangeCount || !el.contains(sel.anchorNode)) {
+      const end = document.createRange()
+      end.selectNodeContents(el)
+      end.collapse(false)
+      sel?.removeAllRanges()
+      sel?.addRange(end)
+    }
+    const inserted = document.execCommand('insertText', false, pasted)
+    if (!inserted) {
+      const activeSel = window.getSelection()
+      const range = activeSel && activeSel.rangeCount ? activeSel.getRangeAt(0) : null
+      if (!activeSel || !range || !el.contains(range.startContainer)) return
+      const node = document.createTextNode(pasted)
+      range.deleteContents()
+      range.insertNode(node)
+      const after = document.createRange()
+      after.setStartAfter(node)
+      after.collapse(true)
+      activeSel.removeAllRanges()
+      activeSel.addRange(after)
+    }
+    const { text, mentions } = extract(el)
+    onChange(text, mentions)
+  }, [closeMenu, disabled, onChange])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
     // 组词期间让输入法处理回车、方向键和删除键，不选择 @ 成员或发送。
@@ -276,6 +316,7 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
         style={style}
         data-placeholder={placeholder ?? '输入消息…'}
         onInput={handleInput}
+        onPaste={handlePaste}
         onCompositionStart={() => { isComposingRef.current = true }}
         onCompositionEnd={() => { isComposingRef.current = false }}
         onKeyDown={handleKeyDown}

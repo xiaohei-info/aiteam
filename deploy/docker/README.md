@@ -152,6 +152,8 @@ docker run --rm aiteam-agent:0.1.0 sh -c \
 | `AITEAM_MANAGER_DATA_ROOT` | Manager 持久化知识源根目录（Compose 挂载点） | `/app/data` |
 | `MANAGER_TENANT_ID` | 遗留进程 pin，Stage A 起忽略；不作为 ready/登录条件。F01/F02/F17 另有 503 `multitenancy_phase_pending` 相位闸 | 可空 |
 | `MANAGER_DATA_VOLUME` | Compose Manager 数据卷名（挂载到 `/app/data`） | `managerdata_dev` |
+| `AITEAM_OPERATION_DATA_ROOT` | Operator 文件根目录（专家模板头像，Compose 挂载点） | `/app/data` |
+| `OPERATION_DATA_VOLUME` | Compose Operator 数据卷名（挂载到 `/app/data`） | `operationdata_dev` |
 | `HINDSIGHT_URL` | Manager-only Hindsight API URL（未配置时 Agent lease fail-closed） | `http://hindsight:9290` |
 | `HINDSIGHT_SERVICE_TOKEN` | Manager-only upstream service token；绝不注入 Agent | `***` |
 | `HINDSIGHT_RECALL_PATH` / `HINDSIGHT_RETAIN_PATH` / `HINDSIGHT_DELETE_PATH` | 可选 Manager-side 原生操作路径；未设置时使用 native bank API defaults | `/v1/default/banks/{bank_id}/memories/...` |

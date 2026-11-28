@@ -168,17 +168,27 @@ export interface EmployeeConfig {
   /** 技能 / 连接器在企业目录里的状态（服务端只读；写入负载不带）。 */
   skill_status?: CapabilityRefStatus[];
   connector_status?: CapabilityRefStatus[];
+  /** 头像同源内容路径（带 ?v=版本，需 Bearer；服务端只读）；没有头像为 null。 */
+  avatar_url?: string | null;
+}
+
+/** 上传员工头像的响应（对齐后端 EmployeeAvatarOut）。 */
+export interface EmployeeAvatarOut {
+  employee_id: string;
+  avatar_url: string;
+  version: number;
+  updated_at: string;
 }
 
 /**
  * EmployeeConfig 写入端（对齐后端 EmployeeConfigIn）。
- * 仅含可编辑/可透传字段，剔除服务端托管字段（employee_id / employee_slug / version / status / archive_reason / archived_at / source_template_id / source_template_version / status_reason / origin / copied_from_employee_id）。
+ * 仅含可编辑/可透传字段，剔除服务端托管字段（employee_id / employee_slug / version / status / archive_reason / archived_at / source_template_id / source_template_version / status_reason / origin / copied_from_employee_id / skill_status / connector_status / avatar_url）。
  * PUT /api/manager/employees/{id} 使用此形态，避免把只读标识回写后端。
  */
 export type EmployeeConfigIn = Omit<
   EmployeeConfig,
   | "employee_id" | "employee_slug" | "version" | "status" | "archive_reason" | "archived_at" | "memory_policy"
-  | "source_template_id" | "source_template_version" | "status_reason" | "origin" | "copied_from_employee_id" | "skill_status" | "connector_status"
+  | "source_template_id" | "source_template_version" | "status_reason" | "origin" | "copied_from_employee_id" | "skill_status" | "connector_status" | "avatar_url"
 > & { memory_policy?: Record<string, unknown> | null };
 
 /** 可用生命周期流转（对齐 EmployeeLifecycleOptionsOut）。 */

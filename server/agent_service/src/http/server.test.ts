@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
@@ -76,145 +76,162 @@ test("Agent HTTP local files enforce conversation ownership and support lifecycl
   }
 });
 
-test("Agent employee avatar stays local, preserves tenant scope, and survives Manager sync", async () => {
+function webpBytes(size = 16, fill = 0): Buffer {
+  const bytes = Buffer.alloc(size, fill);
+  bytes.write("RIFF", 0, "ascii");
+  bytes.write("WEBP", 8, "ascii");
+  return bytes;
+}
+
+function avatarProjection(employeeId: string, memberId: string, version: number) {
+  return {
+    employee_id: employeeId, tenant_id: "tenant-1", member_id: memberId, version: "1", handle: employeeId,
+    display_name: "Avatar Employee", revoked: false, synced_at: new Date().toISOString(),
+    avatar_url: version ? `/api/manager/employees/${employeeId}/avatar/content?v=${version}` : null,
+    avatar_version: version, avatar_sync_version: `1:avatar-${version}`,
+  };
+}
+
+test("Agent serves one version-keyed avatar per employee, shared across members, with single-flight refetch", async () => {
   const fixture = await createFixture();
   const employeeId = "employee-avatar";
-  const now = new Date().toISOString();
-  const managerAvatar = "/api/manager/employees/employee-avatar/avatar/content";
-  fixture.store.replaceProjections([
-    {
-      employee_id: employeeId,
-      tenant_id: "tenant-1",
-      member_id: "member-1",
-      version: "1",
-      handle: "avatar",
-      display_name: "Avatar Employee",
-      revoked: false,
-      synced_at: now,
-      avatar_url: managerAvatar,
-      avatar_source: "manager",
-      avatar_version: 3,
-      avatar_sync_version: "1:avatar-3",
-    },
-  ], [], [{
-    employee_id: employeeId,
-    tenant_id: "tenant-1",
-    member_id: "member-1",
-    version: "1",
-    snapshot_version: "snapshot-1",
-    display_name: "Avatar Employee",
-    avatar_url: managerAvatar,
-    avatar_source: "manager",
-    avatar_version: 3,
-    avatar_sync_version: "1:avatar-3",
-  }]);
+  const seed = (version: number) => fixture.store.replaceProjections(
+    ["member-1", "member-2"].map((member) => avatarProjection(employeeId, member, version)), [],
+    ["member-1", "member-2"].map((member) => ({ ...avatarProjection(employeeId, member, version), snapshot_version: "snapshot-1" })),
+  );
+  seed(2);
+  // Manager 下发的路径对客户端没意义：投影统一改写为本机同源路径，?v= 跟随版本。
+  const projection = fixture.store.listLoadedExperts("tenant-1", "member-1")[0]!;
+  assert.equal(projection.avatar_url, `/api/agent/employees/${employeeId}/avatar/content?v=2`);
+  assert.equal(projection.avatar_source, "manager");
+  assert.equal(fixture.store.listSnapshots("tenant-1", "member-1")[0]!.avatar_url, `/api/agent/employees/${employeeId}/avatar/content?v=2`);
+
   let managerCalls = 0;
-  let tenantId = "tenant-1";
-  let memberId = "member-1";
+  let served = webpBytes(16, 1);
+  let servedVersion: number | undefined = 2;
+  let release: () => void = () => undefined;
+  let gate: Promise<void> = Promise.resolve();
   const managerClient = {
-    updateEmployeeAvatar: async () => {
+    getEmployeeAvatar: async () => {
       managerCalls += 1;
-      throw new Error("Agent avatar must not call Manager");
+      await gate;
+      return { data: served, ...(servedVersion ? { version: servedVersion } : {}) };
     },
   } as any;
+  let memberId = "member-1";
+  let tenantId = "tenant-1";
   const http = new AgentHttpServer({
-    host: fixture.host,
-    store: fixture.store,
-    managerClient,
+    host: fixture.host, store: fixture.store, managerClient,
     authenticate: () => ({ callerId: memberId, userId: memberId, tenantId, roles: ["member"] }),
   });
   await http.listen(0);
   const address = http.server.address();
   assert(address && typeof address === "object");
   const base = `http://127.0.0.1:${address.port}`;
-  const data = pngBytes(16);
+  const get = (path = `/api/agent/employees/${employeeId}/avatar/content`) => fetch(`${base}${path}`, { headers: { Authorization: "Bearer test" } });
   try {
-    const updated = await fetch(`${base}/api/agent/employees/${employeeId}/avatar`, {
-      method: "POST",
-      headers: { Authorization: "Bearer test", "Content-Type": "application/json" },
-      body: JSON.stringify({ filename: "avatar.png", mime_type: "image/png", data: data.toString("base64") }),
+    // 并发首访只回源一次。
+    gate = new Promise((resolve) => { release = resolve; });
+    const pending = [get(), get(), get()];
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    release();
+    const responses = await Promise.all(pending);
+    for (const response of responses) {
+      assert.equal(response.status, 200, await response.clone().text());
+      assert.equal(response.headers.get("content-type"), "image/webp");
+      assert.equal(response.headers.get("x-avatar-version"), "2");
+      assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+      assert.deepEqual(Buffer.from(await response.arrayBuffer()), served);
+    }
+    assert.equal(managerCalls, 1);
+    assert.deepEqual(readdirSync(fixture.store.avatarRoot).filter((name) => name.endsWith(".webp")).length, 1);
+
+    // 同租户另一个成员命中同一份缓存，不再回源。
+    memberId = "member-2";
+    assert.equal((await get()).status, 200);
+    assert.equal(managerCalls, 1);
+
+    // 版本变化：重新回源，旧版本文件被删掉，仍只有一份。
+    served = webpBytes(16, 9);
+    servedVersion = 3;
+    seed(3);
+    const refreshed = await get();
+    assert.deepEqual(Buffer.from(await refreshed.arrayBuffer()), served);
+    assert.equal(managerCalls, 2);
+    const files = readdirSync(fixture.store.avatarRoot).filter((name) => name.endsWith(".webp"));
+    assert.equal(files.length, 1);
+    assert.match(files[0]!, /-v3\.webp$/u);
+
+    // 桌面端不允许改员工头像：上传端点已删除。
+    const upload = await fetch(`${base}/api/agent/employees/${employeeId}/avatar`, {
+      method: "POST", headers: { Authorization: "Bearer test", "Content-Type": "application/json" },
+      body: JSON.stringify({ filename: "a.png", mime_type: "image/png", data: pngBytes(16).toString("base64") }),
     });
-    assert.equal(updated.status, 200, await updated.clone().text());
-    const result = (await updated.json() as { data: { employee_id: string; avatar_url: string; version: number } }).data;
-    assert.equal(result.employee_id, employeeId);
-    assert.equal(result.avatar_url, `/api/agent/employees/${employeeId}/avatar/content`);
-    assert.equal(result.version, 1);
-    assert.equal(managerCalls, 0);
-    const projection = fixture.store.listLoadedExperts("tenant-1", "member-1")[0]!;
-    assert.equal(projection.avatar_source, "local");
-    assert.equal(projection.avatar_url, result.avatar_url);
-    assert.equal(projection.manager_avatar_url, managerAvatar);
-    assert.equal(projection.manager_avatar_version, 3);
-    assert.equal("local_avatar_path" in projection, false);
-    const snapshot = fixture.store.listSnapshots("tenant-1", "member-1")[0]!;
-    assert.equal(snapshot.avatar_source, "local");
-    assert.equal(snapshot.avatar_url, result.avatar_url);
+    assert.equal(upload.status, 404);
 
-    const content = await fetch(`${base}${result.avatar_url}`, { headers: { Authorization: "Bearer test" } });
-    assert.equal(content.status, 200);
-    assert.equal(content.headers.get("content-type"), "image/png");
-    assert.deepEqual(Buffer.from(await content.arrayBuffer()), data);
+    // 非 WebP 字节（例如被篡改的上游）不落盘、不返回。
+    served = pngBytes(16);
+    servedVersion = 4;
+    seed(4);
+    assert.equal((await get()).status, 404);
 
-    const storedBeforeReplacement = fixture.store.db.prepare("SELECT projection_json FROM loaded_employee_projection WHERE employee_id = ? AND tenant_id = ? AND member_id = ?").get(employeeId, "tenant-1", "member-1") as { projection_json: string };
-    const previousPath = (JSON.parse(storedBeforeReplacement.projection_json) as Record<string, unknown>).local_avatar_path as string;
-    const replacementData = pngBytes(24);
-    const replacement = await fetch(`${base}/api/agent/employees/${employeeId}/avatar`, {
-      method: "POST",
-      headers: { Authorization: "Bearer test", "Content-Type": "application/json" },
-      body: JSON.stringify({ filename: "replacement.png", mime_type: "image/png", data: replacementData.toString("base64") }),
-    });
-    assert.equal(replacement.status, 200, await replacement.clone().text());
-    assert.equal((await replacement.json() as { data: { version: number } }).data.version, 2);
-    const storedAfterReplacement = fixture.store.db.prepare("SELECT projection_json FROM loaded_employee_projection WHERE employee_id = ? AND tenant_id = ? AND member_id = ?").get(employeeId, "tenant-1", "member-1") as { projection_json: string };
-    const nextPath = (JSON.parse(storedAfterReplacement.projection_json) as Record<string, unknown>).local_avatar_path as string;
-    assert.notEqual(nextPath, previousPath);
-    assert.equal(existsSync(join(fixture.store.avatarRoot, previousPath)), false);
-    assert.deepEqual(fixture.store.readEmployeeAvatar("tenant-1", "member-1", employeeId)?.data, replacementData);
+    // 没有头像（version 0）直接 404，不回源。
+    const callsBefore = managerCalls;
+    seed(0);
+    assert.equal(fixture.store.listLoadedExperts("tenant-1", "member-1")[0]!.avatar_url, null);
+    assert.equal((await get()).status, 404);
+    assert.equal(managerCalls, callsBefore);
 
-    fixture.store.replaceProjections([{
-      ...projection,
-      avatar_url: "/api/manager/employees/employee-avatar/avatar/content?v=4",
-      avatar_version: 4,
-      avatar_sync_version: "1:avatar-4",
-    }], [], [{
-      ...snapshot,
-      avatar_url: "/api/manager/employees/employee-avatar/avatar/content?v=4",
-      avatar_version: 4,
-      avatar_sync_version: "1:avatar-4",
-    }]);
-    const merged = fixture.store.listLoadedExperts("tenant-1", "member-1")[0]!;
-    assert.equal(merged.avatar_source, "local");
-    assert.equal(merged.avatar_url, result.avatar_url);
-    assert.equal(merged.manager_avatar_version, 4);
-    assert.equal(fixture.store.readEmployeeAvatar("tenant-1", "member-1", employeeId)?.data.equals(replacementData), true);
-
-    // A first snapshot pull can arrive after a local edit (for example after
-    // upgrading an older Agent DB). It must inherit the employee projection's
-    // local override rather than replacing it with the Manager fallback.
-    fixture.store.db.prepare("DELETE FROM frozen_snapshot WHERE employee_id = ? AND tenant_id = ? AND member_id = ?").run(employeeId, "tenant-1", "member-1");
-    fixture.store.replaceProjections([], [], [{
-      ...snapshot,
-      avatar_url: "/api/manager/employees/employee-avatar/avatar/content?v=5",
-      avatar_version: 5,
-      avatar_sync_version: "1:avatar-5",
-    }]);
-    const recreatedSnapshot = fixture.store.listSnapshots("tenant-1", "member-1")[0]!;
-    assert.equal(recreatedSnapshot.avatar_source, "local");
-    assert.equal(recreatedSnapshot.avatar_url, result.avatar_url);
-    assert.equal(fixture.store.readEmployeeAvatar("tenant-1", "member-1", employeeId)?.data.equals(replacementData), true);
-
+    // 跨租户 / 未授权成员不可读。
+    seed(3);
     tenantId = "tenant-2";
-    const crossTenant = await fetch(`${base}/api/agent/employees/${employeeId}/avatar`, {
-      method: "POST",
-      headers: { Authorization: "Bearer test", "Content-Type": "application/json" },
-      body: JSON.stringify({ filename: "avatar.png", mime_type: "image/png", data: data.toString("base64") }),
-    });
-    assert.equal(crossTenant.status, 403);
-    assert.equal((await crossTenant.json() as { code: string }).code, "employee_not_authorized");
+    assert.equal((await get()).status, 403);
     tenantId = "tenant-1";
     memberId = "other-member";
-    const crossMember = await fetch(`${base}/api/agent/employees/${employeeId}/avatar/content`, { headers: { Authorization: "Bearer test" } });
-    assert.equal(crossMember.status, 403);
+    assert.equal((await get()).status, 403);
+  } finally {
+    await http.close();
+    await fixture.close();
+  }
+});
+
+test("Agent proxies marketplace template avatars through a version-keyed local cache", async () => {
+  const fixture = await createFixture();
+  let managerCalls = 0;
+  const managerRequests: string[] = [];
+  const data = webpBytes(20, 5);
+  const managerClient = new HttpManagerClient("https://manager.test", async (input) => {
+    managerCalls += 1;
+    managerRequests.push(String(input));
+    if (String(input).includes("tpl-none")) {
+      return new Response(JSON.stringify({ type: "t", title: "Not Found", status: 404, code: "template_avatar_not_found" }), { status: 404, headers: { "content-type": "application/problem+json" } });
+    }
+    if (String(input).includes("tpl-big")) return new Response(new Uint8Array(5 * 1024 * 1024 + 1), { status: 200, headers: { "content-type": "image/webp" } });
+    return new Response(new Uint8Array(data), { status: 200, headers: { "content-type": "image/webp", "x-avatar-version": "3" } });
+  });
+  const http = new AgentHttpServer({
+    host: fixture.host, store: fixture.store, managerClient,
+    authenticate: () => ({ callerId: "member-1", userId: "member-1", tenantId: "tenant-1", roles: ["member"], accessToken: "member-token" }),
+  });
+  await http.listen(0);
+  const address = http.server.address();
+  assert(address && typeof address === "object");
+  const base = `http://127.0.0.1:${address.port}`;
+  const get = (path: string) => fetch(`${base}${path}`, { headers: { Authorization: "Bearer test" } });
+  try {
+    const first = await get("/api/agent/marketplace/templates/tpl-av/avatar/content?v=3");
+    assert.equal(first.status, 200, await first.clone().text());
+    assert.deepEqual(Buffer.from(await first.arrayBuffer()), data);
+    assert.equal(managerRequests[0], "https://manager.test/api/manager/recruit/catalog/experts/tpl-av/avatar/content");
+    assert.equal((await get("/api/agent/marketplace/templates/tpl-av/avatar/content?v=3")).status, 200);
+    assert.equal(managerCalls, 1);
+    assert.equal((await get("/api/agent/marketplace/templates/tpl-none/avatar/content?v=1")).status, 404);
+    // 超过 5 MB 的上游响应被中止，不落盘。
+    assert.equal((await get("/api/agent/marketplace/templates/tpl-big/avatar/content?v=1")).status, 404);
+    assert.equal(readdirSync(fixture.store.avatarRoot).filter((name) => name.endsWith(".webp")).length, 1);
+    // 没带版本：不信任本机缓存，直接回源（前端总会带 ?v=）。
+    assert.equal((await get("/api/agent/marketplace/templates/tpl-av/avatar/content")).status, 200);
+    assert.equal(managerCalls, 4);
   } finally {
     await http.close();
     await fixture.close();
@@ -657,17 +674,15 @@ test("Agent OpenAPI documents local attachment, artifact, and SSE event contract
     assert.deepEqual(prompt.requestBody.content["application/json"].schema, { $ref: "#/components/schemas/PromptRequest" });
     assert.equal(prompt.parameters.find((parameter: any) => parameter.name === "Idempotency-Key").required, true);
 
-    const avatarUpdate = document.paths["/api/agent/employees/{employee_id}/avatar"].post;
-    assert.deepEqual(avatarUpdate.requestBody.content["application/json"].schema, { $ref: "#/components/schemas/EmployeeAvatarRequest" });
-    assert.deepEqual(avatarUpdate.responses["200"].content["application/json"].schema, {
-      type: "object",
-      required: ["data"],
-      properties: { data: { $ref: "#/components/schemas/EmployeeAvatarResponse" } },
-    });
-    assert.deepEqual(document.components.schemas.EmployeeAvatarRequest.required, ["filename", "mime_type", "data"]);
-    const avatarContent = document.paths["/api/agent/employees/{employee_id}/avatar/content"].get;
-    assert.deepEqual(Object.keys(avatarContent.responses["200"].content).sort(), ["image/jpeg", "image/png", "image/webp"]);
-    assert.equal(avatarContent.responses["200"].content["image/png"].schema.format, "binary");
+    // 员工头像只读：桌面端不允许更换，头像随企业员工走（招募时复制模板头像）。
+    assert.equal(document.paths["/api/agent/employees/{employee_id}/avatar"], undefined);
+    assert.equal(document.components.schemas.EmployeeAvatarRequest, undefined);
+    for (const path of ["/api/agent/employees/{employee_id}/avatar/content", "/api/agent/marketplace/templates/{template_id}/avatar/content"]) {
+      const avatarContent = document.paths[path].get;
+      assert.deepEqual(Object.keys(avatarContent.responses["200"].content), ["image/webp"]);
+      assert.equal(avatarContent.responses["200"].content["image/webp"].schema.format, "binary");
+      assert.equal(avatarContent.parameters.find((parameter: any) => parameter.name === "v").in, "query");
+    }
 
     const eventOperation = document.paths["/api/agent/conversations/{conversation_id}/events"].get;
     assert.equal(eventOperation.description, "订阅当前会话的本地 Pi 实时事件（SSE）；事件字段见 [PiSseEventData](#/components/schemas/PiSseEventData)，支持通过 X-Aiteam-Reconciliation-Version: 2 请求运行中快照。");

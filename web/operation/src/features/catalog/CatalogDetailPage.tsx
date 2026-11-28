@@ -95,8 +95,11 @@ export function CatalogDetailPage(): ReactNode {
         changes.system_prompt = draft.system_prompt ?? "";
         changes.category = draft.category ?? "";
         const avatar = draft.avatar_url ?? "";
+        // 只提交真正变化的头像。还没转换的旧模板详情接口返回空串（内联 avatar_url 读不出来），
+        // 不比较原值的话，光改个名字保存也会带上 avatar_url: ""，服务端当成删除、抹掉唯一的旧图。
         // Legacy URL values stay readable but are not re-submitted by the new file-only editor.
-        if (!avatar || isSafeAvatarDataUrl(avatar)) changes.avatar_url = avatar;
+        const loadedAvatar = item?.avatar_url ?? "";
+        if (avatar !== loadedAvatar && (!avatar || isSafeAvatarDataUrl(avatar))) changes.avatar_url = avatar;
         changes.description = draft.description ?? "";
         changes.platform_skill_refs = draft.platform_skill_refs ?? [];
         // 全量提交展示字段：清空的列表/文本落为空值，required_permissions/pricing 为 null 时清除。
@@ -123,7 +126,7 @@ export function CatalogDetailPage(): ReactNode {
     } finally {
       if (requestId.current === currentRequest) setSaving(false);
     }
-  }, [api, catalog_type, draft, template_id]);
+  }, [api, catalog_type, draft, item, template_id]);
 
   if (loading) {
     return (

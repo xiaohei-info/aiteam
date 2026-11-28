@@ -1,6 +1,7 @@
 import type { CSSProperties } from 'react'
 import { Ban, CheckCircle2, LoaderCircle, MessageCircle, Plus } from 'lucide-react'
 import { useEnterpriseWrite } from '../../hooks/useEnterpriseWrite'
+import { getEmployeeAvatar, renderAvatar } from '../../lib/avatarUtils'
 import { runAgentCardAction } from './agentCardActions'
 import { RECRUITMENT_AVAILABLE } from './api'
 import OutputTypeIcon from './OutputTypeIcon'
@@ -94,7 +95,9 @@ export default function AgentCard({
         aria-label={`查看 ${agent.name} 详情`}
       >
         <span className="tm-agent-head">
-          <span className="tm-agent-avatar" aria-hidden="true">{agent.name.slice(0, 1)}</span>
+          <span className="tm-agent-avatar" aria-hidden="true">
+            {renderAvatar(getEmployeeAvatar(agent.name, agent.preview_avatar_url), agent.name.slice(0, 1))}
+          </span>
           <span className="tm-agent-title-stack">
             <span className="tm-agent-name-row">
               <span className="tm-agent-name">{agent.name}</span>

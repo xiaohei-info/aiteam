@@ -93,7 +93,6 @@ export const documentedRoutes: readonly (readonly [string, string])[] = [
   ['GET', '/api/agent/mcp-auth/callback'],
   ['GET', '/api/agent/grants/readiness'],
   ['GET', '/api/agent/grants/experts/{employee_id}/readiness'],
-  ['POST', '/api/agent/employees/{employee_id}/avatar'],
   ['GET', '/api/agent/employees/{employee_id}/avatar/content'],
   // 员工记忆（转发 Manager，普通成员只看自己贡献的）；旧版随包 Agent 返回 404，员工详情隐藏入口。
   ['GET', '/api/agent/employees/{employee_id}/memories'],
@@ -112,6 +111,7 @@ export const documentedRoutes: readonly (readonly [string, string])[] = [
   ['POST', '/api/agent/usage/flush'],
   ['GET', '/api/agent/marketplace/templates'],
   ['GET', '/api/agent/marketplace/templates/{template_id}'],
+  ['GET', '/api/agent/marketplace/templates/{template_id}/avatar/content'],
   ['GET', '/api/agent/knowledge-bases'],
   ['GET', '/api/agent/knowledge-bases/{knowledge_base_id}/{kind}'],
   ['GET', '/api/agent/knowledge-bases/{knowledge_base_id}/{kind}/{resource_id}'],

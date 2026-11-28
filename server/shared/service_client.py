@@ -270,6 +270,32 @@ class ServiceClient:
         )
         return self._decode(self._client.get(path, headers=headers))
 
+    def get_bytes(
+        self,
+        path: str,
+        *,
+        max_bytes: int,
+        service_purpose: str | None = None,
+        service_tenant_id: str | None = None,
+    ) -> tuple[bytes, dict[str, str]]:
+        """GET a binary body (e.g. an avatar file) with a hard size limit; errors decode as problem+json."""
+        headers = self._headers(None, path=path, purpose=service_purpose, tenant_id=service_tenant_id)
+        with self._client.stream("GET", path, headers=headers) as resp:
+            if not resp.is_success:
+                resp.read()
+                self._decode(resp)
+            declared = resp.headers.get("content-length")
+            if declared is not None and declared.isdigit() and int(declared) > max_bytes:
+                raise AppError("upstream body exceeds the allowed size")
+            chunks: list[bytes] = []
+            size = 0
+            for chunk in resp.iter_bytes():
+                size += len(chunk)
+                if size > max_bytes:
+                    raise AppError("upstream body exceeds the allowed size")
+                chunks.append(chunk)
+            return b"".join(chunks), dict(resp.headers)
+
     def post(
         self,
         path: str,
