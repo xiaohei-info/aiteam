@@ -1,6 +1,6 @@
 /** 私聊专家选择：同步失败可离线降级，配置和 readiness 不满足时不可选。 */
 import { useEffect, useState } from "react";
-import { DigitalEmployeeAvatar } from "@aiteam/shared";
+import { EmployeeAvatar } from "../../lib/employee-avatar";
 import { Badge } from "@astryxdesign/core/Badge";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
@@ -121,7 +121,7 @@ export function RosterPicker({ client, onPick, onCancel, busy = false, error }: 
               return (
                 <HStack key={expert.employee_id} role="listitem" justify="between" align="center" gap={3}>
                   <HStack gap={2} align="center">
-                    <DigitalEmployeeAvatar name={expert.display_name} seed={expert.employee_id} src={expert.avatar_url} size={42} />
+                    <EmployeeAvatar name={expert.display_name} seed={expert.employee_id} src={expert.avatar_url} size={42} />
                     <VStack gap={1}>
                       <HStack gap={2} align="center">
                         <Text weight="semibold">{expert.display_name}</Text>

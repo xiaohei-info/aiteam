@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import base64
 import uuid
 from types import SimpleNamespace
 
@@ -971,6 +972,7 @@ def test_operator_catalog_is_read_only_port():
         "list_solution_packages",
         "list_platform_skills",
         "pull_platform_skill",
+        "pull_expert_template_avatar",
         "list_platform_catalog",
         "list_platform_mcp_servers",
         "resolve_tenant_access",
@@ -1652,3 +1654,96 @@ def test_hidden_expert_is_named_with_its_id_in_the_apply_error():
     message = str(caught.value)
     assert "「合规复核专家」（ID：tpl-x）" in message
     assert "ID：tpl-y" in message  # 没有名称的也列出，不丢
+
+
+# ---- 模板头像布种（招募/方案应用 → 企业侧员工头像）----
+
+
+AVATAR_BYTES = b"RIFF\x00\x00\x00\x00WEBPVP8 "
+
+
+class _FakeAvatarService:
+    def __init__(self, *, fail: bool = False):
+        self.calls: list[dict] = []
+        self.fail = fail
+
+    def seed_from_template(self, ctx, *, employee_id, data):
+        if self.fail:
+            raise RuntimeError("avatar storage unavailable")
+        self.calls.append({"employee_id": employee_id, "data": data})
+
+
+def _with_avatar(catalog, template):
+    """模板带头像：目录详情给 avatar_version，头像字节由服务身份单独拉取。"""
+    template = template.model_copy(update={"avatar_version": 1})
+    catalog.seed_expert(template)
+    catalog.seed_expert_avatar(template.template_id, AVATAR_BYTES)
+    return template
+
+
+def test_recruit_copies_template_avatar_to_enterprise_avatar():
+    catalog = _fake_catalog()
+    _with_avatar(catalog, _expert_template())
+    svc, *_ = _build_service(catalog)
+    avatars = _FakeAvatarService()
+    svc._avatars = avatars
+
+    result = svc.recruit_expert(
+        _ctx("t-a"), RecruitExpertRequest(model_policy=MODEL_POLICY, template_id="tpl-1", employee_slug="avatar-expert"),
+    )
+
+    assert avatars.calls == [{"employee_id": result.employee_id, "data": AVATAR_BYTES}]
+
+
+def test_recruit_skips_template_without_avatar():
+    catalog = _fake_catalog()
+    catalog.seed_expert(_expert_template())
+    svc, *_ = _build_service(catalog)
+    avatars = _FakeAvatarService()
+    svc._avatars = avatars
+
+    svc.recruit_expert(
+        _ctx("t-a"), RecruitExpertRequest(model_policy=MODEL_POLICY, template_id="tpl-1", employee_slug="no-avatar"),
+    )
+
+    assert avatars.calls == []
+
+
+def test_recruit_succeeds_when_avatar_seed_fails():
+    catalog = _fake_catalog()
+    _with_avatar(catalog, _expert_template())
+    svc, emp, _, _, orders = _build_service(catalog)
+    svc._avatars = _FakeAvatarService(fail=True)
+
+    result = svc.recruit_expert(
+        _ctx("t-a"), RecruitExpertRequest(model_policy=MODEL_POLICY, template_id="tpl-1", employee_slug="seed-failed"),
+    )
+
+    assert emp.get(_ctx("t-a"), employee_id=result.employee_id).employee_slug == "seed-failed"
+    assert orders.list_orders(_ctx("t-a"))[0].status == "succeeded"
+
+
+def test_apply_solution_seeds_avatar_only_for_newly_created_experts():
+    catalog = _fake_catalog()
+    package = _solution_package()
+    package = package.model_copy(update={
+        "experts": [expert.model_copy(update={"avatar_version": 1}) for expert in package.experts],
+    })
+    catalog.seed_solution(package)
+    for expert in package.experts:
+        _with_avatar(catalog, expert)
+    svc, *_ = _build_service(catalog)
+    avatars = _FakeAvatarService()
+    svc._avatars = avatars
+
+    reused = svc.recruit_expert(
+        _ctx("t-a"), RecruitExpertRequest(model_policy=MODEL_POLICY, template_id="tpl-a", employee_slug="programmer"),
+    )
+    result = svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(expert_models=EXPERT_MODELS, solution_id="sol-1"))
+
+    seeded = [call["employee_id"] for call in avatars.calls]
+    assert len(seeded) == 2
+    assert seeded[0] == reused.employee_id
+    # 复用的 tpl-a 保持企业既有头像；只有新建的 tpl-b 被布种。
+    assert seeded[1] == result.solution_instance.expert_employee_ids[1]
+    assert seeded[1] != reused.employee_id

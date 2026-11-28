@@ -32,44 +32,46 @@ class _AvatarRepo:
         self.upserts.append(fields)
 
 
-def _source_row(key: str) -> EmployeeAvatarRow:
+def _source_row() -> EmployeeAvatarRow:
     return EmployeeAvatarRow(
-        employee_id=SRC, avatar_url="http://m/a", storage_key=key, mime_type="image/webp",
+        employee_id=SRC, storage_key=f"avatars/{T}/{SRC}.webp", mime_type="image/webp",
         byte_size=3, sha256="h", version=1, updated_at=datetime(2026, 11, 13, tzinfo=UTC),
     )
 
 
-def _with_source_file(root: Path) -> str:
-    key = f"avatars/{T}/{SRC}/a.webp"
-    (root / key).parent.mkdir(parents=True)
-    (root / key).write_bytes(b"img")
-    return key
+def _with_source_file(root: Path) -> Path:
+    path = root / "avatars" / T / f"{SRC}.webp"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"img")
+    return path
 
 
 def test_copy_avatar_creates_an_independent_file_and_record(tmp_path):
-    repo = _AvatarRepo(_source_row(_with_source_file(tmp_path)))
-    EmployeeAvatarService(repo, tmp_path, "http://manager").copy(CTX, source_id=SRC, target_id=DST)  # type: ignore[arg-type]
+    source = _with_source_file(tmp_path)
+    repo = _AvatarRepo(_source_row())
+    EmployeeAvatarService(repo, tmp_path).copy(CTX, source_id=SRC, target_id=DST)  # type: ignore[arg-type]
     [fields] = repo.upserts
-    assert fields["employee_id"] == DST and fields["storage_key"].startswith(f"avatars/{T}/{DST}/")
-    assert fields["avatar_url"] == f"http://manager/api/manager/employees/{DST}/avatar/content"
+    assert fields["employee_id"] == DST and fields["storage_key"] == f"avatars/{T}/{DST}.webp"
+    assert fields["sha256"] == "h"  # 原样复制已规范化的字节，不重新编码
     copied = tmp_path / fields["storage_key"]
     assert copied.read_bytes() == b"img" and (copied.stat().st_mode & 0o777) == 0o600
-    assert (tmp_path / f"avatars/{T}/{SRC}/a.webp").exists()  # 源文件不动
+    assert source.read_bytes() == b"img"  # 源文件不动
 
 
 def test_copy_avatar_without_source_does_nothing(tmp_path):
     repo = _AvatarRepo(None)
-    EmployeeAvatarService(repo, tmp_path, "http://manager").copy(CTX, source_id=SRC, target_id=DST)  # type: ignore[arg-type]
-    missing_file = _AvatarRepo(_source_row(f"avatars/{T}/{SRC}/gone.webp"))
-    EmployeeAvatarService(missing_file, tmp_path, "http://manager").copy(CTX, source_id=SRC, target_id=DST)  # type: ignore[arg-type]
+    EmployeeAvatarService(repo, tmp_path).copy(CTX, source_id=SRC, target_id=DST)  # type: ignore[arg-type]
+    missing_file = _AvatarRepo(_source_row())  # 有元数据但文件缺失
+    EmployeeAvatarService(missing_file, tmp_path).copy(CTX, source_id=SRC, target_id=DST)  # type: ignore[arg-type]
     assert repo.upserts == [] and missing_file.upserts == []
 
 
 def test_copy_avatar_removes_the_file_when_the_record_cannot_be_written(tmp_path):
-    repo = _AvatarRepo(_source_row(_with_source_file(tmp_path)), fail=True)
+    _with_source_file(tmp_path)
+    repo = _AvatarRepo(_source_row(), fail=True)
     with pytest.raises(RuntimeError, match="metadata unavailable"):
-        EmployeeAvatarService(repo, tmp_path, "http://manager").copy(CTX, source_id=SRC, target_id=DST)  # type: ignore[arg-type]
-    assert list((tmp_path / "avatars" / T / DST).rglob("*.webp")) == []
+        EmployeeAvatarService(repo, tmp_path).copy(CTX, source_id=SRC, target_id=DST)  # type: ignore[arg-type]
+    assert not (tmp_path / "avatars" / T / f"{DST}.webp").exists()
 
 
 # ---- 发布范围对账的装配 ----

@@ -1,6 +1,7 @@
 /** Conversation view backed by persisted Pi entries and the live Pi SSE stream. */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { DigitalEmployeeAvatar, type PiEntry, type PiEvent } from "@aiteam/shared";
+import { type PiEntry, type PiEvent } from "@aiteam/shared";
+import { EmployeeAvatar } from "../../lib/employee-avatar";
 import { ApiError } from "@aiteam/shared/api-client";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Card } from "@astryxdesign/core/Card";
@@ -577,7 +578,7 @@ function resolveMessageSource(model: TimelineCardModel, experts: Map<string, Tim
 function EmployeeChatAvatar({ name, avatarUrl, sender }: ResolvedMessageSource & { sender: "user" | "assistant" }): ReactNode {
   return (
     <span data-chat-avatar="true" aria-hidden="true">
-      <DigitalEmployeeAvatar
+      <EmployeeAvatar
         name={name}
         src={avatarUrl}
         size={42}

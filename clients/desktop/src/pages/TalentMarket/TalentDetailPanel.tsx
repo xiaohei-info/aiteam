@@ -39,6 +39,7 @@ import {
 } from './talentProfile'
 import type { MarketTemplate, MarketTemplateDetail } from './types'
 import { agentApi, type Connector } from '../../api/agent'
+import { getEmployeeAvatar, renderAvatar } from '../../lib/avatarUtils'
 import GoldenDotsLoading from '../../components/Loading/GoldenDotsLoading'
 import RequestErrorState from '../../components/RequestState/RequestErrorState'
 import { useDialogFocus } from '../../hooks/useDialogFocus'
@@ -170,6 +171,7 @@ export default function TalentDetailPanel({
   if (!agent || !profile) return null
 
   const name = detail?.name ?? agent.name
+  const avatarUrl = detail?.preview_avatar_url ?? agent.preview_avatar_url
   const description = detail?.description || agent.description
   const skills = detail?.default_skills?.length ? detail.default_skills : agent.skills
   const skillsCount = detail?.skills_count ?? agent.skills_count ?? skills.length
@@ -579,7 +581,9 @@ export default function TalentDetailPanel({
         </header>
 
         <div className={styles.hero}>
-          <div className={styles.avatar} aria-hidden="true">{name.slice(0, 1)}</div>
+          <div className={styles.avatar} aria-hidden="true">
+            {renderAvatar(getEmployeeAvatar(name, avatarUrl), name.slice(0, 1))}
+          </div>
           <div className={styles.titleBlock}>
             <h2 id="talent-detail-title">{name}</h2>
             <p>{releaseLabel ? `${categoryLabel} · ${releaseLabel}` : categoryLabel}</p>

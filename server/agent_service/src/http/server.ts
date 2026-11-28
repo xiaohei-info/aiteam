@@ -23,12 +23,13 @@ import swaggerUi from "@fastify/swagger-ui";
 import { Type } from "typebox";
 import { ConversationBusyError, EventCursorStaleError, InvalidEventCursorError, type PiEventEnvelope, SessionHost } from "../pi/session-host.js";
 import type { ImageContent } from "@earendil-works/pi-ai";
-import { IdempotencyConflictError, IdempotencyUnknownError, type AgentSqliteStore, type ConversationMetadata as StoredConversationMetadata, type IdempotencyReceipt } from "../storage/sqlite.js";
+import { avatarCacheKey, IdempotencyConflictError, IdempotencyUnknownError, type AgentSqliteStore, type LocalFileRef, type ConversationMetadata as StoredConversationMetadata, type IdempotencyReceipt } from "../storage/sqlite.js";
 import { JwtClockError, type AuthenticatedCaller, type AuthenticateRequest } from "./auth.js";
-import { AgentUpgradeRequiredError, ManagerAuthError, ManagerAuthorizationError, ManagerPolicyDeniedError, ManagerUnavailableError, ManagerValidationError, normalizeAuthorizedConfig, type ManagerClient, type MarketplaceTemplate } from "../manager-client.js";
+import { AgentUpgradeRequiredError, ManagerAuthError, ManagerAuthorizationError, ManagerPolicyDeniedError, ManagerUnavailableError, ManagerValidationError, normalizeAuthorizedConfig, type ManagerAvatar, type ManagerClient, type MarketplaceTemplate } from "../manager-client.js";
 import { SessionAuthorizationError, type PromptDeliveryOptions } from "../pi/session-host.js";
 import { serializePiEntry, serializePiEvent } from "../pi/event-sse.js";
 import { materializeAttachments } from "../pi/attachment-tool.js";
+import { AttachmentPathError, attachmentManifest, loadInlineImage, MAX_PROMPT_ATTACHMENTS, parseAttachmentPaths, resolveAttachmentPath, type AttachmentPathInput, type ResolvedAttachmentPath, type UploadedAttachmentEntry } from "../pi/attachment-refs.js";
 import { visibleHistoryText } from "../pi/session-history.js";
 import { InvalidReadCursorError } from "../storage/read-cursor.js";
 import { ConversationReadError, ConversationReadService, readPageLimit, validateReadQuery } from "../services/conversation-reads.js";
@@ -241,12 +242,6 @@ const ConversationProjectFolderRequest = Type.Object({
 }, { $id: "ConversationProjectFolderRequest", additionalProperties: false, description: "更换项目对话的工作目录。" });
 const ConversationStateUpdateRequest = Type.Object({ state: Type.Ref("ConversationState") }, { $id: "ConversationStateUpdateRequest", additionalProperties: false, description: "更新会话状态请求。" });
 const GrantSyncRequest = Type.Object({ tenant_id: Type.String({ minLength: 1, maxLength: 200, description: "企业租户 ID；必须与当前 access token 一致。" }), member_id: Type.String({ minLength: 1, maxLength: 200, description: "当前成员 ID；必须与当前 access token 一致。" }), known_versions: Type.Optional(Type.Record(Type.String({ minLength: 1, description: "投影键（通常为 employee/solution ID）。" }), Type.String({ minLength: 1, description: "本地已知版本。" }), { maxProperties: 256, description: "投影键到本地版本的映射；省略表示从头获取。" })) }, { $id: "GrantSyncRequest", additionalProperties: false, description: "授权配置增量同步请求；服务端只接受与当前身份匹配的 tenant_id/member_id。" });
-const EmployeeAvatarRequest = Type.Object({
-  filename: Type.String({ minLength: 1, maxLength: 255, description: "原始文件名，仅用于元数据。" }),
-  mime_type: Type.Union([Type.Literal("image/jpeg"), Type.Literal("image/png"), Type.Literal("image/webp")], { description: "头像 MIME 类型。" }),
-  data: Type.String({ minLength: 1, maxLength: 7_000_000, description: "头像内容的 base64 编码。" }),
-}, { $id: "EmployeeAvatarRequest", additionalProperties: false, description: "员工头像上传请求。" });
-const EmployeeAvatarResponse = Type.Object({ employee_id: Type.String(), avatar_url: Type.String(), version: Type.Integer({ minimum: 1 }), updated_at: Type.String({ format: "date-time" }) }, { $id: "EmployeeAvatarResponse", additionalProperties: false });
 const UsageFlushRequest = Type.Object({ limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100, default: 50, description: "本次最多处理的摘要数量；缺省为 50，最大 100。" })) }, { $id: "UsageFlushRequest", additionalProperties: false, description: "用量摘要刷新请求。" });
 const ConversationEnvelope = Type.Object({ data: Type.Ref("ConversationMetadata") }, { $id: "ConversationEnvelope", description: "单个会话元数据响应。" });
 const ConversationListEnvelope = Type.Object({ data: Type.Array(Type.Ref("ConversationMetadata"), { description: "按 updated_at 降序、id 降序排列的本地会话。" }), page: Type.Ref("Page") }, { $id: "ConversationListEnvelope", description: "会话列表响应；page.next_cursor 为下一页 cursor，末页为 null。" });
@@ -506,11 +501,11 @@ const ExpertProjection = Type.Object({
   ...EmployeeDisplayProperties,
   availability_reason: Type.Optional(Type.String({ description: "本机持久化的员工不可用原因；缺省表示没有同步阻断。" })),
   availability_revision: Type.Optional(Type.String({ description: "本次不可用事件标识；恢复后再次不可用会更换。" })),
-  employee_id: Type.String({ description: "员工/专家 ID。" }), tenant_id: Type.String({ description: "企业租户 ID。" }), member_id: Type.Optional(Type.String({ description: "成员 ID。" })), version: Type.String({ description: "配置版本。" }), handle: Type.String({ description: "用于 @提及的稳定句柄。" }), display_name: Type.String({ description: "展示名称。" }), revoked: Type.Boolean({ description: "是否已撤销授权。" }), synced_at: Type.String({ format: "date-time", description: "同步时间。" }), model_policy: Type.Optional(Type.Ref("AgentModelPolicy")), execution_policy: Type.Optional(JsonObject), tools: Type.Array(Type.String(), { description: "允许使用的工具。" }), skills: Type.Array(Type.String(), { description: "技能引用。" }), skill_refs: Type.Optional(Type.Array(Type.String(), { description: "兼容技能引用字段。" })), knowledge_refs: Type.Optional(Type.Array(Type.String(), { description: "知识引用。" })), connector_refs: Type.Optional(Type.Array(Type.String(), { description: "连接器引用。" })), memory_policy: Type.Optional(JsonObject), persona: Type.Optional(Type.String({ description: "员工人设。" })), status: Type.Optional(Type.String({ description: "员工生命周期状态。" })), avatar_url: Type.Optional(Type.Union([Type.String(), Type.Null()], { description: "当前生效头像 URL；优先本地 override，其次 Manager tenant 头像，再次模板/默认 fallback。" })), avatar_source: Type.Optional(Type.Union([Type.Literal("local"), Type.Literal("manager"), Type.Literal("template")], { description: "头像来源优先级。" })), avatar_version: Type.Optional(Type.Integer({ minimum: 0, description: "Manager tenant 头像版本；不改变 employee 配置 version。" })), avatar_sync_version: Type.Optional(Type.String({ minLength: 1, description: "Manager 头像增量版本；用于 known_versions。" })), skill_signing_keys: Type.Optional(Type.Array(Type.Ref("SkillSigningKeyMetadata"), { description: "技能签名公钥列表；不包含私钥。" })),
+  employee_id: Type.String({ description: "员工/专家 ID。" }), tenant_id: Type.String({ description: "企业租户 ID。" }), member_id: Type.Optional(Type.String({ description: "成员 ID。" })), version: Type.String({ description: "配置版本。" }), handle: Type.String({ description: "用于 @提及的稳定句柄。" }), display_name: Type.String({ description: "展示名称。" }), revoked: Type.Boolean({ description: "是否已撤销授权。" }), synced_at: Type.String({ format: "date-time", description: "同步时间。" }), model_policy: Type.Optional(Type.Ref("AgentModelPolicy")), execution_policy: Type.Optional(JsonObject), tools: Type.Array(Type.String(), { description: "允许使用的工具。" }), skills: Type.Array(Type.String(), { description: "技能引用。" }), skill_refs: Type.Optional(Type.Array(Type.String(), { description: "兼容技能引用字段。" })), knowledge_refs: Type.Optional(Type.Array(Type.String(), { description: "知识引用。" })), connector_refs: Type.Optional(Type.Array(Type.String(), { description: "连接器引用。" })), memory_policy: Type.Optional(JsonObject), persona: Type.Optional(Type.String({ description: "员工人设。" })), status: Type.Optional(Type.String({ description: "员工生命周期状态。" })), avatar_url: Type.Optional(Type.Union([Type.String(), Type.Null()], { description: "员工头像的本机同源路径 /api/agent/employees/{id}/avatar/content?v={avatar_version}；没有头像时为 null。" })), avatar_source: Type.Optional(Type.Union([Type.Literal("manager"), Type.Literal("template")], { description: "manager = 员工有自己的头像；template = 没有头像，前端回退默认插画。" })), avatar_version: Type.Optional(Type.Integer({ minimum: 0, description: "员工头像版本（招募时从模板复制为 1，内容变化 +1）；0 表示没有头像，不改变 employee 配置 version。" })), avatar_sync_version: Type.Optional(Type.String({ minLength: 1, description: "Manager 头像增量版本；用于 known_versions。" })), skill_signing_keys: Type.Optional(Type.Array(Type.Ref("SkillSigningKeyMetadata"), { description: "技能签名公钥列表；不包含私钥。" })),
   skill_details: Type.Optional(Type.Array(Type.Object({ ref: Type.String({ description: "技能引用。" }), display_name: Type.Union([Type.String(), Type.Null()], { description: "已验签技能包中的展示名称；本机缓存缺失或失效时为 null。" }) }, { additionalProperties: false }), { description: "技能展示信息，顺序与 skills 一致；仅用于展示，不参与授权。" })),
 }, { $id: "ExpertProjection", additionalProperties: true, description: "Manager 授权给当前成员的专家投影；未知扩展字段由 Manager 配置透传，但不包含凭据。", "x-dynamic-json": true });
 const SolutionProjection = Type.Object({ solution_instance_id: Type.String({ description: "方案实例 ID。" }), solution_id: Type.Optional(Type.String({ description: "Operator 方案模板 ID。" })), display_name: Type.String({ description: "方案展示名称。" }), description: Type.Optional(Type.String({ description: "方案描述。" })), icon: Type.Optional(Type.String({ description: "方案图标。" })), tags: Type.Optional(Type.Array(Type.String(), { description: "方案标签。" })), version: Type.String({ description: "方案配置版本。" }), status: Type.Optional(Type.String({ description: "方案状态。" })), coordinator_instructions: Type.Optional(Type.String({ description: "方案协调说明。" })), workflow_skill_ref: Type.Optional(JsonObject), output_requirements: Type.Optional(Type.String({ description: "方案交付要求。" })), mode: Type.Optional(Type.Union([Type.Literal("solo"), Type.Literal("group")], { description: "solo：单人方案，私聊使用；group：组群方案。缺省按组群。" })), orchestration_rules: Type.Optional(Type.String({ description: "群聊编排规则（collaboration-markdown-v1），成员引用为 employee_id。" })), recommended_capabilities: Type.Optional(Type.Array(JsonObject, { description: "方案推荐的 skill / MCP；仅作提示，不授权、不触发安装。" })), config_version: Type.Optional(Type.Integer({ minimum: 1, description: "方案配置版本号。" })), coordinator_employee_id: Type.Optional(Type.Union([Type.String(), Type.Null()], { description: "协调员工 ID。" })), expert_employee_ids: Type.Optional(Type.Array(Type.String(), { description: "方案内专家 ID。" })), tenant_id: Type.Optional(Type.String({ description: "企业租户 ID。" })), member_id: Type.Optional(Type.String({ description: "成员 ID。" })) }, { $id: "SolutionProjection", additionalProperties: true, description: "Manager 授权给当前成员的方案投影。", "x-dynamic-json": true });
-const SnapshotProjection = Type.Object({ employee_id: Type.String({ minLength: 1, description: "员工 ID。" }), version: Type.String({ minLength: 1, description: "员工配置版本。" }), snapshot_version: Type.String({ minLength: 1, description: "执行快照版本。" }), display_name: Type.String({ minLength: 1, description: "员工展示名称。" }), tenant_id: Type.Optional(Type.String({ description: "企业租户 ID。" })), member_id: Type.Optional(Type.String({ description: "成员 ID。" })), avatar_url: Type.Optional(Type.Union([Type.String(), Type.Null()], { description: "当前生效头像 URL。" })), avatar_source: Type.Optional(Type.Union([Type.Literal("local"), Type.Literal("manager"), Type.Literal("template")], { description: "头像来源优先级。" })), avatar_version: Type.Optional(Type.Integer({ minimum: 0, description: "Manager tenant 头像版本。" })), avatar_sync_version: Type.Optional(Type.String({ minLength: 1, description: "Manager 头像增量版本。" })), persona: Type.Optional(Type.String({ description: "员工人设。" })), model_policy: Type.Optional(Type.Ref("AgentModelPolicy")), execution_policy: Type.Optional(JsonObject), tools: Type.Optional(Type.Array(Type.String({ description: "工具名称。" }), { description: "快照允许的工具。" })), skills: Type.Optional(Type.Array(Type.String({ description: "技能引用。" }), { description: "规范技能引用；该字段一旦出现（包括 []）即为权威，不读取 skill_refs。" })), skill_refs: Type.Optional(Type.Array(Type.String({ description: "技能引用。" }), { description: "旧本地投影兼容字段；仅当规范 skills 字段缺失时使用，不能覆盖显式 skills=[]。" })), knowledge_refs: Type.Optional(Type.Array(Type.String({ description: "知识引用。" }), { description: "知识引用。" })), connector_refs: Type.Optional(Type.Array(Type.String({ description: "连接器引用。" }), { description: "连接器引用。" })), memory_policy: Type.Optional(JsonObject), skill_signing_keys: Type.Optional(Type.Array(Type.Ref("SkillSigningKeyMetadata"), { description: "技能签名公钥列表；不包含私钥。" })), tool_policy: Type.Optional(Type.Object({ allowed_tools: Type.Array(Type.String({ description: "工具名称。" }), { description: "允许的工具名称。" }) }, { additionalProperties: false, description: "快照工具白名单。" })) }, { $id: "SnapshotProjection", additionalProperties: true, description: "冻结的员工执行快照；skills 是 presence-aware 的规范技能字段（包括 []），skill_refs 仅在 skills 缺失时兼容旧投影；用于离线执行和授权校验。", "x-dynamic-json": true });
+const SnapshotProjection = Type.Object({ employee_id: Type.String({ minLength: 1, description: "员工 ID。" }), version: Type.String({ minLength: 1, description: "员工配置版本。" }), snapshot_version: Type.String({ minLength: 1, description: "执行快照版本。" }), display_name: Type.String({ minLength: 1, description: "员工展示名称。" }), tenant_id: Type.Optional(Type.String({ description: "企业租户 ID。" })), member_id: Type.Optional(Type.String({ description: "成员 ID。" })), avatar_url: Type.Optional(Type.Union([Type.String(), Type.Null()], { description: "当前生效头像 URL。" })), avatar_source: Type.Optional(Type.Union([Type.Literal("manager"), Type.Literal("template")], { description: "manager = 员工有自己的头像；template = 没有头像，前端回退默认插画。" })), avatar_version: Type.Optional(Type.Integer({ minimum: 0, description: "Manager tenant 头像版本。" })), avatar_sync_version: Type.Optional(Type.String({ minLength: 1, description: "Manager 头像增量版本。" })), persona: Type.Optional(Type.String({ description: "员工人设。" })), model_policy: Type.Optional(Type.Ref("AgentModelPolicy")), execution_policy: Type.Optional(JsonObject), tools: Type.Optional(Type.Array(Type.String({ description: "工具名称。" }), { description: "快照允许的工具。" })), skills: Type.Optional(Type.Array(Type.String({ description: "技能引用。" }), { description: "规范技能引用；该字段一旦出现（包括 []）即为权威，不读取 skill_refs。" })), skill_refs: Type.Optional(Type.Array(Type.String({ description: "技能引用。" }), { description: "旧本地投影兼容字段；仅当规范 skills 字段缺失时使用，不能覆盖显式 skills=[]。" })), knowledge_refs: Type.Optional(Type.Array(Type.String({ description: "知识引用。" }), { description: "知识引用。" })), connector_refs: Type.Optional(Type.Array(Type.String({ description: "连接器引用。" }), { description: "连接器引用。" })), memory_policy: Type.Optional(JsonObject), skill_signing_keys: Type.Optional(Type.Array(Type.Ref("SkillSigningKeyMetadata"), { description: "技能签名公钥列表；不包含私钥。" })), tool_policy: Type.Optional(Type.Object({ allowed_tools: Type.Array(Type.String({ description: "工具名称。" }), { description: "允许的工具名称。" }) }, { additionalProperties: false, description: "快照工具白名单。" })) }, { $id: "SnapshotProjection", additionalProperties: true, description: "冻结的员工执行快照；skills 是 presence-aware 的规范技能字段（包括 []），skill_refs 仅在 skills 缺失时兼容旧投影；用于离线执行和授权校验。", "x-dynamic-json": true });
 const ExpertListEnvelope = Type.Object({ data: Type.Array(Type.Ref("ExpertProjection")), page: Type.Ref("Page") }, { $id: "ExpertListEnvelope" });
 const LocalCapability = Type.Object({ kind: Type.Union([Type.Literal("mcp"), Type.Literal("skill")], { description: "能力类型：MCP 或技能。" }), ref: Type.String({ description: "能力标识。" }), display_name: Type.String({ description: "展示名称。" }), url: Type.String({ description: "MCP 地址（不含凭据）；技能为空。" }), tools: Type.Array(Type.String(), { description: "安装时从服务端读到的 MCP 工具；技能为空。" }), source: Type.Union([Type.Literal("user_url"), Type.Literal("enterprise_catalog"), Type.Literal("platform_catalog"), Type.Literal("user_import")], { description: "来源：user_url 用户同意的 MCP 地址；enterprise_catalog 企业自建技能；platform_catalog 平台目录（企业启用的平台 MCP 或从平台技能市场安装的技能）；user_import 成员自己导入的技能（本机文件夹/zip/粘贴/网址，未经企业签名）。" }), version: Type.String({ description: "技能版本；MCP 为空。" }), source_ref: Type.String({ description: "企业目录技能对应的平台 skill ID（与方案推荐能力对应）；其他为空。" }), reason: Type.String({ description: "需要它的原因。" }), approved_by: Type.String({ description: "同意安装的成员。" }), created_at: Type.String({ format: "date-time", description: "安装时间。" }),
   auth: Type.Union([Type.Literal("none"), Type.Literal("oauth"), Type.Literal("bearer")], { description: "MCP 鉴权方式：none 无需鉴权；oauth 成员在服务方网页登录；bearer 服务方发的访问令牌。技能为 none。" }),
@@ -779,6 +774,10 @@ const PromptRequest = Type.Object({
   text: Type.String({ minLength: 1, maxLength: 200_000, description: "提交给当前员工的文本提示。" }),
   images: Type.Optional(Type.Array(Type.Ref("PromptImage"), { maxItems: MAX_PROMPT_IMAGES, description: "最多 8 张内联图片；单张解码后不超过 5 MiB，总大小不超过 20 MiB。" })),
   attachment_ids: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 256, description: "本地附件 ID；只有图片附件会作为 Pi 图片输入，其余文件保持本地元数据。" }), { maxItems: MAX_PROMPT_IMAGES, uniqueItems: true, description: "已上传本地附件 ID；最多 8 个且不能重复。" })),
+  attachment_paths: Type.Optional(Type.Array(Type.Object({
+    path: Type.String({ minLength: 1, maxLength: 4096, description: "本机文件的绝对路径；必须是普通文件（会先解析符号链接）。只在 Agent 本地使用，不写进模型上下文。" }),
+    name: Type.Optional(Type.String({ minLength: 1, maxLength: 255, pattern: "^[^\\x00-\\x1F\\x7F/\\\\]+$", description: "展示用文件名；缺省取路径的文件名。" })),
+  }, { additionalProperties: false, description: "按路径引用的附件。" }), { maxItems: MAX_PROMPT_IMAGES, description: "桌面端按路径引用的附件；不上传字节、不限大小。与 attachment_ids 合计最多 8 个。5 MiB 以内的图片随消息作为图片输入，其余文件由员工用 attachment_read 工具按需分段读取。" })),
   mentions: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 128, description: "被 @提及的员工句柄；仅群聊允许。" }), { maxItems: 16, description: "群聊中的员工提及；最多 16 个。重复句柄会合并。" })),
 }, { $id: "PromptRequest", additionalProperties: false, description: "向本地会话提交提示的请求。" });
 const PromptAccepted = Type.Object({ conversation_id: Type.String({ minLength: 1, description: "会话 ID。" }), accepted: Type.Boolean({ const: true, description: "是否已接受执行；成功响应固定为 true。" }), state: Type.Union([Type.Literal("accepted", { description: "本次请求已接收，后台执行尚未完成。" }), Type.Literal("completed", { description: "相同 Idempotency-Key 已完成，返回幂等收据。" })], { description: "幂等收据状态。" }), idempotency_key: Type.String({ minLength: 1, maxLength: 256, description: "本次请求使用的幂等键。" }) }, { $id: "PromptAccepted", description: "提示提交收据；202 表示已接收或幂等重放。" });
@@ -804,6 +803,15 @@ const LocalFileMetadata = Type.Object({
 const LocalFileEnvelope = Type.Object({ data: Type.Ref("LocalFileMetadata") }, { $id: "LocalFileEnvelope", description: "单个本地文件响应。" });
 const Page = Type.Object({ next_cursor: Type.Union([Type.String({ minLength: 1, description: "下一页游标。" }), Type.Null()], { description: "下一页游标；无下一页时为 null。" }), has_more: Type.Boolean({ description: "是否还有更多。" }) }, { $id: "Page", description: "分页信息；当前文件、授权和市场列表返回 null 游标表示一次性结果。" });
 const LocalFileListEnvelope = Type.Object({ data: Type.Array(Type.Ref("LocalFileMetadata"), { description: "文件元数据列表。" }), page: Type.Ref("Page") }, { $id: "LocalFileListEnvelope", description: "本地文件列表响应。" });
+const AttachmentRef = Type.Object({
+  id: Type.String({ minLength: 1, description: "附件引用 ID（ref-…）；与员工清单里看到的编号一致。" }),
+  name: Type.String({ minLength: 1, maxLength: 255, description: "附件文件名。" }),
+  mime_type: Type.String({ minLength: 1, description: "按扩展名推断的 MIME 类型。" }),
+  byte_size: Type.Integer({ minimum: 0, description: "登记时的文件字节数。" }),
+  path: Type.String({ minLength: 1, description: "附件在本机的绝对路径；本机接口，路径不出本机。" }),
+  created_at: Type.String({ format: "date-time", description: "首次登记时间（ISO 8601 UTC）。" }),
+}, { $id: "AttachmentRef", additionalProperties: false, description: "按路径引用的会话附件；内容不复制，只记位置。" });
+const AttachmentRefListEnvelope = Type.Object({ data: Type.Array(Type.Ref("AttachmentRef"), { description: "按登记时间正序的附件引用。" }) }, { $id: "AttachmentRefListEnvelope", description: "当前成员该会话的附件引用列表。" });
 const LocalFileDeleteEnvelope = Type.Object({ data: Type.Object({ deleted: Type.Boolean({ const: true, description: "是否删除成功；成功响应固定为 true。" }), id: Type.String({ minLength: 1, description: "删除的文件 ID。" }) }, { additionalProperties: false }) }, { $id: "LocalFileDeleteEnvelope", description: "本地文件删除结果。" });
 const MarketplaceOutputType = Type.Union([Type.Literal("document"), Type.Literal("spreadsheet"), Type.Literal("code"), Type.Literal("presentation"), Type.Literal("system_operation")], { $id: "MarketplaceOutputType", description: "交付物类型。" });
 const MarketplaceTemplate = Type.Object({
@@ -883,8 +891,9 @@ const ApprovalEnvelope = Type.Object({ data: Type.Ref("ApprovalRecord") }, { $id
 const ApprovalDecisionRequest = Type.Object({ decision: Type.Union([Type.Literal("approve"), Type.Literal("deny")]), expected_revision: Type.Optional(Type.Integer({ minimum: 0 })), capability_resolution: Type.Optional(CapabilityResolution), credential: Type.Optional({ ...McpBearerCredentialIn, description: "批准安装需要访问令牌的 MCP 时填写的令牌；只在内存中交给安装步骤，不写入审批记录。" }), remember: Type.Optional(Type.Boolean({ description: "批准并记住：以后从平台目录安装同种能力（MCP 或技能）时直接安装。只对来源为平台目录的 capability_install 的批准有效。" })), session_allow: Type.Optional(Type.Boolean({ description: "批准并记住：本会话内该外部工具（MCP 连接器等）不再询问。只对 risk_level 为 external 的批准有效；会话删除后失效。" })) }, { $id: "ApprovalDecisionRequest", additionalProperties: false });
 const ProblemSchema = Type.Object({ type: Type.String({ description: "错误类型 URI。" }), title: Type.String({ description: "错误标题。" }), status: Type.Integer({ description: "HTTP 状态码。" }), code: Type.String({ description: "机器可读错误码。" }), detail: Type.String({ description: "人类可读错误说明。" }), instance: Type.String({ description: "错误实例或请求关联 ID。" }), request_id: Type.String({ description: "请求关联 ID。" }), errors: Type.Optional(Type.Array(Type.Object({ loc: Type.Array(Type.Union([Type.String(), Type.Integer()]), { description: "错误字段路径。" }), message: Type.String({ description: "字段错误说明。" }), type: Type.String({ description: "校验错误类型。" }) }, { additionalProperties: false }), { description: "字段级错误。" })), meta: Type.Optional(Type.Record(Type.String({ description: "元数据键。" }), Type.Union([Type.String(), Type.Number(), Type.Boolean(), Type.Null(), Type.Array(Type.Object({ tenant_id: Type.String({ description: "候选企业的租户 ID，可直接作为登录的 tenant_id。" }), enterprise_name: Type.String({ description: "候选企业名称。" }) }, { additionalProperties: false }), { description: "tenant_selection_required 时的候选企业（meta.candidates）。" })]), { description: "非敏感诊断元数据。" })) }, { $id: "Problem", additionalProperties: false, description: "统一 problem+json 错误。" });
 const LOCAL_FILE_DOWNLOAD_CONTENT = Object.fromEntries([...ALLOWED_FILE_MIMES].map((mime) => [mime, { schema: { type: "string", format: "binary", description: `${mime} 文件内容。` } }]));
-const LOCAL_AVATAR_DOWNLOAD_CONTENT = Object.fromEntries(["image/jpeg", "image/png", "image/webp"].map((mime) => [mime, { schema: { type: "string", format: "binary", description: `本机 ${mime} 员工头像内容。` } }]));
-const OPENAPI_SCHEMAS = [ConversationFailureOut, CustomGroupCreateRequest, GroupOrchestration, GroupOrchestrationUpdateRequest, GroupMembersUpdateRequest, GroupMembersUpdateEnvelope,...WORK_RECORD_SCHEMAS, ...CONVERSATION_READ_SCHEMAS, ...CONVERSATION_WORKSPACE_SCHEMAS, ConversationSchedule, ConversationScheduleInput, AgentLoginRequest, AgentResetPasswordRequest, ConversationMetadata, ConversationCreateRequest, ConversationUpdateRequest, ConversationStateUpdateRequest, ConversationProjectFolderRequest, ConversationState, ConversationEnvelope, ConversationListEnvelope, ConversationStateOut, ConversationStateEnvelope, ThinkingLevel, ConversationContextOut, ConversationContextEnvelope, ConversationThinkingLevelRequest, ContextResetMemoryReason, ConversationContextResetRequest, ConversationContextResetParticipantOut, ConversationContextResetOut, ConversationContextResetEnvelope, GrantSyncRequest, UsageFlushRequest, ConversationDeleteEnvelope, ConversationContentPart, ConversationMessage, ConversationEntry, ConversationEntriesEnvelope, BoundedJsonValue, PiSseToolCall, PiSseAssistantMessageEvent, PiSseEventData, PiSseReconciliation, AbortEnvelope, AuthClaims, AuthResult, AuthResultEnvelope, PingEnvelope, ClaimsEnvelope, ModelPolicy, SkillSigningKeyMetadata, ExpertProjection, SolutionProjection, SnapshotProjection, ExpertListEnvelope, SolutionListEnvelope, LocalCapability, LocalCapabilityListEnvelope, InstallableSkillOut, InstallableSkillListEnvelope, CapabilityAutoInstall, CapabilityAutoInstallListEnvelope, LocalCapabilityDeleteEnvelope, McpLoginOut, McpLoginEnvelope, McpLoginStartEnvelope, McpLoginCancelEnvelope, McpProbeRequest, McpProbeOut, McpProbeEnvelope, McpInstallRequest, McpInstallEnvelope, CatalogMcpOut, CatalogMcpListEnvelope, CatalogMcpInstallRequest, McpTokenRequest, McpTokenEnvelope, SkillInstallRequest, SkillInstallEnvelope, CustomSkillImportRequest, CustomSkillPreviewOut, CustomSkillScanItem, CustomSkillInstallResultItem, CustomSkillClawHubCandidate, CustomSkillClawHubSecurity, CustomSkillClawHubPreview, CustomSkillImportEnvelope, LocalSkillPathEnvelope, SnapshotListEnvelope, ReadinessState, SkillReadiness, CapabilityReadiness, ExpertReadiness, ReadinessEnvelope, ExpertReadinessEnvelope, GrantSyncEnvelope, UsageFlushEnvelope, OrgTreeNode, OrgTreeEnvelope, OrgDepartmentCreateRequest, OrgDepartmentUpdateRequest, OrgDepartmentPromoteRequest, OrgDepartmentEnvelope, OrgDepartmentDeleteEnvelope, OrgAssignmentRequest, OrgAssignmentEnvelope, OfficeSceneEnvelope, OfficeFeedEnvelope, GoneEnvelope, PromptImage, PromptRequest, PromptAccepted, PromptAcceptedEnvelope, LocalFileUpload, AudioTranscriptionRequest, AudioTranscriptionResponse, AudioTranscriptionEnvelope, EmployeeAvatarRequest, EmployeeAvatarResponse, LocalFileMetadata, LocalFileEnvelope, Page, LocalFileListEnvelope, LocalFileDeleteEnvelope, MarketplaceOutputType, MarketplaceTemplate, MarketplaceTemplateEnvelope, MarketplaceTemplateListEnvelope, UsageSummary, UsageOutboxItem, UsageOutboxListEnvelope, ApprovalRecordSchema, ApprovalListEnvelope, ApprovalEnvelope, ApprovalDecisionRequest, ProblemSchema] as const;
+const AVATAR_DOWNLOAD_CONTENT = { "image/webp": { schema: { type: "string", format: "binary", description: "静态 WebP 头像内容。" } } };
+const AvatarVersionQuery = Type.Object({ v: Type.Optional(Type.String({ pattern: "^[0-9]{1,10}$", description: "头像版本；只用于让浏览器缓存随版本失效，服务端以本机投影/Manager 为准。" })) }, { additionalProperties: false });
+const OPENAPI_SCHEMAS = [ConversationFailureOut, CustomGroupCreateRequest, GroupOrchestration, GroupOrchestrationUpdateRequest, GroupMembersUpdateRequest, GroupMembersUpdateEnvelope,...WORK_RECORD_SCHEMAS, ...CONVERSATION_READ_SCHEMAS, ...CONVERSATION_WORKSPACE_SCHEMAS, ConversationSchedule, ConversationScheduleInput, AgentLoginRequest, AgentResetPasswordRequest, ConversationMetadata, ConversationCreateRequest, ConversationUpdateRequest, ConversationStateUpdateRequest, ConversationProjectFolderRequest, ConversationState, ConversationEnvelope, ConversationListEnvelope, ConversationStateOut, ConversationStateEnvelope, ThinkingLevel, ConversationContextOut, ConversationContextEnvelope, ConversationThinkingLevelRequest, ContextResetMemoryReason, ConversationContextResetRequest, ConversationContextResetParticipantOut, ConversationContextResetOut, ConversationContextResetEnvelope, GrantSyncRequest, UsageFlushRequest, ConversationDeleteEnvelope, ConversationContentPart, ConversationMessage, ConversationEntry, ConversationEntriesEnvelope, BoundedJsonValue, PiSseToolCall, PiSseAssistantMessageEvent, PiSseEventData, PiSseReconciliation, AbortEnvelope, AuthClaims, AuthResult, AuthResultEnvelope, PingEnvelope, ClaimsEnvelope, ModelPolicy, SkillSigningKeyMetadata, ExpertProjection, SolutionProjection, SnapshotProjection, ExpertListEnvelope, SolutionListEnvelope, LocalCapability, LocalCapabilityListEnvelope, InstallableSkillOut, InstallableSkillListEnvelope, CapabilityAutoInstall, CapabilityAutoInstallListEnvelope, LocalCapabilityDeleteEnvelope, McpLoginOut, McpLoginEnvelope, McpLoginStartEnvelope, McpLoginCancelEnvelope, McpProbeRequest, McpProbeOut, McpProbeEnvelope, McpInstallRequest, McpInstallEnvelope, CatalogMcpOut, CatalogMcpListEnvelope, CatalogMcpInstallRequest, McpTokenRequest, McpTokenEnvelope, SkillInstallRequest, SkillInstallEnvelope, CustomSkillImportRequest, CustomSkillPreviewOut, CustomSkillScanItem, CustomSkillInstallResultItem, CustomSkillClawHubCandidate, CustomSkillClawHubSecurity, CustomSkillClawHubPreview, CustomSkillImportEnvelope, LocalSkillPathEnvelope, SnapshotListEnvelope, ReadinessState, SkillReadiness, CapabilityReadiness, ExpertReadiness, ReadinessEnvelope, ExpertReadinessEnvelope, GrantSyncEnvelope, UsageFlushEnvelope, OrgTreeNode, OrgTreeEnvelope, OrgDepartmentCreateRequest, OrgDepartmentUpdateRequest, OrgDepartmentPromoteRequest, OrgDepartmentEnvelope, OrgDepartmentDeleteEnvelope, OrgAssignmentRequest, OrgAssignmentEnvelope, OfficeSceneEnvelope, OfficeFeedEnvelope, GoneEnvelope, PromptImage, PromptRequest, PromptAccepted, PromptAcceptedEnvelope, LocalFileUpload, AudioTranscriptionRequest, AudioTranscriptionResponse, AudioTranscriptionEnvelope, LocalFileMetadata, LocalFileEnvelope, Page, LocalFileListEnvelope, LocalFileDeleteEnvelope, AttachmentRef, AttachmentRefListEnvelope, MarketplaceOutputType, MarketplaceTemplate, MarketplaceTemplateEnvelope, MarketplaceTemplateListEnvelope, UsageSummary, UsageOutboxItem, UsageOutboxListEnvelope, ApprovalRecordSchema, ApprovalListEnvelope, ApprovalEnvelope, ApprovalDecisionRequest, ProblemSchema] as const;
 
 const GLOBAL_ACTIVITY_STREAM_EXAMPLES = {
   promptStarted: {
@@ -1019,7 +1028,7 @@ const MANAGER_BACKED_OPERATION_IDS = new Set([
   "resolveTenantByAccount", "login", "resetPassword", "transcribeAudio", "getConversationContext",
   "updateConversationContext", "setConversationThinkingLevel", "resetConversationContext", "promptConversation", "introduceConversation", "syncGrants",
   "flushUsage", "listMarketplaceTemplates", "getMarketplaceTemplate", "orgTree", "createOrgDepartment", "updateOrgDepartment", "promoteOrgDepartment", "deleteOrgDepartment", "assignOrgDepartment",
-  "updateEmployeeAvatar", "listEmployeeMemories", "getEmployeeMemorySummary", "deleteEmployeeMemory", "listKnowledgeSources",
+  "listEmployeeMemories", "getEmployeeMemorySummary", "deleteEmployeeMemory", "listKnowledgeSources",
 ]);
 const OPENAPI_PARAMETER_EXAMPLES: Record<string, unknown> = {
   ...AUTOMATION_PARAMETER_EXAMPLES,
@@ -1031,6 +1040,7 @@ const OPENAPI_PARAMETER_EXAMPLES: Record<string, unknown> = {
   capability_kind: "mcp", capability_ref: "notion", login_id: "6f1c2b0e-3a51-4c7e-9d0a-2b7f4f1e8c11", state: "opaque-one-time-state", code: "provider-authorization-code", error: "access_denied", conversation_id: "conversation-1", attachment_id: "file-1", artifact_id: "artifact-1", employee_id: "employee-1", department_id: "department-1",
   template_id: "template-1", knowledge_base_id: "legacy-knowledge-base", resource_id: "resource-1", kind: "document", skill_ref: "weekly-report",
   after: "employee-1:assistant-1", cursor: "page_v1.opaque", limit: 50, entry_ref: "entry_v1_opaque",
+  v: "3",
   "Idempotency-Key": "prompt-1", "Last-Event-ID": "employee-1:assistant-1", "X-Aiteam-Reconciliation-Version": "2",
 };
 const OPENAPI_OPERATION_DOCS: Record<string, OpenApiOperationDocs> = {
@@ -1042,6 +1052,10 @@ const OPENAPI_OPERATION_DOCS: Record<string, OpenApiOperationDocs> = {
   ...CONVERSATION_READ_DOCS,
   ...CONVERSATION_WORKSPACE_DOCS,
   ...WORK_RECORD_DOCS,
+  listConversationAttachmentRefs: { responses: { "200": { description: "按路径引用的附件及其本机位置；同名的两个文件各自一个 ref ID。", examples: { refs: { summary: "两个同名不同文件", value: { data: [
+    { id: "ref-1a2b", name: "报价.pdf", mime_type: "application/pdf", byte_size: 12_582_912, path: "/Users/me/a/报价.pdf", created_at: "2026-11-27T02:00:00.000Z" },
+    { id: "ref-3c4d", name: "报价.pdf", mime_type: "application/pdf", byte_size: 2048, path: "/Users/me/b/报价.pdf", created_at: "2026-11-27T03:00:00.000Z" },
+  ] } } } } } },
   healthz: { responses: { "200": { description: "Agent 存活时返回就绪状态。", examples: { ok: { summary: "存活", value: { data: { status: "ok" } } } } } } },
   metrics: { responses: { "200": { description: "Prometheus 文本指标。", examples: { metrics: { summary: "指标文本", value: "# TYPE aiteam_agent_http_requests_total counter\\naiteam_agent_http_requests_total 12\\n" } } } } },
   readyz: { responses: {
@@ -1054,8 +1068,8 @@ const OPENAPI_OPERATION_DOCS: Record<string, OpenApiOperationDocs> = {
   login: { request: { credentials: { summary: "登录凭据", value: { tenant_id: "tenant-1", account: "13800000000", password: "••••••••" } } }, responses: { "200": { description: "返回受服务端会话控制的 30 天 access token 和身份声明。", examples: { loggedIn: { summary: "登录成功", value: { data: { token: "eyJ...redacted", claims: { user_id: "member-1", tenant_id: "tenant-1", roles: ["member"], exp: 1790000000, jti: "session-1" } } } } } } } },
   resetPassword: { request: { reset: { summary: "密码重置", value: { tenant_id: "tenant-1", account: "13800000000", old_password: "••••••••", new_password: "••••••••" } } }, responses: { "200": { description: "返回重置后新的本地 access token。", examples: { reset: { summary: "重置成功", value: { data: { token: "eyJ...redacted", claims: { user_id: "member-1", tenant_id: "tenant-1", roles: ["owner"], exp: 1790000000 } } } } } } } },
   transcribeAudio: { request: { audio: { summary: "录音文件", value: { filename: "recording.webm", mime_type: "audio/webm", data: "YXVkaW8=" } } }, responses: { "200": { description: "返回 ASR 文本和可选时长。", examples: { transcript: { summary: "转写成功", value: { data: { text: "你好，世界", duration: 1.2 } } } } } } },
-  updateEmployeeAvatar: { request: { avatar: { summary: "本地头像文件", value: { filename: "avatar.png", mime_type: "image/png", data: "iVBORw0KGgo=" } } }, responses: { "200": { description: "头像已保存到本机 Agent managed data root；不会上传头像字节。", examples: { updated: { summary: "本地更新成功", value: { data: { employee_id: "employee-1", avatar_url: "/api/agent/employees/employee-1/avatar/content", version: 2, updated_at: "2026-09-13T10:00:00.000Z" } } } } } } },
-  getEmployeeAvatar: { responses: { "200": { description: "本机当前成员员工头像二进制内容。", examples: { response: { summary: "本地头像", value: "binary image bytes" } } } } },
+  getEmployeeAvatar: { responses: { "200": { description: "员工头像（静态 WebP）二进制内容。", examples: { response: { summary: "员工头像", value: "binary webp bytes" } } } } },
+  getMarketplaceTemplateAvatar: { responses: { "200": { description: "人才市场模板头像（静态 WebP）二进制内容。", examples: { response: { summary: "模板头像", value: "binary webp bytes" } } } } },
   ping: { responses: { "200": { description: "固定存活探针结果。", examples: { pong: { summary: "存活", value: { data: { pong: true } } } } } } },
   whoami: { responses: { "200": { description: "当前 access token 的身份声明。", examples: { identity: { summary: "当前身份", value: { data: { user_id: "member-1", tenant_id: "tenant-1", roles: ["member"] } } } } } } },
   listConversations: { request: { limit: { summary: "返回条数", value: 50 }, cursor: { summary: "分页游标", value: "conversation-previous" } }, responses: { "200": { description: "本地会话列表和分页信息。", examples: { list: { summary: "会话列表", value: { data: [EXAMPLE_CONVERSATION], page: EXAMPLE_PAGE } } } } } },
@@ -1312,6 +1326,7 @@ interface DocumentationOperation {
 }
 
 export class AgentHttpServer {
+  private readonly avatarFetches = new Map<string, Promise<{ data: Buffer; version: number } | undefined>>();
   readonly server: Server;
   private readonly app: FastifyInstance;
   private requests = 0;
@@ -1615,8 +1630,7 @@ export class AgentHttpServer {
       this.writeJson(response, 200, { data: { signed_out: true } });
     }, routeSchema("logout", { summary: "注销本地执行身份", description: "请求 Manager 撤销服务端会话，同时清理当前进程的执行身份和运行材料。", response: { 200: jsonResponse(Type.Object({ data: Type.Object({ signed_out: Type.Boolean({ const: true }) }, { additionalProperties: false }) }, { additionalProperties: false })) }, hide: true }));
     this.registerRoute("POST", "/api/agent/audio/transcriptions", (request, response, caller) => this.transcribeAudio(request, response, caller!), routeSchema("transcribeAudio", { summary: "语音转文字", description: "使用当前成员所属企业已开放的 ASR 模型，把本地录音转换为文本；不绑定 employee。", body: Type.Ref("AudioTranscriptionRequest"), response: { 200: jsonResponse(Type.Ref("AudioTranscriptionEnvelope")), 400: problemResponse("BadRequest"), 401: problemResponse("Unauthorized"), 413: problemResponse("TooLarge"), 422: problemResponse("ValidationError"), 502: problemResponse("BadGateway"), 503: problemResponse("ManagerUnavailable") } }));
-    this.registerRoute("POST", "/api/agent/employees/:employee_id/avatar", (request, response, caller, fastifyRequest) => this.updateEmployeeAvatar(request, response, (fastifyRequest?.params as { employee_id: string }).employee_id, caller!), routeSchema("updateEmployeeAvatar", { summary: "更新本地员工头像", description: "只将头像保存到本机 Agent managed data root，并原子更新本地员工投影和冻结快照；不会上传头像字节或改写 Manager 主数据。", params: ExpertParams, body: Type.Ref("EmployeeAvatarRequest"), response: { 200: jsonResponse(Type.Object({ data: Type.Ref("EmployeeAvatarResponse") })), 400: problemResponse("BadRequest"), 401: problemResponse("Unauthorized"), 403: problemResponse("Forbidden"), 404: problemResponse("NotFound"), 413: problemResponse("TooLarge"), 415: problemResponse("ValidationError") } }));
-    this.registerRoute("GET", "/api/agent/employees/:employee_id/avatar/content", (_request, response, caller, fastifyRequest) => this.getEmployeeAvatar(response, (fastifyRequest?.params as { employee_id: string }).employee_id, caller!), routeSchema("getEmployeeAvatar", { summary: "读取本地员工头像", description: "读取当前成员本机 projection 中的员工头像；只返回本地 managed data root 内的图片对象。", params: ExpertParams, response: { 200: { description: "本地员工头像二进制内容。", content: LOCAL_AVATAR_DOWNLOAD_CONTENT }, 404: problemResponse("NotFound") } }));
+    this.registerRoute("GET", "/api/agent/employees/:employee_id/avatar/content", (_request, response, caller, fastifyRequest) => this.getEmployeeAvatar(response, (fastifyRequest?.params as { employee_id: string }).employee_id, caller!), routeSchema("getEmployeeAvatar", { summary: "读取员工头像", description: "读取当前成员已授权员工的头像（每员工一份，内容来自企业端）。本机按 (租户, 员工, avatar_version) 缓存：版本未变直接返回本机文件，版本变化后首次访问用成员自己的 Manager 会话回源；员工没有头像或 Manager 不可达且无缓存时返回 404。", params: ExpertParams, querystring: AvatarVersionQuery, response: { 200: { description: "员工头像二进制内容。", content: AVATAR_DOWNLOAD_CONTENT }, 404: problemResponse("NotFound") } }));
 
     this.registerRoute("GET", "/api/agent/ping", (_request, response) => this.writeJson(response, 200, { data: { pong: true } }), routeSchema("ping", { summary: "Agent 存活探针", description: "返回当前本地 Agent 的固定存活结果。", response: { 200: jsonResponse(Type.Ref("PingEnvelope")) } }), false);
     this.registerRoute("GET", "/api/agent/whoami", (_request, response, caller) => this.writeJson(response, 200, { data: caller!.claims ?? { user_id: caller!.userId ?? caller!.callerId, tenant_id: caller!.tenantId!, roles: caller!.roles ?? [] } }), routeSchema("whoami", { summary: "查看当前身份", description: "返回通过 JWT 与 Manager 服务端会话校验的当前成员身份声明。", response: { 200: jsonResponse(Type.Ref("ClaimsEnvelope")) } }));
@@ -1701,6 +1715,12 @@ export class AgentHttpServer {
     this.registerRoute("GET", "/api/agent/conversations/:conversation_id/participants", (_request, response, caller, fastifyRequest) => {
       this.writeJson(response, 200, this.conversationReads.participants((fastifyRequest?.params as { conversation_id: string }).conversation_id, caller!));
     }, routeSchema("listConversationParticipants", { summary: "读取真实会话成员", description: "仅返回已存在的固定 participant Session 索引成员，不回退到授权全集；撤权成员仍可见但不可执行，不返回本机路径。", params: ConversationParams, response: { 200: jsonResponse(Type.Ref("ConversationParticipantsEnvelope")), 404: problemResponse("NotFound") } }));
+    this.registerRoute("GET", "/api/agent/conversations/:conversation_id/attachment-refs", (_request, response, caller, fastifyRequest) => {
+      const conversationId = String((fastifyRequest?.params as { conversation_id: string }).conversation_id);
+      this.requireOwnedConversation(conversationId, caller!);
+      const refs = this.options.store.listOwnedLocalFileRefs(conversationId, caller!.tenantId!, caller!.userId ?? caller!.callerId);
+      this.writeJson(response, 200, { data: refs.map((ref) => ({ id: ref.id, name: ref.name, mime_type: ref.mime_type, byte_size: ref.byte_size, path: ref.path, created_at: ref.created_at })) });
+    }, routeSchema("listConversationAttachmentRefs", { summary: "列出会话的附件引用", description: "按路径引用的附件清单；客户端按 ref ID 定位历史消息里的附件，不再按文件名猜。本机接口，路径不跳出本机；只返回当前成员自己的会话。", params: ConversationParams, response: { 200: jsonResponse(Type.Ref("AttachmentRefListEnvelope")), 404: problemResponse("NotFound") } }));
     this.registerRoute("PATCH", "/api/agent/conversations/:conversation_id/participants", (request, response, caller, fastifyRequest) => this.updateGroupParticipants(request, response, (fastifyRequest?.params as { conversation_id: string }).conversation_id, caller!), routeSchema("updateConversationParticipants", {
       summary: "增减自选成员群/自由群成员", description: "在两轮对话之间原子地加入或移出自选成员群或自由群的成员，可同时提交新的群简介；自选成员群还可同时提交编排，自由群没有编排规则。方案群成员由方案固定，不可修改。成员、简介和编排按合并后的结果统一校验：协调人不能移出，自定义规则不能引用已不在群内的成员（需在同一请求里一并改写规则）。移出的成员保留其历史发言，重新加入后沿用原 Session；新成员在首次被调用时才创建 Session。会话正在执行时返回 409。",
       params: ConversationParams, body: Type.Ref("GroupMembersUpdateRequest"), response: { 200: jsonResponse(Type.Ref("GroupMembersUpdateEnvelope")), 403: problemResponse("Forbidden"), 404: problemResponse("NotFound"), 409: problemResponse("Conflict"), 422: problemResponse("ValidationError") },
@@ -1891,6 +1911,7 @@ export class AgentHttpServer {
     this.registerRoute("GET", "/api/agent/usage/outbox", (_request, response, caller) => this.listOutbox(response, caller!), routeSchema("listUsageOutbox", { summary: "列出用量上报队列", description: "查看本地待上报或失败的脱敏用量摘要。", response: { 200: jsonResponse(Type.Ref("UsageOutboxListEnvelope")) } }));
     this.registerRoute("POST", "/api/agent/usage/flush", (request, response, caller) => this.flushUsage(request, response, caller!), routeSchema("flushUsage", { summary: "刷新用量上报", description: "将本地脱敏用量摘要尽力上报到 Manager。", body: Type.Ref("UsageFlushRequest"), response: { 200: jsonResponse(Type.Ref("UsageFlushEnvelope")), 503: problemResponse("ManagerUnavailable") } }));
     this.registerRoute("GET", "/api/agent/marketplace/templates", (_request, response, caller) => this.listMarketplaceTemplates(response, caller!), routeSchema("listMarketplaceTemplates", { summary: "列出专家市场模板", description: "从 Manager 拉取当前成员可见的专家模板。", response: { 200: jsonResponse(Type.Ref("MarketplaceTemplateListEnvelope")), 503: problemResponse("ManagerUnavailable") } }));
+    this.registerRoute("GET", "/api/agent/marketplace/templates/:template_id/avatar/content", (request, response, caller, fastifyRequest) => this.getMarketplaceTemplateAvatar(request, response, (fastifyRequest?.params as { template_id: string }).template_id, caller!), routeSchema("getMarketplaceTemplateAvatar", { summary: "读取人才市场模板头像", description: "经成员自己的 Manager 会话读取专家模板头像（静态 WebP），本机按 (租户, 模板, 版本) 缓存；没有头像或 Manager 不可达且无缓存时返回 404。", params: Type.Object({ template_id: Type.String({ minLength: 1, maxLength: 256, description: "专家模板 ID。" }) }, { additionalProperties: false }), querystring: AvatarVersionQuery, response: { 200: { description: "模板头像二进制内容。", content: AVATAR_DOWNLOAD_CONTENT }, 404: problemResponse("NotFound") } }));
     this.registerRoute("GET", "/api/agent/marketplace/templates/:template_id", (_request, response, caller, fastifyRequest) => this.listMarketplaceTemplates(response, caller!, (fastifyRequest?.params as { template_id: string }).template_id), routeSchema("getMarketplaceTemplate", { summary: "获取专家市场模板", description: "获取当前成员可见的单个专家模板。", params: Type.Object({ template_id: Type.String({ minLength: 1, description: "专家模板 ID。" }) }, { additionalProperties: false }), response: { 200: jsonResponse(Type.Ref("MarketplaceTemplateEnvelope")), 404: problemResponse("NotFound"), 503: problemResponse("ManagerUnavailable") } }));
     this.registerRoute("GET", "/api/agent/knowledge-bases", (_request, response) => this.listKnowledgeBases(response), routeSchema("listKnowledgeBases", { summary: "查询已移除的知识库接口", description: "该 Agent 知识库旧接口已移除，请改用 Pi 知识工具。", response: { 410: problemResponse("Gone") } }));
     for (const [path, operationId, params] of [
@@ -2457,34 +2478,72 @@ export class AgentHttpServer {
     return refs.map((ref) => ({ ref, display_name: cache.displayNameFor(scope, ref, verification) ?? null }));
   }
 
-  private async updateEmployeeAvatar(request: IncomingMessage, response: ServerResponse, employeeId: string, caller: AuthenticatedCaller): Promise<void> {
+  /** 员工头像：版本以本机投影（Manager 下发的 avatar_version）为准，同租户同员工只有一份缓存。 */
+  private async getEmployeeAvatar(response: ServerResponse, employeeId: string, caller: AuthenticatedCaller): Promise<void> {
     this.requireAuthorizedEmployee(employeeId, caller);
-    const body = await this.readJson(request, MAX_UPLOAD_JSON_BYTES);
-    const filename = this.stringField(body.filename, "filename", MAX_LOCAL_FILE_NAME);
-    if (filename.includes("/") || filename.includes("\\") || /[\x00-\x1f\x7f]/u.test(filename)) throw new HttpProblem(400, "invalid_avatar", "filename must be a safe basename");
-    const mimeType = body.mime_type;
-    if (typeof mimeType !== "string" || !IMAGE_MIMES.has(mimeType) || !["image/jpeg", "image/png", "image/webp"].includes(mimeType)) throw new HttpProblem(415, "unsupported_avatar_type", "Only JPEG, PNG and WebP avatars are supported");
-    const encoded = this.stringField(body.data, "data", Math.ceil(5 * 1024 * 1024 / 3) * 4 + 16);
-    const data = decodeBase64(encoded);
-    if (!data) throw new HttpProblem(400, "invalid_avatar", "data must be valid base64");
-    if (data.byteLength > 5 * 1024 * 1024) throw new HttpProblem(413, "avatar_too_large", "Avatar exceeds 5 MB");
-    if (!hasImageSignature(mimeType, data)) throw new HttpProblem(400, "invalid_avatar", "Image MIME type does not match its content");
-    const result = this.options.store.updateEmployeeAvatar(caller.tenantId!, caller.userId ?? caller.callerId, employeeId, data, mimeType);
-    if (result.state === "not_found") throw new HttpProblem(404, "employee_not_found", "Employee is not authorized locally");
-    this.writeJson(response, 200, { data: { employee_id: employeeId, avatar_url: result.avatar_url, version: result.version, updated_at: result.updated_at } });
+    const tenantId = caller.tenantId!;
+    const version = this.options.store.employeeAvatarVersion(tenantId, caller.userId ?? caller.callerId, employeeId);
+    const managerClient = this.options.managerClient;
+    const fetcher = managerClient?.getEmployeeAvatar ? () => managerClient.getEmployeeAvatar!(caller, employeeId) : undefined;
+    const avatar = version ? await this.cachedAvatar(avatarCacheKey("employee", tenantId, employeeId), version, fetcher) : undefined;
+    if (!avatar) throw new HttpProblem(404, "employee_avatar_not_found", "Employee avatar not found");
+    this.writeAvatar(response, avatar);
   }
 
-  private getEmployeeAvatar(response: ServerResponse, employeeId: string, caller: AuthenticatedCaller): void {
-    this.requireAuthorizedEmployee(employeeId, caller);
-    const avatar = this.options.store.readEmployeeAvatar(caller.tenantId!, caller.userId ?? caller.callerId, employeeId);
-    if (!avatar) throw new HttpProblem(404, "employee_avatar_not_found", "Local employee avatar not found");
+  /** 模板头像：版本取自列表下发的 ?v=；可见性由 Manager 按成员会话校验，回源时按 Manager 返回的版本落盘。 */
+  private async getMarketplaceTemplateAvatar(request: IncomingMessage, response: ServerResponse, templateId: string, caller: AuthenticatedCaller): Promise<void> {
+    const managerClient = this.options.managerClient;
+    const version = Number(new URL(request.url ?? "/", "http://agent.local").searchParams.get("v") ?? "");
+    const fetcher = managerClient?.getMarketplaceTemplateAvatar ? () => managerClient.getMarketplaceTemplateAvatar!(caller, templateId) : undefined;
+    const key = avatarCacheKey("template", caller.tenantId!, templateId);
+    const avatar = Number.isInteger(version) && version > 0 ? await this.cachedAvatar(key, version, fetcher) : await this.fetchAvatar(key, 0, fetcher);
+    if (!avatar) throw new HttpProblem(404, "template_avatar_not_found", "Template avatar not found");
+    this.writeAvatar(response, avatar);
+  }
+
+  private writeAvatar(response: ServerResponse, avatar: { data: Buffer; version: number }): void {
     response.writeHead(200, {
-      "Cache-Control": "private, max-age=300",
-      "Content-Type": avatar.mimeType,
+      "Cache-Control": "private, max-age=86400",
+      "Content-Type": "image/webp",
       "Content-Length": avatar.data.byteLength,
+      "X-Avatar-Version": String(avatar.version),
+      "X-Content-Type-Options": "nosniff",
     });
     response.end(avatar.data);
   }
+
+  /** 先读本机按版本命名的缓存；没有再回源。 */
+  private async cachedAvatar(key: string, version: number, fetcher?: () => Promise<ManagerAvatar>): Promise<{ data: Buffer; version: number } | undefined> {
+    const cached = this.options.store.readCachedAvatar(key, version);
+    if (cached) return { data: cached, version };
+    return this.fetchAvatar(key, version, fetcher);
+  }
+
+  /** 同一键同一版本的并发请求只回源一次（single-flight）。 */
+  private fetchAvatar(key: string, version: number, fetcher?: () => Promise<ManagerAvatar>): Promise<{ data: Buffer; version: number } | undefined> {
+    if (!fetcher) return Promise.resolve(undefined);
+    const flightKey = `${key}:${version}`;
+    const inflight = this.avatarFetches.get(flightKey);
+    if (inflight) return inflight;
+    const run = (async () => {
+      try {
+        const fetched = await fetcher();
+        // 落盘用 Manager 实际返回的版本：本机投影可能还没同步到最新，下次同步后自然命中。
+        const fetchedVersion = fetched.version ?? version;
+        if (fetchedVersion <= 0 || !this.options.store.writeCachedAvatar(key, fetchedVersion, fetched.data)) return undefined;
+        return { data: fetched.data, version: fetchedVersion };
+      } catch (error) {
+        // 头像不在主链上：Manager 不可达、无权限或没有头像时保持 404，客户端回退默认插画。
+        if (error instanceof ManagerAuthorizationError || error instanceof ManagerUnavailableError || error instanceof ManagerPolicyDeniedError) return undefined;
+        throw error;
+      } finally {
+        this.avatarFetches.delete(flightKey);
+      }
+    })();
+    this.avatarFetches.set(flightKey, run);
+    return run;
+  }
+
   private listSolutions(response: ServerResponse, caller: AuthenticatedCaller): void { this.writeJson(response, 200, { data: this.options.store.listSolutions(caller.tenantId, caller.userId ?? caller.callerId), page: { next_cursor: null, has_more: false } }); }
   private async listInstallableSkills(response: ServerResponse, caller: AuthenticatedCaller): Promise<void> {
     if (!this.options.managerClient?.listInstallableSkills) throw new HttpProblem(503, "manager_unavailable", "Enterprise skill catalog is unavailable");
@@ -3028,12 +3087,32 @@ export class AgentHttpServer {
     const images = this.validateInlineImages(payload.images);
     const attachmentIds = payload.attachment_ids === undefined ? [] : this.stringArray(payload.attachment_ids, "attachment_ids", MAX_PROMPT_IMAGES);
     if (new Set(attachmentIds).size !== attachmentIds.length) throw new HttpProblem(422, "invalid_attachment_ids", "attachment_ids must not contain duplicates");
+    let attachmentPaths: AttachmentPathInput[];
+    try {
+      attachmentPaths = parseAttachmentPaths(payload.attachment_paths);
+    } catch (error) {
+      if (error instanceof AttachmentPathError) throw new HttpProblem(422, error.code, error.message);
+      throw error;
+    }
+    if (attachmentIds.length + attachmentPaths.length > MAX_PROMPT_ATTACHMENTS) throw new HttpProblem(422, "too_many_attachments", `A prompt may reference at most ${MAX_PROMPT_ATTACHMENTS} attachments`);
     const mentions = payload.mentions === undefined ? [] : this.stringArray(payload.mentions, "mentions", 16);
     if (mentions.length > 0 && conversation.kind !== "group") throw new HttpProblem(422, "invalid_mentions", "mentions are only supported for group conversations");
     this.assertProjectAvailable(conversation);
     this.assertRunnableTargets(caller, this.resolvePromptTargets(conversation, caller, mentions));
     // Fingerprint IDs, not mutable attachment bytes, so completed/accepted retries can return their receipt.
-    const fingerprint = createHash("sha256").update(JSON.stringify({ text, images, attachment_ids: attachmentIds, mentions })).digest("hex");
+    // Check attached paths before reserving a new key: a rejected file (moved, credential folder, hard link) is the
+    // client's to fix, and recording it under the key would turn the key unknown, so the same retry would keep
+    // failing after the user fixed the file. A key that already has a receipt replays it and never reads the files.
+    let resolvedPaths: ResolvedAttachmentPath[] = [];
+    try {
+      if (attachmentPaths.length > 0 && !this.options.store.getPromptReceipt(conversationId, callerId, key)) {
+        resolvedPaths = attachmentPaths.map(resolveAttachmentPath);
+      }
+    } catch (error) {
+      if (error instanceof AttachmentPathError) throw new HttpProblem(422, error.code, error.message);
+      throw error;
+    }
+    const fingerprint = createHash("sha256").update(JSON.stringify({ text, images, attachment_ids: attachmentIds, ...(attachmentPaths.length > 0 ? { attachment_paths: attachmentPaths } : {}), mentions })).digest("hex");
     const receipt = this.options.store.reservePrompt({ conversationId, callerId, key, fingerprint });
     if (!receipt.isNew) return this.writeReceipt(response, conversationId, key, receipt.state);
 
@@ -3052,12 +3131,14 @@ export class AgentHttpServer {
           throw new HttpProblem(422, "attachment_not_supported", error instanceof Error ? error.message : "Attachment cannot be used as model input");
         }
       }
+      const uploadedEntries: UploadedAttachmentEntry[] = [];
       const loadedImages: ImageContent[] = [];
       let decodedImageBytes = images.reduce((total, image) => total + Buffer.byteLength(image.data, "base64"), 0);
       for (const attachmentId of attachmentIds) {
         const metadata = this.options.store.getOwnedLocalFile(attachmentId, conversationId, caller.tenantId!, caller.userId ?? caller.callerId);
         if (!metadata) throw new HttpProblem(404, "attachment_not_found", "Attachment not found");
         if (metadata.kind !== "attachment") throw new HttpProblem(422, "invalid_attachment", "Only conversation attachments can be referenced by a prompt");
+        uploadedEntries.push({ id: metadata.id, filename: metadata.filename, mime_type: metadata.mime_type, byte_size: metadata.byte_size });
         // Non-image attachments remain local metadata. Never load their bytes into
         // the Pi image content array; the current Pi prompt contract accepts images only.
         if (!IMAGE_MIMES.has(metadata.mime_type)) continue;
@@ -3068,11 +3149,25 @@ export class AgentHttpServer {
       }
       if (loadedImages.length + images.length > MAX_PROMPT_IMAGES) throw new HttpProblem(422, "invalid_images", "A prompt may contain at most 8 images");
       if (decodedImageBytes > MAX_PROMPT_IMAGE_BYTES) throw new HttpProblem(413, "prompt_images_too_large", "Decoded prompt images exceed 20 MiB");
+      // Files attached by path: stat them now (missing / folder → 422), keep only their location, and hand small
+      // images over with the message as before. Everything else is read on demand through attachment_read.
+      const owner = { conversationId, tenantId: caller.tenantId!, memberId: caller.userId ?? caller.callerId };
+      // The same file sent twice in one message is listed once.
+      const refs: LocalFileRef[] = resolvedPaths.length > 0 ? [...new Map(this.options.store.upsertLocalFileRefs(owner, resolvedPaths).map((ref) => [ref.id, ref])).values()] : [];
+      const inlinedRefs = new Set<string>();
+      for (const ref of refs) {
+        if (loadedImages.length + images.length >= MAX_PROMPT_IMAGES || decodedImageBytes + ref.byte_size > MAX_PROMPT_IMAGE_BYTES) break;
+        const image = loadInlineImage(ref);
+        if (!image) continue;
+        loadedImages.push(image);
+        decodedImageBytes += ref.byte_size;
+        inlinedRefs.add(ref.id);
+      }
       const promptImages = [...images, ...loadedImages];
       const attachmentText = materializedAttachments.length > 0
         ? `\n\n[本地附件材料，仅来自当前会话已绑定文件]\n${materializedAttachments.map((item) => `--- ${item.filename} ---\n${item.extracted.text}`).join("\n")}`
         : "";
-      const worker = this.runPrompt(conversationId, caller, key, receipt.ownerInstance, `${text}${attachmentText}`, promptImages, mentions, attachmentIds);
+      const worker = this.runPrompt(conversationId, caller, key, receipt.ownerInstance, `${text}${attachmentText}${attachmentManifest(refs, inlinedRefs, uploadedEntries)}`, promptImages, mentions, attachmentIds);
       this.promptWorkers.add(worker);
       void worker.finally(() => this.promptWorkers.delete(worker));
       this.writeReceipt(response, conversationId, key, "accepted");

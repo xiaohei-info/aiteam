@@ -4869,17 +4869,10 @@
                 "description": "允许为 null。"
               }
             ],
-            "description": "当前生效头像 URL；优先本地 override，其次 Manager tenant 头像，再次模板/默认 fallback。"
+            "description": "员工头像的本机同源路径 /api/agent/employees/{id}/avatar/content?v={avatar_version}；没有头像时为 null。"
           },
           "avatar_source": {
             "anyOf": [
-              {
-                "type": "string",
-                "enum": [
-                  "local"
-                ],
-                "description": "avatar source 字段值。"
-              },
               {
                 "type": "string",
                 "enum": [
@@ -4895,12 +4888,12 @@
                 "description": "avatar source 字段值。"
               }
             ],
-            "description": "头像来源优先级。"
+            "description": "manager = 员工有自己的头像；template = 没有头像，前端回退默认插画。"
           },
           "avatar_version": {
             "type": "integer",
             "minimum": 0,
-            "description": "Manager tenant 头像版本；不改变 employee 配置 version。"
+            "description": "员工头像版本（招募时从模板复制为 1，内容变化 +1）；0 表示没有头像，不改变 employee 配置 version。"
           },
           "avatar_sync_version": {
             "type": "string",
@@ -5074,13 +5067,6 @@
               {
                 "type": "string",
                 "enum": [
-                  "local"
-                ],
-                "description": "avatar source 字段值。"
-              },
-              {
-                "type": "string",
-                "enum": [
                   "manager"
                 ],
                 "description": "avatar source 字段值。"
@@ -5093,7 +5079,7 @@
                 "description": "avatar source 字段值。"
               }
             ],
-            "description": "头像来源优先级。"
+            "description": "manager = 员工有自己的头像；template = 没有头像，前端回退默认插画。"
           },
           "avatar_version": {
             "type": "integer",
@@ -6073,6 +6059,34 @@
             "uniqueItems": true,
             "description": "已上传本地附件 ID；最多 8 个且不能重复。"
           },
+          "attachment_paths": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "path"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096,
+                  "description": "本机文件的绝对路径；必须是普通文件（会先解析符号链接）。只在 Agent 本地使用，不写进模型上下文。"
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 255,
+                  "pattern": "^[^\\x00-\\x1F\\x7F/\\\\]+$",
+                  "description": "展示用文件名；缺省取路径的文件名。"
+                }
+              },
+              "additionalProperties": false,
+              "description": "按路径引用的附件。"
+            },
+            "maxItems": 8,
+            "description": "桌面端按路径引用的附件；不上传字节、不限大小。与 attachment_ids 合计最多 8 个。5 MiB 以内的图片随消息作为图片输入，其余文件由员工用 attachment_read 工具按需分段读取。"
+          },
           "mentions": {
             "type": "array",
             "items": {
@@ -6276,87 +6290,6 @@
           }
         },
         "description": "语音识别响应。"
-      },
-      "EmployeeAvatarRequest": {
-        "type": "object",
-        "required": [
-          "filename",
-          "mime_type",
-          "data"
-        ],
-        "properties": {
-          "filename": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 255,
-            "description": "原始文件名，仅用于元数据。"
-          },
-          "mime_type": {
-            "anyOf": [
-              {
-                "type": "string",
-                "enum": [
-                  "image/jpeg"
-                ],
-                "description": "mime type 字段值。"
-              },
-              {
-                "type": "string",
-                "enum": [
-                  "image/png"
-                ],
-                "description": "mime type 字段值。"
-              },
-              {
-                "type": "string",
-                "enum": [
-                  "image/webp"
-                ],
-                "description": "mime type 字段值。"
-              }
-            ],
-            "description": "头像 MIME 类型。"
-          },
-          "data": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 7000000,
-            "description": "头像内容的 base64 编码。"
-          }
-        },
-        "additionalProperties": false,
-        "description": "员工头像上传请求。"
-      },
-      "EmployeeAvatarResponse": {
-        "type": "object",
-        "required": [
-          "employee_id",
-          "avatar_url",
-          "version",
-          "updated_at"
-        ],
-        "properties": {
-          "employee_id": {
-            "type": "string",
-            "description": "授权员工/专家 ID。"
-          },
-          "avatar_url": {
-            "type": "string",
-            "description": "avatar url 字段值。"
-          },
-          "version": {
-            "type": "integer",
-            "minimum": 1,
-            "description": "version 字段值。"
-          },
-          "updated_at": {
-            "type": "string",
-            "format": "date-time",
-            "description": "updated at 字段值。"
-          }
-        },
-        "additionalProperties": false,
-        "description": "Employee Avatar Response 数据结构。"
       },
       "LocalFileMetadata": {
         "type": "object",
@@ -9455,6 +9388,68 @@
         },
         "additionalProperties": false,
         "description": "地址、工具与鉴权方式都以企业目录为准，不接受客户端传值。"
+      },
+      "AttachmentRef": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "mime_type",
+          "byte_size",
+          "path",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "附件引用 ID（ref-…）；与员工清单里看到的编号一致。"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255,
+            "description": "附件文件名。"
+          },
+          "mime_type": {
+            "type": "string",
+            "minLength": 1,
+            "description": "按扩展名推断的 MIME 类型。"
+          },
+          "byte_size": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "登记时的文件字节数。"
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "description": "附件在本机的绝对路径；本机接口，路径不出本机。"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "首次登记时间（ISO 8601 UTC）。"
+          }
+        },
+        "additionalProperties": false,
+        "description": "按路径引用的会话附件；内容不复制，只记位置。"
+      },
+      "AttachmentRefListEnvelope": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AttachmentRef"
+            },
+            "description": "按登记时间正序的附件引用。"
+          }
+        },
+        "description": "当前成员该会话的附件引用列表。"
       }
     }
   },
@@ -10215,129 +10210,24 @@
         ]
       }
     },
-    "/api/agent/employees/{employee_id}/avatar": {
-      "post": {
-        "operationId": "updateEmployeeAvatar",
-        "summary": "更新本地员工头像",
-        "description": "只将头像保存到本机 Agent managed data root，并原子更新本地员工投影和冻结快照；不会上传头像字节或改写 Manager 主数据。",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/EmployeeAvatarRequest"
-              },
-              "examples": {
-                "avatar": {
-                  "summary": "本地头像文件",
-                  "value": {
-                    "filename": "avatar.png",
-                    "mime_type": "image/png",
-                    "data": "iVBORw0KGgo="
-                  }
-                }
-              }
-            }
-          }
-        },
-        "parameters": [
-          {
-            "schema": {
-              "type": "string",
-              "minLength": 1,
-              "description": "授权员工/专家 ID。"
-            },
-            "in": "path",
-            "name": "employee_id",
-            "required": true,
-            "description": "授权员工/专家 ID。",
-            "example": "employee-1"
-          }
-        ],
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "头像已保存到本机 Agent managed data root；不会上传头像字节。",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "data"
-                  ],
-                  "properties": {
-                    "data": {
-                      "$ref": "#/components/schemas/EmployeeAvatarResponse"
-                    }
-                  }
-                },
-                "examples": {
-                  "updated": {
-                    "summary": "本地更新成功",
-                    "value": {
-                      "data": {
-                        "employee_id": "employee-1",
-                        "avatar_url": "/api/agent/employees/employee-1/avatar/content",
-                        "version": 2,
-                        "updated_at": "2026-09-13T10:00:00.000Z"
-                      }
-                    }
-                  }
-                }
-              }
-            },
-            "headers": {
-              "X-Request-ID": {
-                "$ref": "#/components/headers/RequestId"
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          },
-          "413": {
-            "$ref": "#/components/responses/TooLarge"
-          },
-          "415": {
-            "$ref": "#/components/responses/ValidationError"
-          },
-          "422": {
-            "$ref": "#/components/responses/ValidationError"
-          },
-          "500": {
-            "$ref": "#/components/responses/InternalError"
-          },
-          "503": {
-            "$ref": "#/components/responses/ManagerUnavailable"
-          }
-        },
-        "tags": [
-          "agent"
-        ]
-      }
-    },
     "/api/agent/employees/{employee_id}/avatar/content": {
       "get": {
         "operationId": "getEmployeeAvatar",
-        "summary": "读取本地员工头像",
-        "description": "读取当前成员本机 projection 中的员工头像；只返回本地 managed data root 内的图片对象。",
+        "summary": "读取员工头像",
+        "description": "读取当前成员已授权员工的头像（每员工一份，内容来自企业端）。本机按 (租户, 员工, avatar_version) 缓存：版本未变直接返回本机文件，版本变化后首次访问用成员自己的 Manager 会话回源；员工没有头像或 Manager 不可达且无缓存时返回 404。",
         "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{1,10}$",
+              "description": "v 字段值。"
+            },
+            "in": "query",
+            "name": "v",
+            "required": false,
+            "description": "头像版本；只用于让浏览器缓存随版本失效，服务端以本机投影/Manager 为准。",
+            "example": "3"
+          },
           {
             "schema": {
               "type": "string",
@@ -10358,44 +10248,18 @@
         ],
         "responses": {
           "200": {
-            "description": "本机当前成员员工头像二进制内容。",
+            "description": "员工头像（静态 WebP）二进制内容。",
             "content": {
-              "image/jpeg": {
-                "schema": {
-                  "type": "string",
-                  "format": "binary",
-                  "description": "本机 image/jpeg 员工头像内容。"
-                },
-                "examples": {
-                  "response": {
-                    "summary": "本地头像",
-                    "value": "binary image bytes"
-                  }
-                }
-              },
-              "image/png": {
-                "schema": {
-                  "type": "string",
-                  "format": "binary",
-                  "description": "本机 image/png 员工头像内容。"
-                },
-                "examples": {
-                  "response": {
-                    "summary": "本地头像",
-                    "value": "binary image bytes"
-                  }
-                }
-              },
               "image/webp": {
                 "schema": {
                   "type": "string",
                   "format": "binary",
-                  "description": "本机 image/webp 员工头像内容。"
+                  "description": "静态 WebP 头像内容。"
                 },
                 "examples": {
                   "response": {
-                    "summary": "本地头像",
-                    "value": "binary image bytes"
+                    "summary": "员工头像",
+                    "value": "binary webp bytes"
                   }
                 }
               }
@@ -14756,6 +14620,95 @@
           },
           "409": {
             "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ManagerUnavailable"
+          }
+        },
+        "tags": [
+          "agent"
+        ]
+      }
+    },
+    "/api/agent/conversations/{conversation_id}/attachment-refs": {
+      "get": {
+        "operationId": "listConversationAttachmentRefs",
+        "summary": "列出会话的附件引用",
+        "description": "按路径引用的附件清单；客户端按 ref ID 定位历史消息里的附件，不再按文件名猜。本机接口，路径不跳出本机；只返回当前成员自己的会话。",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "本地会话 ID。"
+            },
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "description": "本地会话 ID。",
+            "example": "conversation-1"
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "按路径引用的附件及其本机位置；同名的两个文件各自一个 ref ID。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttachmentRefListEnvelope"
+                },
+                "examples": {
+                  "refs": {
+                    "summary": "两个同名不同文件",
+                    "value": {
+                      "data": [
+                        {
+                          "id": "ref-1a2b",
+                          "name": "报价.pdf",
+                          "mime_type": "application/pdf",
+                          "byte_size": 12582912,
+                          "path": "/Users/me/a/报价.pdf",
+                          "created_at": "2026-11-27T02:00:00.000Z"
+                        },
+                        {
+                          "id": "ref-3c4d",
+                          "name": "报价.pdf",
+                          "mime_type": "application/pdf",
+                          "byte_size": 2048,
+                          "path": "/Users/me/b/报价.pdf",
+                          "created_at": "2026-11-27T03:00:00.000Z"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
           },
           "422": {
             "$ref": "#/components/responses/ValidationError"
@@ -26320,6 +26273,91 @@
           },
           "502": {
             "$ref": "#/components/responses/BadGateway"
+          },
+          "503": {
+            "$ref": "#/components/responses/ManagerUnavailable"
+          }
+        },
+        "tags": [
+          "agent"
+        ]
+      }
+    },
+    "/api/agent/marketplace/templates/{template_id}/avatar/content": {
+      "get": {
+        "operationId": "getMarketplaceTemplateAvatar",
+        "summary": "读取人才市场模板头像",
+        "description": "经成员自己的 Manager 会话读取专家模板头像（静态 WebP），本机按 (租户, 模板, 版本) 缓存；没有头像或 Manager 不可达且无缓存时返回 404。",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{1,10}$",
+              "description": "v 字段值。"
+            },
+            "in": "query",
+            "name": "v",
+            "required": false,
+            "description": "头像版本；只用于让浏览器缓存随版本失效，服务端以本机投影/Manager 为准。",
+            "example": "3"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "description": "专家模板 ID。"
+            },
+            "in": "path",
+            "name": "template_id",
+            "required": true,
+            "description": "专家模板 ID。",
+            "example": "template-1"
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "人才市场模板头像（静态 WebP）二进制内容。",
+            "content": {
+              "image/webp": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary",
+                  "description": "静态 WebP 头像内容。"
+                },
+                "examples": {
+                  "response": {
+                    "summary": "模板头像",
+                    "value": "binary webp bytes"
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           },
           "503": {
             "$ref": "#/components/responses/ManagerUnavailable"

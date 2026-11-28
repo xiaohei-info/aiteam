@@ -1,7 +1,10 @@
-import { useRef, useState, type ChangeEvent, type ReactNode } from "react";
+import { useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { Button } from "@astryxdesign/core/Button";
 import { Text } from "@astryxdesign/core/Text";
-import { AVATAR_ACCEPT, isSafeAvatarDataUrl, readAvatarFile } from "./avatar";
+import { useProtectedAvatarSrc } from "@aiteam/shared";
+import { createOperationApiClient } from "../../api/client";
+import { useSession } from "../../auth/session";
+import { AVATAR_ACCEPT, isSafeAvatarDataUrl, isStoredTemplateAvatar, readAvatarFile } from "./avatar";
 
 interface AvatarFileInputProps {
   value?: string | null;
@@ -9,8 +12,21 @@ interface AvatarFileInputProps {
   onChange: (value: string) => void;
 }
 
+/**
+ * 模板头像显示地址：刚选的本地图片是 data URL，直接显示；已保存的是本端文件路径，
+ * 带 Bearer 取图后换成 objectURL。其它值（旧版外链等）一律不进 <img>。
+ */
+export function useTemplateAvatarSrc(value: string | null | undefined): string | undefined {
+  const { token } = useSession();
+  const client = useMemo(() => createOperationApiClient({ getToken: () => token }), [token]);
+  const resolved = useProtectedAvatarSrc(value, client, isStoredTemplateAvatar);
+  if (!value) return undefined;
+  if (isStoredTemplateAvatar(value)) return resolved;
+  return isSafeAvatarDataUrl(value) ? value : undefined;
+}
+
 export function AvatarPreview({ value }: { value?: string | null }): ReactNode {
-  const safeValue = value && isSafeAvatarDataUrl(value) ? value : undefined;
+  const safeValue = useTemplateAvatarSrc(value);
   if (safeValue) {
     return <img src={safeValue} alt="头像预览" width={56} height={56} style={{ objectFit: "cover", borderRadius: "999px" }} />;
   }
@@ -57,7 +73,7 @@ export function AvatarFileInput({ value, disabled = false, onChange }: AvatarFil
         aria-invalid={Boolean(error)}
       />
       <Text id="catalog-avatar-help" type="supporting" color="secondary">
-        仅支持 PNG、JPEG、GIF、WEBP，大小不超过 2 MiB；不支持图片 URL。
+        仅支持 PNG、JPEG、GIF、WEBP，大小不超过 2 MiB；不支持图片 URL。保存后统一转为静态 WEBP（GIF 只保留首帧）。
       </Text>
       {selectedName && <Text type="supporting">已选择：{selectedName}</Text>}
       {value && (

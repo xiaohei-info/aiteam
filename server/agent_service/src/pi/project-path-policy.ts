@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 
 type PlatformPolicy = {
   home_roots: string[];
+  /** The credential subset of home_roots (no Library/AppData): the only part attachments are judged by. */
+  credential_home_roots?: string[];
   system_roots: string[];
   short_names?: Record<string, string[]>;
 };
@@ -135,4 +137,37 @@ export function isAllowedProjectFolder(
 
 export function projectPathPolicyForTests(): ProjectPathPolicy {
   return POLICY;
+}
+
+/**
+ * Names the credential folder a path sits in, or undefined when it sits in none.
+ *
+ * Attachments are picked by the user from anywhere on their machine, so the project-folder policy is too
+ * broad for them: it also rejects Library/AppData, where screenshots and app caches legitimately live.
+ * Only the credential subset applies here — it keeps a stolen renderer from attaching `~/.ssh/id_rsa` and
+ * asking an employee to read it. A deny list narrows that risk; it cannot remove it.
+ */
+export function credentialFolderForPath(
+  path: string,
+  home = homedir(),
+  platform = process.platform,
+): string | undefined {
+  const policy = platformPolicy(platform);
+  const roots = policy.credential_home_roots ?? [];
+  if (roots.length === 0) return undefined;
+  const candidate = canonicalForPolicy(path);
+  const segments = pathSegments(candidate, platform);
+  // A credential folder is sensitive wherever it appears, not only directly under this home. Match the whole
+  // entry as consecutive folders: `.config/gcloud` is the gcloud credential store, a folder merely named
+  // `gcloud` (Documents/gcloud/bill.pdf) is not.
+  for (const root of roots) {
+    const parts = root.split(/[\\/]+/u).filter(Boolean).map((part) => part.toLowerCase());
+    for (let start = 0; start + parts.length <= segments.length; start += 1) {
+      if (parts.every((part, offset) => segments[start + offset] === part)) return root;
+    }
+  }
+  for (const [index, root] of expandRoots(roots, platform, home).entries()) {
+    if (isWithin(candidate, root, platform)) return roots[index]!;
+  }
+  return undefined;
 }

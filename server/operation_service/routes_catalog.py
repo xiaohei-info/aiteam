@@ -6,13 +6,15 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Body, Depends, Query, Request
+from fastapi import APIRouter, Body, Depends, Query, Request, Response
 
 from shared.auth import authorize, require_claims
 from shared.contracts.auth import TokenClaims
 from shared.contracts.crosstier import ExpertTemplateDetail, SolutionPackage
 from shared.contracts.enums import CatalogStatus, CatalogType, PlatformRole
 from shared.contracts.envelope import Envelope, ListEnvelope
+
+from shared.avatar_image import AVATAR_MIME_TYPE
 
 from .catalog_dependencies import get_catalog_service
 from .catalog_schemas import (
@@ -40,6 +42,40 @@ def _require_platform_operator(request: Request) -> TokenClaims:
     claims = require_claims(verifier)(request)
     authorize(claims, _PLATFORM_ROLES)
     return claims
+
+
+_AVATAR_RESPONSES = {
+    200: {"content": {AVATAR_MIME_TYPE: {"schema": {"type": "string", "format": "binary"}}},
+          "description": "模板头像（静态 WebP）。响应头 X-Avatar-Version 为当前头像版本。"},
+}
+
+
+def avatar_response(data: bytes, version: int, sha256: str) -> Response:
+    """头像二进制响应：带版本与摘要，调用方按版本缓存。"""
+    headers = {
+        "Cache-Control": "private, max-age=86400",
+        "X-Avatar-Version": str(version),
+        "X-Content-Type-Options": "nosniff",
+    }
+    if sha256:
+        headers["ETag"] = f'"{sha256}"'
+    return Response(content=data, media_type=AVATAR_MIME_TYPE, headers=headers)
+
+
+@router.get(
+    "/expert-templates/{template_id}/avatar/content",
+    description="读取专家模板头像文件（运营端页面预览）。无头像返回 404 problem+json。",
+    summary="读取专家模板头像",
+    operation_id="operation_get_expert_template_avatar",
+    response_class=Response,
+    responses=_AVATAR_RESPONSES,
+)
+async def get_expert_template_avatar(
+    template_id: str,
+    _claims: TokenClaims = Depends(_require_platform_operator),
+    service: CatalogService = Depends(get_catalog_service),
+) -> Response:
+    return avatar_response(*service.read_template_avatar(template_id))
 
 
 @router.post(
@@ -229,6 +265,24 @@ async def pull_expert_template(
     return Envelope[ExpertTemplateDetail](
         data=service.pull_expert_template_detail(template_id=template_id, version=version, tenant_id=tenant_id)
     )
+
+
+@router_pull.get(
+    "/expert-templates/{template_id}/avatar/content",
+    description="F06 Manager 拉取专家模板头像文件（服务间调用；只给已发布且对该租户可见的模板）。",
+    summary="F06 Manager 拉取专家模板头像",
+    operation_id="operation_pull_expert_template_avatar",
+    response_class=Response,
+    responses=_AVATAR_RESPONSES,
+)
+async def pull_expert_template_avatar(
+    template_id: str,
+    request: Request,
+    tenant_id: str = Query(min_length=1),
+    service: CatalogService = Depends(get_catalog_service),
+) -> Response:
+    _require_service_token(request)
+    return avatar_response(*service.read_template_avatar(template_id, tenant_id=tenant_id))
 
 
 @router_pull.get(

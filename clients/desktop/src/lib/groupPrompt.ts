@@ -54,6 +54,7 @@ export async function submitGroupPrompt(
   idempotencyKey: string,
   submit: GroupPromptSubmitter,
   attachmentIds?: readonly string[],
+  attachmentPaths?: ReadonlyArray<{ path: string; name: string }>,
 ): Promise<GroupPromptRoute> {
   const normalizedMentions = [...new Set((mentions ?? []).filter(Boolean))]
   const normalizedAttachmentIds = [...new Set((attachmentIds ?? []).filter(Boolean))]
@@ -62,6 +63,7 @@ export async function submitGroupPrompt(
     text,
     ...(normalizedMentions.length > 0 ? { mentions: normalizedMentions } : {}),
     ...(normalizedAttachmentIds.length > 0 ? { attachment_ids: normalizedAttachmentIds } : {}),
+    ...(attachmentPaths && attachmentPaths.length > 0 ? { attachment_paths: attachmentPaths.map((ref) => ({ ...ref })) } : {}),
   }
   await submit(group.id, prompt, idempotencyKey)
   return route

@@ -869,6 +869,12 @@
     inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
+/* 从访达拖文件到输入栏上方时：与聚焦同色，提示松手即可作为附件。 */
+.chat-input-bar-file-over .chat-input-box {
+  border-color: var(--border-active);
+  box-shadow: 0 0 0 3px rgba(212, 175, 55, 0.16);
+}
+
 .chat-textarea {
   width: 100%;
   min-height: 60px;
@@ -892,7 +898,9 @@
   box-shadow: none;
 }
 
-.chat-textarea::placeholder { color: var(--text-muted); }
+.chat-textarea::placeholder,
+.chat-textarea.mention-input:empty::before,
+.chat-textarea.mention-input[data-empty="true"]::before { color: var(--text-muted); }
 
 .chat-input-actions {
   display: flex;
@@ -1486,7 +1494,9 @@
   line-height: 1.65;
 }
 
-.chat-input-bar-hero .chat-textarea::placeholder {
+.chat-input-bar-hero .chat-textarea::placeholder,
+.chat-input-bar-hero .chat-textarea.mention-input:empty::before,
+.chat-input-bar-hero .chat-textarea.mention-input[data-empty="true"]::before {
   color: color-mix(in srgb, var(--text-muted) 62%, transparent);
   font-size: 16px;
 }

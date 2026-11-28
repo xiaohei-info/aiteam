@@ -1,7 +1,7 @@
 import { BackendApiClient } from './client'
 import { login, resetPassword } from '../agent/auth'
 import { listExperts } from '../agent/experts'
-import { fetchEmployeeAvatarContent, updateEmployeeAvatar } from '../agent/avatar'
+import { fetchEmployeeAvatarContent, fetchMarketplaceTemplateAvatarContent } from '../agent/avatar'
 import type { AudioTranscriptionRequest, AudioTranscriptionResult, MarketplaceTemplate, OrgTreeNode, Page } from '../agent/types'
 
 const client = new BackendApiClient({
@@ -20,8 +20,8 @@ export const backendApi = {
   promoteOrgDepartment: (departmentId: string, childId: string) => client.request<{ id: string; name: string; parent_id: string | null }>({ method: 'POST', path: `/api/agent/org/departments/${encodeURIComponent(departmentId)}/promote`, body: { child_id: childId } }),
   assignOrgDepartment: (employeeId: string, departmentId: string) => client.request<{ employee_id: string; department_id: string }>({ method: 'PATCH', path: `/api/agent/org/assignments/${encodeURIComponent(employeeId)}`, body: { department_id: departmentId } }),
   listExperts: () => listExperts(client),
-  updateEmployeeAvatar: (employeeId: string, body: Parameters<typeof updateEmployeeAvatar>[2]) => updateEmployeeAvatar(client, employeeId, body),
   getEmployeeAvatarContent: (employeeId: string, version?: string | null) => fetchEmployeeAvatarContent(client, employeeId, version),
+  getMarketplaceTemplateAvatarContent: (templateId: string, version?: string | null) => fetchMarketplaceTemplateAvatarContent(client, templateId, version),
   listMarketplaceTemplates: async () => {
     const result = await client.request<{ data: MarketplaceTemplate[]; page: Page }>({ path: '/api/agent/marketplace/templates', raw: true })
     return { items: result.data, page: result.page }

@@ -55,6 +55,7 @@
 | [local-directory-knowledge-design.md](plans/local-directory-knowledge-design.md) | 本地目录检索设计，已实施；开头有 2026-10-30 现状说明 |
 | [group-creation-backend-plan.md](plans/group-creation-backend-plan.md) | 创建群聊后端方案，已实施 |
 | [automation-tab-feature-plan.md](plans/automation-tab-feature-plan.md) | 自动化 Tab 产品与实现方案 |
+| [2026-11-25-chat-composer-unification.md](plans/2026-11-25-chat-composer-unification.md) | 聊天输入框统一（单聊 textarea ↔ 群聊 contentEditable）：现状、代价、方案 A/B/C 与落地顺序，未开始 |
 
 ## 归档 `archive/`
 

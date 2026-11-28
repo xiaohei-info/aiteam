@@ -35,13 +35,14 @@ def manager():
 
 
 @pytest.fixture
-def client(manager):
+def client(manager, tmp_path):
+    from operation_service.template_avatar_store import TemplateAvatarStore
     app = get_app("operation")
     class PlatformSkillStore:
         def get_package(self, *, skill_id, version, published_only=False):
             return {"content_hash": "abc123"}
     providers = type("Providers", (), {"validate_model_ref": lambda self, ref, require_published=False: ref})()
-    service = CatalogService(CatalogRepository(), manager, platform_skills=PlatformSkillStore(), platform_providers=providers)
+    service = CatalogService(CatalogRepository(), manager, platform_skills=PlatformSkillStore(), platform_providers=providers, avatars=TemplateAvatarStore(tmp_path))
     app.dependency_overrides[get_catalog_service] = lambda: service
     yield TestClient(app)
     app.dependency_overrides.clear()
@@ -67,7 +68,7 @@ def _register_and_publish_expert(client):
     # 注册
     client.post(
         "/api/operation/catalog/expert-templates",
-        json={"template_id": "tpl-cmo", "display_name": "CMO", "category": "marketing", "avatar_url": "https://example.com/cmo.png", "system_prompt": "marketing leader", "skill_ids": ["seo"], "description": "CMO expert"},
+        json={"template_id": "tpl-cmo", "display_name": "CMO", "category": "marketing", "avatar_url": "", "system_prompt": "marketing leader", "skill_ids": ["seo"], "description": "CMO expert"},
         headers=_auth_header(),
     )
     # 发布
@@ -166,7 +167,7 @@ def test_pull_expert_template_not_published(client):
     # 只注册，不发布
     client.post(
         "/api/operation/catalog/expert-templates",
-        json={"template_id": "tpl-draft", "display_name": "Draft", "category": "x", "avatar_url": "h", "system_prompt": "s", "skill_ids": ["sk"], "description": "d"},
+        json={"template_id": "tpl-draft", "display_name": "Draft", "category": "x", "avatar_url": "", "system_prompt": "s", "skill_ids": ["sk"], "description": "d"},
         headers=_auth_header(),
     )
 
@@ -194,7 +195,7 @@ def _register_solution_with_bindings(client):
     for tpl_id, name in [("tpl-cmo", "CMO"), ("tpl-ceo", "CEO")]:
         client.post(
             "/api/operation/catalog/expert-templates",
-            json={"template_id": tpl_id, "display_name": name, "category": "x", "avatar_url": "h", "system_prompt": f"{name} system", "skill_ids": ["sk"], "description": "d"},
+            json={"template_id": tpl_id, "display_name": name, "category": "x", "avatar_url": "", "system_prompt": f"{name} system", "skill_ids": ["sk"], "description": "d"},
             headers=_auth_header(),
         )
         client.post(
@@ -310,7 +311,7 @@ def _register_solution_with_orchestration(client):
     client.post(
         "/api/operation/catalog/expert-templates",
         json={"template_id": "tpl-cmo", "display_name": "CMO", "category": "marketing",
-              "avatar_url": "https://example.com/cmo.png", "system_prompt": "marketing leader",
+              "avatar_url": "", "system_prompt": "marketing leader",
               "skill_ids": ["seo"], "description": "CMO expert"},
         headers=_auth_header(),
     )
@@ -376,7 +377,7 @@ def _register_expert_with_full_config(client):
             "template_id": "tpl-full",
             "display_name": "Full Config Expert",
             "category": "marketing",
-            "avatar_url": "https://example.com/a.png",
+            "avatar_url": "",
             "system_prompt": "You are CMO",
             
             "platform_skill_refs": [{
@@ -412,7 +413,7 @@ def test_pull_expert_template_includes_flat_config(client):
     assert data["skill_ids"] == []
     assert data["platform_skill_refs"][0]["version"] == "1.0.0"
     assert data["category"] == "marketing"
-    assert data["avatar_url"] == "https://example.com/a.png"
+    assert data["avatar_url"] == "" and data["avatar_version"] is None
     assert data["description"] == "营销高管"
     # backfill：persona/model + 固定平台技能引用供 Manager 招募时安装。
     assert data["persona"] == "You are CMO"
@@ -504,3 +505,79 @@ def test_pull_solution_package_flat_ids_default_binding_metadata(client):
     assert experts[0]["template_id"] == "tpl-cmo"
     assert experts[0]["sequence_no"] == 1
     assert experts[0]["enabled"] is True
+
+
+def _png_data_url() -> str:
+    import base64
+    from io import BytesIO
+    from PIL import Image
+    out = BytesIO()
+    Image.new("RGB", (4, 4), (10, 20, 30)).save(out, format="PNG")
+    return "data:image/png;base64," + base64.b64encode(out.getvalue()).decode()
+
+
+def test_pull_expert_template_avatar_content(client):
+    """Manager 服务间拉取模板头像：只认服务身份、只给已发布可见模板，带版本头。"""
+    from tests.operation.auth_helpers import operation_test_token
+    from operation_service.app import _auth
+    headers = {"Authorization": f"Bearer {operation_test_token(_auth, user_id='op1', role='system_operator')}"}
+    body = {"template_id": "tpl-av", "display_name": "AV", "category": "x", "avatar_url": _png_data_url(),
+            "system_prompt": "s", "description": "d"}
+    assert client.post("/api/operation/catalog/expert-templates", json=body, headers=headers).status_code == 201
+    url = "/api/operation/catalog/pull/expert-templates/tpl-av/avatar/content?tenant_id=t-1"
+    assert client.get(url).status_code == 401
+    assert client.get(url, headers=_service_auth()).status_code == 404  # 草稿不外溢
+    assert client.post("/api/operation/catalog/expert_template/tpl-av/publish", json={}, headers=headers).status_code == 200
+    r = client.get(url, headers=_service_auth())
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/webp"
+    assert r.headers["x-avatar-version"] == "1"
+    assert r.headers["x-content-type-options"] == "nosniff"
+    assert r.content[:4] == b"RIFF"
+    detail = client.get("/api/operation/catalog/pull/expert-templates/tpl-av?tenant_id=t-1", headers=_service_auth()).json()["data"]
+    assert detail["avatar_url"] == "/api/operation/catalog/pull/expert-templates/tpl-av/avatar/content?v=1"
+    assert detail["avatar_version"] == 1
+    console = client.get("/api/operation/catalog/expert-templates/tpl-av/avatar/content", headers=headers)
+    assert console.status_code == 200 and console.content == r.content
+    assert client.get("/api/operation/catalog/expert-templates/tpl-av/avatar/content").status_code == 401
+
+
+def _manager_catalog_over(client):
+    """Manager 侧真实 OperatorCatalogClient，HTTP 经 MockTransport 转发到 Operator 测试应用（跨端闭环）。"""
+    import httpx
+    from manager_service.operator_catalog import OperatorCatalogClient
+
+    def forward(request: httpx.Request) -> httpx.Response:
+        r = client.request(request.method, request.url.raw_path.decode(), headers=dict(request.headers),
+                           content=request.content)
+        return httpx.Response(r.status_code, headers=r.headers, content=r.content)
+
+    return OperatorCatalogClient(
+        "http://operator.test", service_token="test-service-token",
+        client_kwargs={"transport": httpx.MockTransport(forward)},
+    )
+
+
+def test_manager_pulls_template_avatar_written_by_operator(client):
+    """Operator 存文件 → Manager 以服务身份拉字节；无头像返回 None，草稿/范围外抛 NotFound。"""
+    from shared.errors import NotFound
+    from tests.operation.auth_helpers import operation_test_token
+    from operation_service.app import _auth
+    headers = {"Authorization": f"Bearer {operation_test_token(_auth, user_id='op1', role='system_operator')}"}
+    for template_id, avatar in (("tpl-av", _png_data_url()), ("tpl-none", "")):
+        body = {"template_id": template_id, "display_name": "AV", "category": "x", "avatar_url": avatar,
+                "system_prompt": "s", "description": "d"}
+        assert client.post("/api/operation/catalog/expert-templates", json=body, headers=headers).status_code == 201
+    manager = _manager_catalog_over(client)
+    with pytest.raises(NotFound):  # 草稿：不能当成「没有头像」吞掉
+        manager.pull_expert_template_avatar(template_id="tpl-av", tenant_id="t-1")
+    for template_id in ("tpl-av", "tpl-none"):
+        assert client.post(f"/api/operation/catalog/expert_template/{template_id}/publish", json={},
+                           headers=headers).status_code == 200
+    data, version = manager.pull_expert_template_avatar(template_id="tpl-av", tenant_id="t-1")
+    assert data[:4] == b"RIFF" and version == 1
+    detail = manager.pull_expert_template(template_id="tpl-av", tenant_id="t-1")
+    assert detail.avatar_version == 1
+    assert manager.pull_expert_template_avatar(template_id="tpl-none", tenant_id="t-1") is None
+    with pytest.raises(NotFound):
+        manager.pull_expert_template_avatar(template_id="tpl-missing", tenant_id="t-1")

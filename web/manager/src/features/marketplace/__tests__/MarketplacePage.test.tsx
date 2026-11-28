@@ -5,7 +5,7 @@ import { ApiError, createI18n, sharedMessages, type AuthSession } from "@aiteam/
 import { I18nContext } from "../../../i18n/context";
 import { managerMessages } from "../../../i18n/messages";
 import { SessionContext, type SessionContextValue } from "../../../auth/session";
-import { MarketplacePage } from "../MarketplacePage";
+import { MarketplacePage, isMarketAvatar } from "../MarketplacePage";
 import { useExpertsApi } from "../../experts/useExpertsApi";
 
 vi.mock("../../experts/useExpertsApi", () => ({ useExpertsApi: vi.fn() }));
@@ -355,5 +355,13 @@ describe("MarketplacePage", () => {
     await confirmRecruit();
     await waitFor(() => expect(screen.getByTestId("goto-experts")).toBeInTheDocument());
     expect(screen.getByTestId("goto-experts")).toHaveAttribute("href", "/experts");
+  });
+
+  it("人才市场头像只认 Manager 同源的模板头像路径", () => {
+    expect(isMarketAvatar("/api/manager/recruit/catalog/experts/tpl-1/avatar/content?v=3")).toBe(true);
+    expect(isMarketAvatar("/api/manager/recruit/catalog/experts/tpl-1/avatar/content")).toBe(true);
+    expect(isMarketAvatar("https://evil.test/api/manager/recruit/catalog/experts/tpl-1/avatar/content")).toBe(false);
+    expect(isMarketAvatar("/api/manager/recruit/catalog/experts/a/b/avatar/content")).toBe(false);
+    expect(isMarketAvatar("data:image/png;base64,AAAA")).toBe(false);
   });
 });

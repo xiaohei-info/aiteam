@@ -450,6 +450,8 @@ export interface PromptRequest {
   text: string
   images?: PromptImage[]
   attachment_ids?: string[]
+  // 桌面端按路径引用的附件：不上传、不限大小，员工用 attachment_read 按需读取。与 attachment_ids 合计最多 8 个。
+  attachment_paths?: Array<{ path: string; name?: string }>
   mentions?: string[]
 }
 

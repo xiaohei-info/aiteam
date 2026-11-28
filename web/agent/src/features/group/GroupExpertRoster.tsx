@@ -7,7 +7,7 @@
  * 不调任何端点（roster 由父组件加载）。展示态不入持久化主状态（D6）。
  */
 
-import { DigitalEmployeeAvatar } from "@aiteam/shared";
+import { EmployeeAvatar } from "../../lib/employee-avatar";
 import type { GroupExpert } from "./useGroupApi";
 import { Button } from "@astryxdesign/core/Button";
 import { HStack } from "@astryxdesign/core/HStack";
@@ -38,7 +38,7 @@ export function GroupExpertRoster({ experts, onPickHandle }: GroupExpertRosterPr
           const mentionable = Boolean(expert.handle && expert.available !== false);
           return (
             <HStack key={expert.employee_id || expert.handle || name} gap={1} align="center">
-              <DigitalEmployeeAvatar name={name} seed={expert.employee_id || expert.handle || name} src={expert.avatar_url} size={28} />
+              <EmployeeAvatar name={name} seed={expert.employee_id || expert.handle || name} src={expert.avatar_url} size={28} />
               <Button
                 label={mentionable ? `@${name}` : `${name}（当前不可用）`}
                 variant="secondary"

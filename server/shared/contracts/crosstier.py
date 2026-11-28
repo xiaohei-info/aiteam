@@ -131,7 +131,8 @@ class ExpertTemplateDetail(ExpertTemplateProfile):
         description="推荐配置（Manager 招募时预填充模型和专家能力配置）；backfill from flat 字段",
     )
     category: str = Field(default="", description="分类（市场营销/财务分析/…）")
-    avatar_url: str = Field(default="", description="头像图片 URL")
+    avatar_url: str = Field(default="", description="Operator 模板头像内容路径（服务间拉取，带 ?v=版本）；无头像为空串")
+    avatar_version: int | None = Field(default=None, ge=1, description="模板头像版本；各端按此版本缓存头像字节")
     system_prompt: str = Field(default="", description="岗位描述系统提示词（纯文本）")
     skill_ids: list[str] = Field(default_factory=list, description="Deprecated compatibility projection")
     platform_skill_refs: list[PlatformSkillRef] = Field(default_factory=list, description="Operator platform skill fixed references")

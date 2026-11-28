@@ -33,6 +33,7 @@ from .employee_config_service import EmployeeConfigService
 from .member_service import GrantService, MemberDeptService
 from .schemas import EmployeeConfigOut
 from .employee_avatar_repository import EmployeeAvatarRepository
+from .employee_avatar_service import avatar_projection
 
 logger = logging.getLogger(__name__)
 
@@ -136,11 +137,11 @@ class SnapshotService:
             ctx, employee_id=employee_id, tools=config.tools, version=current_version,
         )
         avatar = self._avatars.get(ctx, employee_id) if self._avatars is not None else None
-        avatar_version = avatar.version if avatar else 0
+        avatar_url, avatar_version = avatar_projection(avatar)
         return _to_snapshot(
             config, version=current_version, knowledge_refs=list(policy.refs), knowledge_policy=policy,
             pricing=self._resolve_pricing(config, tenant_id=ctx.tenant_id),
-            avatar_url=avatar.avatar_url if avatar else None,
+            avatar_url=avatar_url,
             avatar_version=avatar_version,
             avatar_sync_version=f"{current_version}:avatar-{avatar_version}",
         )
@@ -291,6 +292,8 @@ def _derive_snapshot_version(
             "origin", "copied_from_employee_id",
             # 目录状态是管理端的只读视图，目录变化不能让员工配置指纹变动。
             "skill_status", "connector_status",
+            # 头像是只读投影，有独立的 avatar_sync_version 通道；换头像不该触发配置重新同步。
+            "avatar_url",
         },
     )
     payload["knowledge_refs"] = sorted(knowledge_refs)

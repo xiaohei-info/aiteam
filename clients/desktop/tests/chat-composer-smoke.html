@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Chat composer smoke</title></head>
+<body><div id="root" style="height:100vh;display:flex;flex-direction:column;justify-content:flex-end"></div><script type="module">
+import React from 'react'
+import { createRoot } from 'react-dom/client'
+import '../src/styles/globals.css'
+import '../src/pages/Chat/Chat.css'
+import { ChatInputBar } from '../src/components/Chat/ChatInputBar.tsx'
+import { dispatchFileDrop } from '../src/lib/nativeFileDrop.ts'
+
+// 单聊/群聊输入框统一后的行为冒烟：?mode=single|group&variant=dock|hero
+// window.__setConv(id) 切会话（草稿走 __drafts）；window.__failNext = true 让下一次发送失败。
+const params = new URLSearchParams(location.search)
+const mode = params.get('mode') ?? 'single'
+const variant = params.get('variant') ?? 'dock'
+// 浏览器里没有 Tauri：window.__clipboardPaths 当作系统剪贴板里访达/资源管理器复制的文件路径。
+window.__clipboardPaths = []
+window.__TAURI_INTERNALS__ = {
+  invoke: async (command) => {
+    if (command === 'read_clipboard_file_paths') return [...window.__clipboardPaths]
+    if (command === 'read_clipboard_rtf_images') return []
+    throw new Error(`unexpected invoke in smoke: ${command}`)
+  },
+}
+window.__sent = []
+window.__drafts = {}
+window.__failNext = false
+window.__imported = []
+window.__importedPaths = []
+// ?upload=1 时接上附件上传；window.__hold('import'|'upload'|'send') 让下一次对应操作挂起，
+// window.__release(name, value) 放行（send 的 value 为是否发送成功）。用来测「导入中 / 发送中切会话」。
+const withUpload = params.get('upload') === '1'
+const gates = {}
+window.__hold = (name) => { let open; const promise = new Promise((resolve) => { open = resolve }); gates[name] = { promise, open } }
+window.__release = (name, value) => { const gate = gates[name]; delete gates[name]; gate?.open(value) }
+const passGate = (name, fallback) => gates[name] ? gates[name].promise : Promise.resolve(fallback)
+window.__uploaded = []
+let rerender = () => {}
+// 浏览器里没有 Tauri 原生拖放：冒烟直接喂同样形状的事件（position 为 CSS 像素，deviceScaleFactor=1）。
+window.__fileDrop = dispatchFileDrop
+
+const members = mode === 'group'
+  ? [
+      { employee_id: 'employee-1', display_name: '数据分析师', handle: 'analyst', can_mention: true },
+      { employee_id: 'employee-2', display_name: '产品经理', handle: 'pm', can_mention: true },
+    ]
+  : undefined
+const employees = mode === 'single' ? [{ employeeId: 'employee-1', displayName: '数据分析师' }] : []
+
+function Harness() {
+  const [convId, setConvId] = React.useState('conversation-1')
+  const [, setTick] = React.useState(0)
+  rerender = () => setTick((n) => n + 1)
+  window.__setConv = setConvId
+  return React.createElement(ChatInputBar, {
+    convId,
+    draft: window.__drafts[convId]?.text ?? '',
+    draftMentions: window.__drafts[convId]?.mentionSnapshot,
+    draftFiles: window.__drafts[convId]?.files,
+    members,
+    employees,
+    variant,
+    placeholder: variant === 'hero' ? '描述你要完成的任务…' : '输入消息…',
+    onSend: async (text, files, employeeId, mentions) => {
+      if (window.__failNext) { window.__failNext = false; return false }
+      if (!(await passGate('send', true))) return false
+      window.__sent.push({ text, employeeId: employeeId ?? null, mentions: mentions ?? [], files: files.map((f) => f.name) })
+      return true
+    },
+    // window.__pickNext = '/path' 模拟在文件选择框里选中这个文件。
+    onPickFile: async () => { const picked = window.__pickNext ?? null; window.__pickNext = null; return picked },
+    // 浏览器里没有 Tauri invoke：假装缓存成功，记录下来供断言。
+    onImportFile: async (file) => {
+      window.__imported.push({ name: file.name, size: file.size, mime: file.type })
+      return {
+        rel_path: `u/${convId}/file/${file.name}`,
+        asset_url: URL.createObjectURL(file),
+        name: file.name,
+        size: file.size,
+        mime: file.type,
+      }
+    },
+    onImportPath: async (path) => {
+      window.__importedPaths.push(path)
+      await passGate('import')
+      const name = path.split('/').pop()
+      return { rel_path: `u/${convId}/file/${name}`, asset_url: '', name, size: 1, mime: 'application/octet-stream' }
+    },
+    // 和真实页面一样分两路：文字与附件各自写回，发送成功只清文字。
+    onDraftTextChange: (id, text, mentionSnapshot) => {
+      const draft = window.__drafts[id] ?? {}
+      window.__drafts[id] = { ...draft, text, mentionSnapshot }
+      rerender()
+    },
+    onDraftFilesChange: (id, update) => {
+      const draft = window.__drafts[id] ?? {}
+      const next = update(draft.files ?? [])
+      window.__drafts[id] = { ...draft, text: draft.text ?? '', files: next }
+      rerender()
+      return next
+    },
+    onDraftFileUpdate: (id, clientId, file) => {
+      const draft = window.__drafts[id]
+      if (!draft?.files?.some((f) => f.upload?.clientId === clientId)) return false
+      draft.files = draft.files.flatMap((f) => f.upload?.clientId !== clientId ? [f] : file ? [file] : [])
+      rerender()
+      return true
+    },
+    ...(withUpload ? {
+      onUploadFile: async (file) => {
+        await passGate('upload')
+        window.__uploaded.push(file.name)
+        return `att-${file.name}`
+      },
+      onDeleteUploadedFile: async () => {},
+    } : {}),
+  })
+}
+createRoot(document.getElementById('root')).render(React.createElement(Harness))
+window.__ready = true
+</script></body></html>
