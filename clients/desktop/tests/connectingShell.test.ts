@@ -67,8 +67,8 @@ async function bundle() {
 }
 
 function auth(overrides: Record<string, unknown> = {}) {
-  return { isAuthenticated: false, isRestoring: false, isConnecting: false, sessionGeneration: 1, account: null, connectingAccount: null,
-    restoreSession: async () => {}, runPendingAutoLogin: async () => {}, ...overrides }
+  return { isAuthenticated: false, isConnecting: false, sessionGeneration: 1, account: null, connectingAccount: null,
+    initializeSession: async () => {}, runPendingAutoLogin: async () => {}, ...overrides }
 }
 
 async function mount(App: any, path: string, initial: Record<string, unknown>, backend: () => Promise<void> = async () => {}) {
@@ -107,7 +107,7 @@ const { App, close } = await bundle()
 test.after(close)
 
 test('connecting shows the workspace with "连接中..." instead of the login page', async () => {
-  const view = await mount(App, '/', { isConnecting: true, isRestoring: true })
+  const view = await mount(App, '/', { isConnecting: true })
   try {
     assert.equal(view.pathname(), '/chat', 'the shell lands where the app will open')
     assert.ok(view.text().includes('连接中...'))
@@ -164,28 +164,17 @@ test('a normal signed-out launch still shows the login page and no shell', async
   } finally { view.unmount() }
 })
 
-test('restoring with nothing to connect keeps the neutral restore screen', async () => {
-  const view = await mount(App, '/', { isRestoring: true })
-  try {
-    assert.ok(view.text().includes('正在恢复登录状态'))
-    assert.ok(!view.stubs().includes('Login'))
-    assert.ok(!view.stubs().includes('Sidebar'))
-  } finally { view.unmount() }
-})
-
-test('auto login starts only after the local Agent is ready and the restore has ended', async () => {
+test('auto login starts only after the local Agent is ready', async () => {
   let attempts = 0
   let backendReady!: () => void
   const backend = new Promise<void>(resolve => { backendReady = resolve })
   const runPendingAutoLogin = async () => { attempts += 1 }
-  const view = await mount(App, '/chat', { isConnecting: true, isRestoring: true, runPendingAutoLogin }, () => backend)
+  const view = await mount(App, '/chat', { isConnecting: true, runPendingAutoLogin }, () => backend)
   try {
     assert.equal(attempts, 0)
     assert.ok(view.stubs().includes('BackendStartupScreen'), 'the Agent startup screen still comes first')
     await act(async () => { backendReady(); await tick() })
-    assert.equal(attempts, 0, 'restore still running')
-    assert.ok(view.text().includes('连接中...'))
-    await view.update({ isRestoring: false })
     assert.equal(attempts, 1)
+    assert.ok(view.text().includes('连接中...'))
   } finally { view.unmount() }
 })

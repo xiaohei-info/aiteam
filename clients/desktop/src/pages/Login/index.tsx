@@ -67,8 +67,6 @@ export default function Login() {
   const resetPassword = useAgentAuthStore((s) => s.resetPassword)
   const cancelPasswordReset = useAgentAuthStore((s) => s.cancelPasswordReset)
   const pendingPasswordReset = useAgentAuthStore((s) => s.pendingPasswordReset)
-  const restoreError = useAgentAuthStore((s) => s.restoreError)
-  const restoreSession = useAgentAuthStore((s) => s.restoreSession)
   const navigate = useNavigate()
 
   useEffect(() => {
@@ -216,15 +214,10 @@ export default function Login() {
     setError(null)
   }
 
-  const handleRestoreSession = async () => {
-    await restoreSession()
-    if (useAgentAuthStore.getState().isAuthenticated) navigate('/chat', { replace: true })
-  }
-
   return (
     <div
       data-tauri-drag-region
-      className="app-page-bg relative flex h-[100dvh] items-center justify-center overflow-hidden"
+      className="app-page-bg relative h-[100dvh] overflow-hidden"
     >
       <div data-tauri-drag-region className="absolute inset-0 grain" />
 
@@ -236,9 +229,12 @@ export default function Login() {
         <MacWindowControls />
       </header>
 
+      {/* 滚动放在外层：.glass-panel 自带 overflow: hidden 且排在 Tailwind 工具类之后，表单自身无法滚动。 */}
+      <div data-tauri-drag-region data-login-scroll className="relative z-10 h-full overflow-y-auto">
+      <div data-tauri-drag-region className="flex min-h-full items-center justify-center px-4 pb-4 pt-12">
       <form
         onSubmit={handleSubmit}
-        className="glass-panel relative z-10 max-h-[calc(100dvh-32px)] w-[calc(100vw-32px)] max-w-[380px] overflow-y-auto animate-fade-up rounded-[20px] p-9"
+        className="glass-panel relative w-full max-w-[380px] animate-fade-up rounded-[20px] p-9"
       >
         <div className="mb-9 flex flex-col items-center">
           <div className="relative mb-5">
@@ -438,15 +434,6 @@ export default function Login() {
           )}
         </div>
 
-        {restoreError && !pendingPasswordReset && (
-          <div role="alert" className="mt-4 rounded-[10px] border border-brand/20 bg-brand/[0.06] px-4 py-2.5 text-[12px] text-txt-secondary">
-            <p>{restoreError}</p>
-            <button type="button" disabled={isLoading} onClick={handleRestoreSession} className="mt-2 text-brand underline disabled:opacity-50">
-              重试恢复登录
-            </button>
-          </div>
-        )}
-
         {error && (
           <div role="alert" className="mt-4 rounded-[10px] border border-danger/20 bg-danger/[0.06] px-4 py-2.5 text-[12px] text-danger/90">
             {error}
@@ -481,6 +468,8 @@ export default function Login() {
           </button>
         )}
       </form>
+      </div>
+      </div>
       {tenantChoice && (
         <TenantPickerDialog
           account={tenantChoice.input.account.trim()}

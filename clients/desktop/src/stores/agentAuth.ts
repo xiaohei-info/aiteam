@@ -3,13 +3,15 @@
  *
  * 桌面端登录状态唯一事实源：token + claims + tenant_id + 401 登出。
  *
+ * token 只保存在内存里，不落盘：每次启动都会新起本机 Agent，上次的 token 无法再用来恢复登录，
+ * 所以启动时只做两件事——清掉旧版本留下的 token，再按「自动登录」开关决定自动登录还是进登录页。
+ *
  * token 通过运行期内存变量 __agentToken 暴露给 AgentApiClient(避免 import 循环)。
  * 401 事件由 client 派发,这里订阅并清空会话。
  */
 import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
 import { recordAuthDiagnostic, authErrorStatus, sessionRemainingSeconds, type AuthDiagnosticInput } from '../lib/authDiagnostics'
-import { restoreFailureMessage } from '../lib/managerReachability'
 import { canAttemptAutoLogin, endLaunchAutoLogin, readAutoLoginPreference, shouldAutoLogin, writeAutoLoginPreference } from '../lib/autoLogin'
 import { AgentApiClient } from '../api/agent'
 import { backendApi } from '../api/backend'
@@ -19,18 +21,16 @@ import {
   invalidateSecureCredential,
   isPasswordResetRequired,
   passwordResetTenantId,
-  persistVerifiedCredential,
-  readCredentialWithRetry,
   resolveAuthenticatedTenantId,
 } from '../lib/authSession'
 import { deleteSavedLoginCredentials, readSavedLoginCredentials } from '../lib/loginCredentials'
 import { isEnterpriseLoginFailure } from '../lib/loginFailure'
 
-// 旧版 WebView 持久化 key,只用于一次性迁移和清理,禁止再写入。
+// 旧版 WebView 持久化 key,只用于启动时清理,禁止再写入。
 const LEGACY_STORAGE_KEY = 'aifred.agent-auth.v1'
 
 
-interface PersistedSession {
+interface AuthSession {
   token: string
   claims: AuthClaims
   tenantId: string
@@ -50,9 +50,7 @@ interface AgentAuthState {
   credentialEnterprise: string | null
   pendingPasswordReset: PendingPasswordReset | null
   isAuthenticated: boolean
-  isRestoring: boolean
-  restoreError: string | null
-  // 正在无感恢复会话或自动登录：应用展示内部页，顶栏显示“连接中...”，页面内容等拿到 token 才挂载。
+  // 正在自动登录：应用展示内部页，顶栏显示“连接中...”，页面内容等拿到 token 才挂载。
   isConnecting: boolean
   // 连接期间侧栏展示的账号；登录完成前不代表已认证身份。
   connectingAccount: string | null
@@ -64,8 +62,9 @@ interface AgentAuthState {
   grantsSyncSkipped: string[]
   sessionGeneration: number
 
-  restoreSession: () => Promise<void>
-  // 连接中且恢复已结束时调用：能自动登录就登录，否则结束连接，由路由回到登录页。
+  // 启动时调用一次：清理旧版本保存的 token，开了自动登录就进入连接中。
+  initializeSession: () => Promise<void>
+  // 连接中时调用：能自动登录就登录，否则结束连接，由路由回到登录页。
   // 由 App 在本机 Agent 就绪后触发，避免登录请求早于 Agent 启动完成。
   runPendingAutoLogin: () => Promise<void>
   // 企业代码或名称通过 enterprise 登录；留空时按账号解析内部租户。
@@ -74,23 +73,19 @@ interface AgentAuthState {
   login: (enterprise: string, account: string, password: string, tenantId?: string) => Promise<AgentLoginOutcome>
   resetPassword: (oldPassword: string, newPassword: string) => Promise<void>
   cancelPasswordReset: () => void
-  setSession: (session: PersistedSession, generation?: number) => Promise<void>
+  setSession: (session: AuthSession, generation?: number) => Promise<void>
   logout: (reason?: AuthDiagnosticInput) => Promise<void>
   // 用当前会话重新同步授权；失败时抛错，原有提示保持不变。
   retryGrantsSync: () => Promise<void>
 }
 
-let volatileSession: PersistedSession | null = null
-
-let restorePromise: Promise<void> | null = null
 let pendingAutoLogin: Promise<void> | null = null
-let storageQueue: Promise<void> = Promise.resolve()
+let initialization: Promise<void> | null = null
 let sessionGeneration = 0
 
 // initial is written together with the new generation, so subscribers never see an in-between signed-out state.
-function beginSessionOperation(initial: Partial<AgentAuthState> = { isRestoring: false }): number {
+function beginSessionOperation(initial: Partial<AgentAuthState> = {}): number {
   const generation = ++sessionGeneration
-  restorePromise = null
   useAgentAuthStore.setState({ sessionGeneration: generation, ...initial })
   return generation
 }
@@ -104,43 +99,6 @@ function isTauriRuntime(): boolean {
     && Boolean((window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__)
 }
 
-function parseSession(raw: string | null): PersistedSession | null {
-  if (!raw) return null
-  try {
-    const value = JSON.parse(raw) as Partial<PersistedSession>
-    if (!value || typeof value !== 'object') return null
-    if (typeof value.token !== 'string' || !value.token) return null
-    if (typeof value.tenantId !== 'string' || !value.tenantId.trim()) return null
-    if (typeof value.account !== 'string' || !value.account.trim()) return null
-    if (!value.claims || typeof value.claims !== 'object') return null
-    if (typeof value.claims.user_id !== 'string') return null
-    if (!Array.isArray(value.claims.roles)) return null
-    if (value.claims.tenant_id !== null && typeof value.claims.tenant_id !== 'string') return null
-    if (value.claims.exp !== undefined && typeof value.claims.exp !== 'number') return null
-    const tenantId = resolveAuthenticatedTenantId(value.tenantId, value.claims.tenant_id)
-    return {
-      ...value,
-      tenantId,
-      account: value.account.trim(),
-      credentialEnterprise: typeof value.credentialEnterprise === 'string' ? value.credentialEnterprise.trim() : '',
-    } as PersistedSession
-  } catch {
-    return null
-  }
-}
-
-function takeLegacySession(): PersistedSession | null {
-  let raw: string | null = null
-  try {
-    raw = localStorage.getItem(LEGACY_STORAGE_KEY)
-  } catch {
-    // localStorage may be disabled; there is then nothing we can migrate.
-  } finally {
-    removeLegacySession()
-  }
-  return parseSession(raw)
-}
-
 function removeLegacySession(): void {
   try {
     localStorage.removeItem(LEGACY_STORAGE_KEY)
@@ -149,33 +107,8 @@ function removeLegacySession(): void {
   }
 }
 
-function enqueueStorage<T>(operation: () => Promise<T>): Promise<T> {
-  const result = storageQueue.then(operation, operation)
-  storageQueue = result.then(() => undefined, () => undefined)
-  return result
-}
-
-async function readSecureSession(): Promise<PersistedSession | null> {
-  if (!isTauriRuntime()) return volatileSession
-  const raw = await readCredentialWithRetry(() => invoke<string | null>('secure_session_read'))
-  const session = parseSession(raw)
-  if (raw && !session) recordAuthDiagnostic({ reason: 'restore_invalid', source: 'restore' })
-  return session
-}
-
-async function writeSecureSession(session: PersistedSession): Promise<void> {
-  if (isTauriRuntime()) {
-    await persistVerifiedCredential(
-      JSON.stringify(session),
-      value => invoke<void>('secure_session_write', { session: value }),
-      () => readCredentialWithRetry(() => invoke<string | null>('secure_session_read')),
-    )
-  }
-  volatileSession = session
-}
-
+// 清除旧版本在钥匙串里保存的 token；新版本只删不写。
 async function deleteSecureSession(): Promise<void> {
-  volatileSession = null
   if (!isTauriRuntime()) return
   await invalidateSecureCredential(
     () => invoke<void>('secure_session_write', { session: '' }),
@@ -243,8 +176,6 @@ function clearRuntimeSession(set: (partial: Partial<AgentAuthState>) => void): v
     credentialEnterprise: null,
     pendingPasswordReset: null,
     isAuthenticated: false,
-    isRestoring: false,
-    restoreError: null,
     autoLoginFailure: null,
     autoLoginTenantRejected: false,
     grantsSyncSkipped: [],
@@ -259,8 +190,6 @@ export const useAgentAuthStore = create<AgentAuthState>((set, get) => ({
   credentialEnterprise: null,
   pendingPasswordReset: null,
   isAuthenticated: false,
-  isRestoring: true,
-  restoreError: null,
   isConnecting: false,
   connectingAccount: null,
   autoLoginFailure: null,
@@ -268,83 +197,17 @@ export const useAgentAuthStore = create<AgentAuthState>((set, get) => ({
   grantsSyncSkipped: [],
   sessionGeneration: 0,
 
-  restoreSession: async () => {
-    if (restorePromise) return restorePromise
-    // 将要自动登录时从一开始就进入连接中；否则读到已保存会话才进入，没有会话的用户直接去登录页。
-    const generation = beginSessionOperation({ isRestoring: true, restoreError: null, autoLoginFailure: null, autoLoginTenantRejected: false, isConnecting: canAttemptAutoLogin() })
-    recordAuthDiagnostic({ reason: 'restore_started', source: 'restore' })
-    const task = enqueueStorage(async () => {
-      if (!isCurrentSession(generation)) return
-      // Always remove the WebView copy, even when the keychain already has a
-      // newer session or migration fails. A failed migration safely logs out.
-      const legacySession = takeLegacySession()
-      let session: PersistedSession | null
-      try {
-        session = await readSecureSession()
-        if (!isCurrentSession(generation)) return
-        if (!session && legacySession) {
-          await writeSecureSession(legacySession)
-          if (!isCurrentSession(generation)) {
-            await deleteSecureSession()
-            return
-          }
-          session = legacySession
-        }
-      } catch (error) {
-        if (!isCurrentSession(generation)) return
-        recordAuthDiagnostic({ reason: 'restore_vault_failed', source: 'restore', status: authErrorStatus(error) })
-        clearRuntimeSession(set)
-        set({ restoreError: '暂时无法读取本地沙盒中已保存的登录凭证，请检查应用存储权限后重试恢复。' })
-        return
-      }
-      if (!session) {
-        recordAuthDiagnostic({ reason: 'restore_missing', source: 'restore' })
-        await deleteSecureSession().catch(() => { recordAuthDiagnostic({ reason: 'credential_delete_failed', source: 'restore' }) })
-        if (isCurrentSession(generation)) clearRuntimeSession(set)
-        return
-      }
-      set({ isConnecting: true, connectingAccount: session.account })
-      // Verify the restored credential against the local Agent before restoring access.
-      const verifier = new AgentApiClient({ getToken: () => session.token })
-      let userId: string
-      try {
-        const claims = await verifier.request<AuthClaims>({ path: '/api/agent/whoami' })
-        if (!isCurrentSession(generation)) return
-        resolveAuthenticatedTenantId(session.tenantId, claims.tenant_id)
-        if (claims.user_id !== session.claims.user_id) throw new Error('身份不一致')
-        userId = claims.user_id
-      } catch (error) {
-        if (!isCurrentSession(generation)) return
-        recordAuthDiagnostic({ reason: 'restore_identity_failed', source: 'restore', status: authErrorStatus(error), expiresInSeconds: sessionRemainingSeconds(session.claims.exp) })
-        clearRuntimeSession(set)
-        set({ restoreError: restoreFailureMessage(error) })
-        return
-      }
-      const grantsSyncSkipped = await syncGrantsWithoutBlocking(verifier, { tenant_id: session.tenantId, user_id: userId }, 'restore')
-      if (!isCurrentSession(generation)) return
-      pushToken(session.token)
-      set({
-        token: session.token,
-        claims: session.claims,
-        tenantId: session.tenantId,
-        account: session.account,
-        credentialEnterprise: session.credentialEnterprise?.trim() ?? '',
-        pendingPasswordReset: null,
-        isAuthenticated: true,
-        isRestoring: false,
-        isConnecting: false,
-        connectingAccount: null,
-        grantsSyncSkipped,
+  initializeSession: async () => {
+    // 开了自动登录就从一开始进入连接中，等 App 确认本机 Agent 就绪后登录；否则直接去登录页。
+    if (!get().isAuthenticated && canAttemptAutoLogin()) set({ isConnecting: true })
+    // React StrictMode runs effects twice; both callers share one cleanup.
+    initialization ??= (async () => {
+      removeLegacySession()
+      await deleteSecureSession().catch(() => {
+        recordAuthDiagnostic({ reason: 'credential_delete_failed', source: 'restore' })
       })
-      recordAuthDiagnostic({ reason: 'session_restored', source: 'restore', expiresInSeconds: sessionRemainingSeconds(session.claims.exp) })
-
-    })
-    restorePromise = task
-    try {
-      await task
-    } finally {
-      if (restorePromise === task) restorePromise = null
-    }
+    })()
+    return initialization
   },
 
   runPendingAutoLogin: () => {
@@ -354,15 +217,10 @@ export const useAgentAuthStore = create<AgentAuthState>((set, get) => ({
   },
 
   login: async (inputEnterprise, account, password, pickedTenantId) => {
-    // Re-authentication can select another tenant. Remove the current token
-    // before login so it is neither sent nor left in the keychain.
+    // Re-authentication can select another tenant. Drop the current token
+    // before login so it is never sent.
     const generation = beginSessionOperation()
     clearRuntimeSession(set)
-    await enqueueStorage(async () => {
-      if (isCurrentSession(generation)) await deleteSecureSession()
-    })
-    if (!isCurrentSession(generation)) return 'authenticated'
-    set({ pendingPasswordReset: null, restoreError: null })
     const tenantChoice = pickedTenantId?.trim() ?? ''
     const enterprise = tenantChoice ? '' : inputEnterprise.trim()
     // 不再预先查企业：未填企业标识时直接登录，由企业服务按账号和密码匹配企业
@@ -440,7 +298,7 @@ export const useAgentAuthStore = create<AgentAuthState>((set, get) => ({
     if (!isCurrentSession(generation)) return
     const tenantId = resolveAuthenticatedTenantId(session.tenantId, session.claims.tenant_id)
     if (!session.token || !session.account.trim()) {
-      throw new Error('refusing to persist an incomplete authentication session')
+      throw new Error('refusing to use an incomplete authentication session')
     }
     const verifier = new AgentApiClient({ getToken: () => session.token })
     const verified = await verifier.request<AuthClaims>({ path: '/api/agent/whoami' })
@@ -451,21 +309,6 @@ export const useAgentAuthStore = create<AgentAuthState>((set, get) => ({
 
     const grantsSyncSkipped = await syncGrantsWithoutBlocking(verifier, { tenant_id: tenantId, user_id: verified.user_id }, 'login')
     if (!isCurrentSession(generation)) return
-    const isTenantSwitch = Boolean(get().token && get().tenantId !== validatedSession.tenantId)
-    removeLegacySession()
-    if (isTenantSwitch) clearRuntimeSession(set)
-    await enqueueStorage(async () => {
-      // Explicitly delete on tenant changes before writing the replacement.
-      // A failed replacement therefore cannot resurrect the previous tenant.
-      if (!isCurrentSession(generation)) return
-      if (isTenantSwitch) await deleteSecureSession()
-      if (!isCurrentSession(generation)) return
-      await writeSecureSession(validatedSession)
-      // The queue owns storage until this callback finishes. Remove a write
-      // invalidated in flight before any newer operation can use the vault.
-      if (!isCurrentSession(generation)) await deleteSecureSession()
-    })
-    if (!isCurrentSession(generation)) return
     pushToken(validatedSession.token)
     set({
       token: validatedSession.token,
@@ -475,8 +318,6 @@ export const useAgentAuthStore = create<AgentAuthState>((set, get) => ({
       credentialEnterprise: validatedSession.credentialEnterprise?.trim() ?? '',
       pendingPasswordReset: null,
       isAuthenticated: true,
-      isRestoring: false,
-      restoreError: null,
       isConnecting: false,
       connectingAccount: null,
       autoLoginFailure: null,
@@ -503,24 +344,17 @@ export const useAgentAuthStore = create<AgentAuthState>((set, get) => ({
     if (token) {
       await new AgentApiClient({ getToken: () => token }).logout().catch(() => undefined)
     }
-    // Revoke runtime access synchronously; serialize the keychain deletion
-    // behind any in-flight migration/write so a stale token cannot win.
-    removeLegacySession()
     // 掉签且还能自动登录时留在内部页重新连接；isConnecting 必须先于清空会话写入，登录页才不会闪现。
     const reconnecting = !userInitiated && canAttemptAutoLogin()
     set({ isConnecting: reconnecting, connectingAccount: reconnecting ? credentialAccount || null : null })
     clearRuntimeSession(set)
     try {
-      await enqueueStorage(async () => {
-        if (!isCurrentSession(generation)) return
-        await deleteSecureSession()
-        if (userInitiated && credentialAccount.trim()) {
-          await deleteSavedLoginCredentials({
-            enterprise: credentialEnterprise,
-            account: credentialAccount,
-          })
-        }
-      })
+      if (isCurrentSession(generation) && userInitiated && credentialAccount.trim()) {
+        await deleteSavedLoginCredentials({
+          enterprise: credentialEnterprise,
+          account: credentialAccount,
+        })
+      }
     } catch (error) {
       recordAuthDiagnostic({ reason: 'credential_delete_failed', source: reason.source })
       throw error
