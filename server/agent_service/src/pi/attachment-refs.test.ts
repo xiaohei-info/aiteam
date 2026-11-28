@@ -106,6 +106,15 @@ test("the Windows default gcloud folder is refused, the rest of AppData is not",
   assert.equal(judge("C:\\Users\\u\\Documents\\Roaming\\gcloud\\a.pdf"), undefined);
 });
 
+// GnuPG on Windows keeps its keyring under %APPDATA%\gnupg, which the `.gnupg` entry does not match.
+test("the Windows default GnuPG folder is refused", () => {
+  const judge = (path: string) => credentialFolderForPath(path, "C:\\Users\\u", "win32");
+  assert.equal(judge("C:\\Users\\u\\AppData\\Roaming\\gnupg\\private-keys-v1.d\\a.key"), "AppData/Roaming/gnupg");
+  assert.equal(judge("c:\\users\\u\\appdata\\roaming\\GnuPG\\secring.gpg"), "AppData/Roaming/gnupg");
+  assert.equal(judge("C:\\Users\\u\\AppData\\Roaming\\gnupg-notes\\a.txt"), undefined);
+  assert.equal(judge("C:\\Users\\u\\Documents\\gnupg\\a.pdf"), undefined);
+});
+
 // A hard link to a key carries no trace of the key in its own path, so realpath + the credential list
 // cannot judge it: a file with more than one link is refused instead.
 test("an attachment with more than one hard link is refused", () => {
