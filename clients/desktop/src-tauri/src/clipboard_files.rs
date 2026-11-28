@@ -5,7 +5,9 @@
 //! copied files straight from the system clipboard lets paste take the very same route as drop.
 
 /// `file://` URLs → local paths; anything that is not a local file URL is skipped.
-#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+/// Only macOS reads URLs (Windows gets paths from CF_HDROP); its test uses Unix paths, which
+/// `to_file_path` rejects on Windows.
+#[cfg(any(target_os = "macos", all(test, unix)))]
 fn paths_from_file_urls<I: IntoIterator<Item = String>>(urls: I) -> Vec<String> {
     urls.into_iter()
         .filter_map(|raw| url::Url::parse(raw.trim()).ok())
@@ -97,7 +99,7 @@ pub fn read_clipboard_file_paths(app: tauri::AppHandle) -> Vec<String> {
     paths
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::paths_from_file_urls;
 
